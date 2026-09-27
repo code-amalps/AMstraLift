@@ -8,15 +8,15 @@ AMstraLift is an automated dependency and framework upgrade engine built around 
 
 ## 📌 Implementation Status
 
-> **Core engine implementation, remote publisher, and CI templates complete; fleet orchestration remains.**  
-> The implemented scope has **76 passing tests (85% coverage)**.
+> **Core engine implementation, hardened remote publisher, and CI templates complete; fleet orchestration remains.**  
+> The implemented scope has **85 passing tests (85% coverage)**.
 
-### Test Taxonomy (76 Passing Tests)
-- **Unit Tests (26 tests)**: Cryptographic signing (`HMAC-SHA256`), canonical bundle serialization, TTL expiry, governance policies (Angular LTS staleness checks, Python runtime default resolution with no-match fallback, time-boxed CVE exceptions, EOL escalation SLAs, Section 16 pilot metrics calculation), GitHub provider client unit tests (idempotency key hashing, deterministic branch names, 422 recovery, token sanitization).
+### Test Taxonomy (85 Passing Tests)
+- **Unit Tests (30 tests)**: Cryptographic signing (`HMAC-SHA256`), canonical bundle serialization, TTL expiry, governance policies (Angular LTS staleness checks, Python runtime default resolution with no-match fallback, time-boxed CVE exceptions, EOL escalation SLAs, Section 16 pilot metrics calculation), GitHub provider client unit tests (idempotency key hashing, deterministic branch names with short hash collision avoidance, 422 recovery, timeout PR recovery, label failure handling, in-memory token sanitization).
 - **CI Template & Security Tests (6 tests)**: YAML schema verification, concurrency protection (`cancel-in-progress: false`), least-privilege permissions (`contents: write`, `pull-requests: write`, `issues: write`), timeout validation, and `amstralift init-ci` generator execution.
 - **Adapter Integration Tests (16 tests)**: Real manifest and lockfile generation, version discovery, and build/test gates across Angular, Python (PyPI), .NET (NuGet), and React (npm).
 - **Trust-Boundary & Security Tests (17 tests)**: Path traversal rejection (`..`), symlink blocking (`mode 120000`), pipeline & governance file protection (`.github/workflows/`, `CODEOWNERS`, `SECURITY.md`), git credential scrubbing (`.git/config`, hooks), and re-diff verification.
-- **Remote Publishing & Milestone Integration Tests (11 tests)**: End-to-end publishing against real bare Git remotes, duplicate PR detection & idempotency (zero duplicate PRs), push retry recovery (reusing existing pushed branch on API timeout), stale-base commit rejection, and tampered bundle rejection.
+- **Remote Publishing & Stage B Hardening Tests (16 tests)**: End-to-end publishing against real bare Git remotes, clean worktree verification, selective patch path staging (no `git add .`), patch apply aborts, duplicate PR detection & idempotency (zero duplicate PRs), push retry recovery (reusing existing pushed branch on API timeout), diverged remote branch conflict rejection (no force push), remote target branch drift detection, stale-base commit rejection, and tampered bundle rejection.
 
 ---
 
