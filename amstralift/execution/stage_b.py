@@ -4,8 +4,8 @@ Operates with minimal attack surface, holds PR publishing credentials,
 and NEVER executes repository-controlled code or scripts.
 
 Validates bundle authenticity, expiration, branch head concurrency,
-path allowlists, and required gate passes before opening any PR.
-Provides idempotent remote PR publishing and duplicate detection.
+remote target branch drift, path allowlists, and required gate passes before opening any PR.
+Provides idempotent remote PR publishing, collision-free branch naming, and conflict avoidance.
 """
 
 import logging
@@ -15,7 +15,13 @@ from pathlib import Path
 from amstralift.core.crypto import verify_bundle
 from amstralift.core.models import PullRequestProposal, SignedAdvisoryBundle
 from amstralift.core.security import validate_patch_security
-from amstralift.core.workspace import get_head_commit, run_git, verify_rediff_integrity
+from amstralift.core.workspace import (
+    extract_patch_files,
+    get_head_commit,
+    is_working_tree_clean,
+    run_git,
+    verify_rediff_integrity,
+)
 from amstralift.publisher.base import (
     BaseGitProvider,
     calculate_idempotency_key,
@@ -45,13 +51,20 @@ def run_stage_b(
     """Validate signed advisory bundle, handle duplicate checks, and create or open a PR."""
     bundle = signed_bundle.bundle
 
-    # 1. Cryptographic signature and TTL verification
+    # 1. Require clean local working tree before any checks or modifications
+    if not is_working_tree_clean(target_repo_path):
+        raise StageBPublishError(
+            f"Target repository working tree at {target_repo_path} has uncommitted or dirty changes. "
+            "Stage B requires a clean repository."
+        )
+
+    # 2. Cryptographic signature and TTL verification
     verify_bundle(signed_bundle, secret_key)
 
-    # 2. Strict path allowlists and security rejections
+    # 3. Strict path allowlists and security rejections
     validate_patch_security(bundle.patch)
 
-    # 3. Branch head concurrency check (base commit must match current HEAD)
+    # 4. Local branch head concurrency check (base commit must match current local HEAD)
     current_head = get_head_commit(target_repo_path)
     if current_head != bundle.base_commit_sha:
         raise StageBPublishError(
@@ -59,14 +72,25 @@ def run_stage_b(
             "Rebase-and-rerun required."
         )
 
-    # 4. Required gates verification (Section 1: never open a PR if required checks failed)
+    # 5. Remote target branch drift check (validate remote target branch still points to base commit)
+    if publish and provider and remote_url:
+        remote_target_sha = provider.get_remote_branch_head(
+            target_repo_path, bundle.target_branch, remote_url, git_token
+        )
+        if remote_target_sha is not None and remote_target_sha != bundle.base_commit_sha:
+            raise StageBPublishError(
+                f"Stale base commit: remote '{bundle.target_branch}' has moved to {remote_target_sha}, "
+                f"bundle was built against {bundle.base_commit_sha}. Remote branch has diverged; rebase-and-rerun required."
+            )
+
+    # 6. Required gates verification (Section 1: never open a PR if required checks failed)
     if not bundle.gate_summary.all_required_passed:
         raise StageBPublishError(
             "Cannot open PR: Not all required build/test gates passed in Stage A. "
             "Per Section 1 and 3, AMstraLift fails closed with an issue, never a PR."
         )
 
-    # 5. Re-diff and clean application check
+    # 7. Re-diff and clean application check
     verify_rediff_integrity(
         target_repo_path,
         bundle.base_commit_sha,
@@ -74,11 +98,10 @@ def run_stage_b(
         bundle.patch_sha256,
     )
 
-    # 6. Construct Deterministic Branch Name and Idempotency Key
+    # 8. Construct Deterministic, Collision-Free Branch Name and Idempotency Key
     tier = bundle.highest_tier
     primary_pkg = bundle.changes[0].package_name if bundle.changes else "dependencies"
     target_ver = bundle.changes[0].to_version if bundle.changes else "update"
-    branch_name = derive_deterministic_branch_name(primary_pkg, target_ver)
 
     effective_repo_id = repo_id or target_repo_path.name
     idempotency_key = calculate_idempotency_key(
@@ -86,6 +109,10 @@ def run_stage_b(
         target_branch=bundle.target_branch,
         changes=bundle.changes,
         base_commit_sha=bundle.base_commit_sha,
+    )
+    # Short hash from idempotency key guarantees collision-free branch naming across branches/commits
+    branch_name = derive_deterministic_branch_name(
+        primary_pkg, target_ver, idempotency_key=idempotency_key
     )
 
     now = datetime.now(timezone.utc)
@@ -146,7 +173,7 @@ def run_stage_b(
         publish_status="LOCAL_ONLY",
     )
 
-    # 7. Check for existing open duplicate PR before any remote or local branch work
+    # 9. Duplicate check: Look up existing open PR before making any local or remote modifications
     if provider and effective_repo_id:
         existing_pr = provider.get_open_pr(effective_repo_id, branch_name)
         if existing_pr:
@@ -156,32 +183,69 @@ def run_stage_b(
             pr_proposal.publish_status = "ALREADY_EXISTS"
             return pr_proposal
 
-    # 8. Apply patch to local branch if not dry-run
+    # 10. Local branch checkout, patch apply, selective file staging, and commit
     if not dry_run:
         # Check if local branch already exists
-        branch_exists = run_git(["rev-parse", "--verify", branch_name], cwd=target_repo_path).returncode == 0
-        if not branch_exists:
-            run_git(["checkout", "-b", branch_name], cwd=target_repo_path)
+        branch_check = run_git(["rev-parse", "--verify", branch_name], cwd=target_repo_path)
+        if branch_check.returncode != 0:
+            checkout_res = run_git(["checkout", "-b", branch_name], cwd=target_repo_path)
         else:
-            run_git(["checkout", branch_name], cwd=target_repo_path)
+            checkout_res = run_git(["checkout", branch_name], cwd=target_repo_path)
 
-        # Apply patch if changes not already committed
+        if checkout_res.returncode != 0:
+            raise StageBPublishError(f"Failed to checkout branch '{branch_name}': {checkout_res.stderr}")
+
+        # Apply patch with checked error
         apply_res = run_git(
             ["apply", "--binary", "--ignore-space-change", "--ignore-whitespace", "-"],
             cwd=target_repo_path,
             input_data=bundle.patch,
         )
-        if apply_res.returncode == 0:
-            run_git(["add", "."], cwd=target_repo_path)
-            run_git(["commit", "-m", f"chore(deps): {pr_proposal.title}"], cwd=target_repo_path)
+        if apply_res.returncode != 0:
+            run_git(["checkout", bundle.target_branch], cwd=target_repo_path)
+            raise StageBPublishError(f"Failed to apply patch in Stage B: {apply_res.stderr}")
 
-        # 9. Remote Publishing (if enabled, provider provided, and remote_url configured)
+        # Stage ONLY verified patch paths, never git add .
+        patch_files = extract_patch_files(bundle.patch)
+        if not patch_files:
+            run_git(["checkout", bundle.target_branch], cwd=target_repo_path)
+            raise StageBPublishError("Patch diff contains no valid target files to stage.")
+
+        for file_path in patch_files:
+            add_res = run_git(["add", file_path], cwd=target_repo_path)
+            if add_res.returncode != 0:
+                run_git(["checkout", bundle.target_branch], cwd=target_repo_path)
+                raise StageBPublishError(f"Failed to stage verified patch file '{file_path}': {add_res.stderr}")
+
+        # Commit with checked error
+        commit_res = run_git(["commit", "-m", f"chore(deps): {pr_proposal.title}"], cwd=target_repo_path)
+        if commit_res.returncode != 0:
+            if "nothing to commit" not in commit_res.stdout:
+                run_git(["checkout", bundle.target_branch], cwd=target_repo_path)
+                raise StageBPublishError(f"Failed to commit upgrade patch: {commit_res.stderr}")
+
+        # 11. Remote Publishing: Safe Push Recovery & Conflict Avoidance
         if publish and provider and remote_url and effective_repo_id:
-            # Check if remote branch already exists and matches current HEAD (push retry recovery)
-            if not provider.remote_branch_matches_head(target_repo_path, branch_name, remote_url, git_token):
+            local_head = get_head_commit(target_repo_path)
+            remote_branch_sha = provider.get_remote_branch_head(
+                target_repo_path, branch_name, remote_url, git_token
+            )
+
+            if remote_branch_sha is not None:
+                if remote_branch_sha == local_head:
+                    logger.info("Remote branch '%s' already matches local HEAD commit %s. Skipping push.", branch_name, local_head)
+                else:
+                    # CONFLICT! The remote branch exists with a diverged commit. Refuse to force push!
+                    raise StageBPublishError(
+                        f"Remote branch '{branch_name}' already exists on remote with diverged commit {remote_branch_sha} "
+                        f"(local commit is {local_head}). Refusing to force-push. "
+                        "Please inspect, merge, or delete the remote branch before re-running."
+                    )
+            else:
+                # Remote branch does not exist yet: push it
                 provider.push_branch(target_repo_path, branch_name, remote_url, git_token)
 
-            # Create the remote PR
+            # Create remote PR with automatic retry and duplicate recovery
             remote_pr = provider.create_pull_request(
                 repo_id=effective_repo_id,
                 head_branch=branch_name,

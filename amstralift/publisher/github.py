@@ -163,6 +163,10 @@ class GitHubProvider(BaseGitProvider):
                     # Retry on server errors
                     if resp.status_code in (500, 502, 503, 504):
                         last_error = f"GitHub API server error {resp.status_code}: {resp.text}"
+                        # Check if PR was already created despite 5xx error
+                        open_pr = self.get_open_pr(repo_id, head_branch)
+                        if open_pr:
+                            return open_pr
                         time.sleep(1.0 * (attempt + 1))
                         continue
 
@@ -172,6 +176,14 @@ class GitHubProvider(BaseGitProvider):
 
             except httpx.RequestError as exc:
                 last_error = f"Network request error: {exc}"
+                # Connection dropped or timeout: check if PR was created by GitHub before the drop
+                try:
+                    open_pr = self.get_open_pr(repo_id, head_branch)
+                    if open_pr:
+                        logger.info("Recovered open PR #%d after network error on branch %s", open_pr.number, head_branch)
+                        return open_pr
+                except Exception:
+                    pass
                 time.sleep(1.0 * (attempt + 1))
 
         sanitized_err = sanitize_message(
@@ -187,9 +199,33 @@ class GitHubProvider(BaseGitProvider):
         """Add labels to the created PR/issue."""
         url = f"{self.api_base_url}/repos/{repo_id}/issues/{pr_number}/labels"
         try:
-            client.post(url, headers=self._get_headers(), json={"labels": labels})
+            resp = client.post(url, headers=self._get_headers(), json={"labels": labels})
+            if resp.status_code not in (200, 201):
+                logger.warning("GitHub returned %d when attaching labels to PR #%d: %s", resp.status_code, pr_number, resp.text)
         except Exception as exc:
-            logger.warning("Failed to attach labels to PR #%d: %s", pr_number, exc)
+            sanitized = sanitize_message(str(exc), self.token)
+            logger.warning("Failed to attach labels to PR #%d: %s", pr_number, sanitized)
+
+    def get_remote_branch_head(
+        self,
+        repo_path: Path,
+        branch_name: str,
+        remote_url: str,
+        token: str | None = None,
+    ) -> str | None:
+        """Get the commit SHA of a remote branch using ls-remote. Returns None if branch does not exist."""
+        effective_token = token or self.token
+        cmd = ["ls-remote"]
+        cmd_prefix = []
+        if effective_token and not remote_url.startswith(("file://", "/")):
+            auth_b64 = base64.b64encode(f"x-access-token:{effective_token}".encode()).decode()
+            cmd_prefix = ["-c", f"http.extraheader=AUTHORIZATION: basic {auth_b64}"]
+
+        res = run_git([*cmd_prefix, *cmd, remote_url, f"refs/heads/{branch_name}"], cwd=repo_path)
+        if res.returncode == 0 and res.stdout.strip():
+            # Output format: "<SHA>\trefs/heads/<branch>"
+            return res.stdout.strip().split()[0]
+        return None
 
     def remote_branch_matches_head(
         self,
@@ -199,18 +235,9 @@ class GitHubProvider(BaseGitProvider):
         token: str | None = None,
     ) -> bool:
         """Check if remote branch already exists and matches current local HEAD."""
-        effective_token = token or self.token
-        cmd = ["ls-remote"]
-        cmd_prefix = []
-        if effective_token and not remote_url.startswith(("file://", "/")):
-            auth_b64 = base64.b64encode(f"x-access-token:{effective_token}".encode()).decode()
-            cmd_prefix = ["-c", f"http.extraheader=AUTHORIZATION: basic {auth_b64}"]
-
-        local_head = get_head_commit(repo_path)
-        res = run_git([*cmd_prefix, *cmd, remote_url, f"refs/heads/{branch_name}"], cwd=repo_path)
-        if res.returncode == 0 and res.stdout.strip():
-            # Output format: "<SHA>\trefs/heads/<branch>"
-            remote_sha = res.stdout.strip().split()[0]
+        remote_sha = self.get_remote_branch_head(repo_path, branch_name, remote_url, token)
+        if remote_sha:
+            local_head = get_head_commit(repo_path)
             return remote_sha == local_head
         return False
 

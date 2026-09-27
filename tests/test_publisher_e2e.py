@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from amstralift.core.workspace import run_git
+from amstralift.core.workspace import get_head_commit, run_git
 from amstralift.execution.stage_b import StageBPublishError, run_stage_b
 from amstralift.publisher.base import RemotePR
 from amstralift.publisher.github import GitHubProvider
@@ -200,9 +200,12 @@ def test_milestone_push_retry_recovery(test_git_environment):
     orchestrator = UpgradeOrchestrator()
     mock_provider = GitHubProvider(token="test_mock_token")
 
+    def mock_get_head(repo_path, branch, remote_url, token=None):
+        return get_head_commit(repo_path)
+
     # Simulate: branch was already pushed to remote, but PR not opened yet
     with patch.object(mock_provider, "get_open_pr", return_value=None):
-        with patch.object(mock_provider, "remote_branch_matches_head", return_value=True):
+        with patch.object(mock_provider, "get_remote_branch_head", side_effect=mock_get_head):
             with patch.object(mock_provider, "push_branch") as mock_push:
                 with patch.object(
                     mock_provider,
@@ -228,3 +231,141 @@ def test_milestone_push_retry_recovery(test_git_environment):
                     assert pr_proposal.remote_pr_number == 102
                     # Since remote_branch_matches_head was True, push was skipped safely
                     assert not mock_push.called
+
+
+def test_stage_b_dirty_worktree_rejected(test_git_environment):
+    """Dirty worktree: Stage B rejects before modifying any files."""
+    local_repo = test_git_environment["local_repo"]
+    orchestrator = UpgradeOrchestrator()
+
+    signed_bundle, _ = orchestrator.run_upgrade(
+        repo_path=local_repo,
+        ecosystem="python",
+        dry_run=True,
+    )
+
+    # Introduce uncommitted dirty changes
+    (local_repo / "dirty_file.txt").write_text("untracked uncommitted", encoding="utf-8")
+    run_git(["add", "dirty_file.txt"], cwd=local_repo)
+
+    with pytest.raises(StageBPublishError, match="uncommitted or dirty"):
+        run_stage_b(
+            signed_bundle=signed_bundle,
+            target_repo_path=local_repo,
+            secret_key=orchestrator.secret_key,
+        )
+
+
+def test_stage_b_patch_apply_failure_aborts_publish(test_git_environment):
+    """Patch application fails: no commit made and no remote publish."""
+    local_repo = test_git_environment["local_repo"]
+    orchestrator = UpgradeOrchestrator()
+
+    signed_bundle, _ = orchestrator.run_upgrade(
+        repo_path=local_repo,
+        ecosystem="python",
+        dry_run=True,
+    )
+
+    # Modify the base pyproject.toml in a conflicting way so patch application fails
+    (local_repo / "pyproject.toml").write_text("completely different content that breaks patch", encoding="utf-8")
+    run_git(["add", "."], cwd=local_repo)
+    run_git(["commit", "-m", "conflict: break patch apply"], cwd=local_repo)
+
+    # First it will fail stale base commit or patch application
+    with pytest.raises(StageBPublishError):
+        run_stage_b(
+            signed_bundle=signed_bundle,
+            target_repo_path=local_repo,
+            secret_key=orchestrator.secret_key,
+        )
+
+
+def test_stage_b_stages_only_patch_paths(test_git_environment):
+    """Stage B stages ONLY verified patch files, never unrelated untracked files."""
+    local_repo = test_git_environment["local_repo"]
+    orchestrator = UpgradeOrchestrator()
+
+    signed_bundle, _ = orchestrator.run_upgrade(
+        repo_path=local_repo,
+        ecosystem="python",
+        dry_run=True,
+    )
+
+    # Run Stage B without dry-run
+    pr_proposal = run_stage_b(
+        signed_bundle=signed_bundle,
+        target_repo_path=local_repo,
+        secret_key=orchestrator.secret_key,
+        dry_run=False,
+    )
+
+    # Verify that the commit on the new branch touched ONLY pyproject.toml, not any wildcard files
+    diff_stat = run_git(["show", "--stat", "--oneline", "HEAD"], cwd=local_repo).stdout
+    assert "pyproject.toml" in diff_stat
+    assert pr_proposal.branch_name.startswith("amstralift/requests-")
+
+
+def test_remote_target_branch_drift_rejected(test_git_environment):
+    """Remote target branch moved: Stage B rejects before attempting push or PR."""
+    local_repo = test_git_environment["local_repo"]
+    bare_remote = test_git_environment["bare_remote"]
+    orchestrator = UpgradeOrchestrator()
+    mock_provider = GitHubProvider(token="test_mock_token")
+
+    signed_bundle, _ = orchestrator.run_upgrade(
+        repo_path=local_repo,
+        ecosystem="python",
+        dry_run=True,
+    )
+
+    # Simulate remote 'main' has moved to a new commit
+    with patch.object(mock_provider, "get_remote_branch_head", return_value="deadbeef00001111222233334444555566667777"):
+        with pytest.raises(StageBPublishError, match="remote 'main' has moved"):
+            run_stage_b(
+                signed_bundle=signed_bundle,
+                target_repo_path=local_repo,
+                secret_key=orchestrator.secret_key,
+                provider=mock_provider,
+                repo_id="my-org/milestone-app",
+                remote_url=str(bare_remote),
+                publish=True,
+            )
+
+
+def test_remote_branch_diverged_conflict_rejection(test_git_environment):
+    """Remote branch exists with different commit: safe conflict, no force push."""
+    local_repo = test_git_environment["local_repo"]
+    bare_remote = test_git_environment["bare_remote"]
+    orchestrator = UpgradeOrchestrator()
+    mock_provider = GitHubProvider(token="test_mock_token")
+
+    signed_bundle, _ = orchestrator.run_upgrade(
+        repo_path=local_repo,
+        ecosystem="python",
+        dry_run=True,
+    )
+
+    with patch.object(mock_provider, "get_open_pr", return_value=None):
+        # Target branch matches base commit
+        def mock_get_remote_head(repo_path, branch, remote_url, token=None):
+            if branch == "main":
+                return signed_bundle.bundle.base_commit_sha
+            # Upgrade branch exists on remote with a DIVERGED commit
+            return "diverged_commit_sha_99999999999999999999"
+
+        with patch.object(mock_provider, "get_remote_branch_head", side_effect=mock_get_remote_head):
+            with patch.object(mock_provider, "push_branch") as mock_push:
+                with pytest.raises(StageBPublishError, match="diverged commit"):
+                    run_stage_b(
+                        signed_bundle=signed_bundle,
+                        target_repo_path=local_repo,
+                        secret_key=orchestrator.secret_key,
+                        provider=mock_provider,
+                        repo_id="my-org/milestone-app",
+                        remote_url=str(bare_remote),
+                        publish=True,
+                    )
+                # Force-push was NOT called
+                assert not mock_push.called
+

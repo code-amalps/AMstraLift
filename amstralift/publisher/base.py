@@ -59,17 +59,24 @@ def calculate_idempotency_key(
 
 
 
-def derive_deterministic_branch_name(primary_package: str, target_version: str) -> str:
-    """Derive a deterministic, idempotent branch name without timestamps.
+def derive_deterministic_branch_name(
+    primary_package: str,
+    target_version: str,
+    idempotency_key: str | None = None,
+) -> str:
+    """Derive a deterministic, collision-free branch name with short hash suffix.
 
     Strictly sanitizes invalid Git ref characters (^, ~, :, ?, *, [, \\, >, <, =, @, /).
-    Example: '@angular/core' and '^19.1.0' -> 'amstralift/angular-core-19.1.0'
-    Example: 'requests' and '>=2.32.3' -> 'amstralift/requests-2.32.3'
+    Example: '@angular/core', '^19.1.0', 'a1b2c3d4e5...' -> 'amstralift/angular-core-19.1.0-a1b2c3d4'
+    Example: 'requests', '>=2.32.3', 'e4f5a6b7...' -> 'amstralift/requests-2.32.3-e4f5a6b7'
     """
     clean_pkg = re.sub(r"[^a-zA-Z0-9_-]", "-", primary_package.lower()).strip("-")
     clean_version = re.sub(r"[^a-zA-Z0-9_.-]", "", target_version.lower()).strip("-.")
-    return f"amstralift/{clean_pkg}-{clean_version or 'latest'}"
-
+    prefix = f"amstralift/{clean_pkg}-{clean_version or 'latest'}"
+    if idempotency_key:
+        short_hash = idempotency_key[:8]
+        return f"{prefix}-{short_hash}"
+    return prefix
 
 
 class BaseGitProvider(ABC):
@@ -105,6 +112,17 @@ class BaseGitProvider(ABC):
 
         Credentials must be passed in-memory and NEVER persisted to .git/config or logs.
         """
+        pass
+
+    @abstractmethod
+    def get_remote_branch_head(
+        self,
+        repo_path: Path,
+        branch_name: str,
+        remote_url: str,
+        token: str | None = None,
+    ) -> str | None:
+        """Get the commit SHA of a remote branch using ls-remote. Returns None if branch does not exist."""
         pass
 
     @abstractmethod

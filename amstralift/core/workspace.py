@@ -159,3 +159,30 @@ def verify_rediff_integrity(
         raise GitError(f"Patch does not apply cleanly: {check_res.stderr}")
 
     return True
+
+
+def is_working_tree_clean(repo_path: Path) -> bool:
+    """Check if the working tree has no uncommitted or untracked changes."""
+    res = run_git(["status", "--porcelain"], cwd=repo_path)
+    return res.returncode == 0 and not res.stdout.strip()
+
+
+def extract_patch_files(patch: str) -> list[str]:
+    """Extract list of target file paths modified by a git patch.
+
+    Parses 'diff --git a/... b/...' headers.
+    """
+    files: set[str] = set()
+    for line in patch.splitlines():
+        if line.startswith("diff --git a/") and " b/" in line:
+            parts = line.split(" b/", 1)
+            if len(parts) == 2:
+                file_path = parts[1].strip()
+                if file_path and file_path != "/dev/null":
+                    files.add(file_path)
+        elif line.startswith("+++ b/"):
+            file_path = line[6:].strip()
+            if file_path and file_path != "/dev/null":
+                files.add(file_path)
+    return sorted(files)
+
