@@ -21,17 +21,23 @@ console = Console()
 @app.command()
 def run(
     repo: Annotated[Path, typer.Option("--repo", "-r", help="Path to target repository.")] = Path("."),
-    ecosystem: Annotated[str, typer.Option("--ecosystem", "-e", help="Target ecosystem (e.g. angular).")] = "angular",
-    branch: Annotated[str, typer.Option("--branch", "-b", help="Target branch name.")] = "main",
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Simulate without creating git branch/commit.")] = False,
+    ecosystem: Annotated[str | None, typer.Option("--ecosystem", "-e", help="Target ecosystem (angular, python, dotnet, react). Auto-detected if omitted.")] = None,
+    branch: Annotated[str, typer.Option("--branch", "-b", help="Target base branch name.")] = "main",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Simulate without modifying git branch/commit.")] = False,
+    publish: Annotated[bool, typer.Option("--publish", help="Push branch and open reviewable PR on remote Git provider.")] = False,
+    token: Annotated[str | None, typer.Option("--token", envvar="GITHUB_TOKEN", help="Least-privilege Git provider access token.")] = None,
+    repo_id: Annotated[str | None, typer.Option("--repo-id", help="Repository identifier (e.g. owner/repo).")] = None,
+    remote_url: Annotated[str | None, typer.Option("--remote-url", help="Explicit Git remote URL for push.")] = None,
     output_bundle: Annotated[
         Path | None, typer.Option("--output-bundle", help="Save signed bundle JSON to disk.")
     ] = None,
 ):
     """Run full two-stage upgrade workflow on a target repository."""
+    eco_str = ecosystem or "auto-detect"
     console.print(
         Panel.fit(
-            f"[bold blue]AMstraLift[/bold blue] - Initiating upgrade for [cyan]{repo.resolve()}[/cyan] ({ecosystem})",
+            f"[bold blue]AMstraLift[/bold blue] - Initiating upgrade for [cyan]{repo.resolve()}[/cyan] ({eco_str})\n"
+            f"[dim]Publish: {publish} | Dry-run: {dry_run}[/dim]",
             border_style="blue",
         )
     )
@@ -45,6 +51,10 @@ def run(
                 ecosystem=ecosystem,
                 target_branch=branch,
                 dry_run=dry_run,
+                publish=publish,
+                git_token=token,
+                repo_id=repo_id,
+                remote_url=remote_url,
             )
 
         console.print("[bold green]✔ Upgrade workflow completed successfully![/bold green]\n")
@@ -72,14 +82,27 @@ def run(
         console.print(gate_table)
 
         # PR Summary
+        pr_lines = [
+            f"[bold]Branch:[/bold] {pr_proposal.branch_name}",
+            f"[bold]Title:[/bold] {pr_proposal.title}",
+            f"[bold]Publish Status:[/bold] [yellow]{pr_proposal.publish_status}[/yellow]",
+        ]
+        if pr_proposal.remote_pr_url:
+            pr_lines.append(f"[bold]Remote PR URL:[/bold] [cyan]{pr_proposal.remote_pr_url}[/cyan]")
+        if pr_proposal.idempotency_key:
+            pr_lines.append(f"[bold]Idempotency Key:[/bold] {pr_proposal.idempotency_key[:16]}...")
+        pr_lines.extend(
+            [
+                f"[bold]Labels:[/bold] {', '.join(pr_proposal.labels)}",
+                f"[bold]24h SLA Deadline:[/bold] {pr_proposal.deadline_24h.isoformat()}",
+                f"[bold]Base SHA:[/bold] {pr_proposal.base_commit_sha}",
+                f"[bold]Dry Run:[/bold] {dry_run}",
+            ]
+        )
+
         console.print(
             Panel(
-                f"[bold]Branch:[/bold] {pr_proposal.branch_name}\n"
-                f"[bold]Title:[/bold] {pr_proposal.title}\n"
-                f"[bold]Labels:[/bold] {', '.join(pr_proposal.labels)}\n"
-                f"[bold]24h SLA Deadline:[/bold] {pr_proposal.deadline_24h.isoformat()}\n"
-                f"[bold]Base SHA:[/bold] {pr_proposal.base_commit_sha}\n"
-                f"[bold]Dry Run:[/bold] {dry_run}",
+                "\n".join(pr_lines),
                 title="Pull Request Proposal (Stage B)",
                 border_style="green",
             )

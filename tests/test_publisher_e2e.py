@@ -1,0 +1,230 @@
+"""End-to-end milestone verification tests for remote Git publishing and duplicate prevention."""
+
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from amstralift.core.workspace import run_git
+from amstralift.execution.stage_b import StageBPublishError, run_stage_b
+from amstralift.publisher.base import RemotePR
+from amstralift.publisher.github import GitHubProvider
+from amstralift.service import UpgradeOrchestrator
+
+
+@pytest.fixture
+def test_git_environment(tmp_path: Path):
+    """Creates a local working git repository connected to a real bare git remote."""
+    bare_remote = tmp_path / "remote.git"
+    bare_remote.mkdir()
+    run_git(["init", "--bare"], cwd=bare_remote)
+
+    local_repo = tmp_path / "local_repo"
+    local_repo.mkdir()
+    run_git(["init"], cwd=local_repo)
+    run_git(["config", "user.name", "Test Runner"], cwd=local_repo)
+    run_git(["config", "user.email", "test@example.com"], cwd=local_repo)
+    run_git(["config", "core.autocrlf", "false"], cwd=local_repo)
+
+    (local_repo / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
+
+    # Add a mock test file
+    test_dir = local_repo / "tests"
+    test_dir.mkdir(parents=True, exist_ok=True)
+    (test_dir / "test_smoke.py").write_text("def test_ok(): assert True\n", encoding="utf-8")
+
+    # Initial pyproject.toml
+    pyproject = """[project]
+name = "milestone-app"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "requests==2.25.0"
+]
+"""
+    (local_repo / "pyproject.toml").write_text(pyproject, encoding="utf-8")
+    run_git(["add", "."], cwd=local_repo)
+    run_git(["commit", "-m", "feat: initial commit with requests 2.25.0"], cwd=local_repo)
+
+    # Set up remote and push main
+    run_git(["branch", "-M", "main"], cwd=local_repo)
+    run_git(["remote", "add", "origin", str(bare_remote)], cwd=local_repo)
+    run_git(["push", "-u", "origin", "main"], cwd=local_repo)
+
+    return {"local_repo": local_repo, "bare_remote": bare_remote}
+
+
+def test_milestone_publish_verified_upgrade_pr(test_git_environment):
+    """Milestone Criterion 1-4: Run upgrade, produce bundle, validate Stage B, push branch & open PR."""
+    local_repo = test_git_environment["local_repo"]
+    bare_remote = test_git_environment["bare_remote"]
+
+    orchestrator = UpgradeOrchestrator()
+
+    # Mock GitHub provider API responses
+    mock_provider = GitHubProvider(token="test_mock_token")
+
+    with patch.object(mock_provider, "get_open_pr", return_value=None):
+        with patch.object(
+            mock_provider,
+            "create_pull_request",
+            return_value=RemotePR(
+                number=101,
+                url="https://github.com/my-org/milestone-app/pull/101",
+                branch="amstralift/requests-2.32.3",
+                title="chore(deps): upgrade requests to 2.32.3 (Tier 1 - Safe)",
+                labels=["tier-1-safe", "amstralift-automated"],
+            ),
+        ) as mock_create_pr:
+            # Execute upgrade with publishing enabled
+            signed_bundle, pr_proposal = orchestrator.run_upgrade(
+                repo_path=local_repo,
+                ecosystem="python",
+                target_branch="main",
+                publish=True,
+                git_provider=mock_provider,
+                repo_id="my-org/milestone-app",
+                remote_url=str(bare_remote),
+            )
+
+            # 1. Bundle and Gate Validation
+            assert signed_bundle.bundle.gate_summary.all_required_passed is True
+            assert len(signed_bundle.bundle.changes) >= 1
+            assert signed_bundle.bundle.changes[0].package_name == "requests"
+
+            # 2. Stage B local & remote outcomes
+            assert pr_proposal.publish_status == "CREATED"
+            assert pr_proposal.remote_pr_number == 101
+            assert pr_proposal.branch_name.startswith("amstralift/requests-")
+            assert pr_proposal.idempotency_key is not None
+
+            # 3. Verify that branch was actually pushed to the real bare remote!
+            remote_branches = run_git(["branch", "-a"], cwd=bare_remote).stdout
+            assert pr_proposal.branch_name in remote_branches
+            assert mock_create_pr.called
+
+
+def test_milestone_duplicate_prevention_idempotency(test_git_environment):
+    """Milestone Criterion 5: A repeated run detects the existing PR rather than creating a duplicate."""
+    local_repo = test_git_environment["local_repo"]
+    bare_remote = test_git_environment["bare_remote"]
+
+    orchestrator = UpgradeOrchestrator()
+    mock_provider = GitHubProvider(token="test_mock_token")
+
+    # Simulate that PR #101 is already open on GitHub for this branch
+    existing_open_pr = RemotePR(
+        number=101,
+        url="https://github.com/my-org/milestone-app/pull/101",
+        branch="amstralift/requests-2.32.3",
+        title="chore(deps): upgrade requests to 2.32.3",
+        labels=["tier-1-safe", "amstralift-automated"],
+    )
+
+    with patch.object(mock_provider, "get_open_pr", return_value=existing_open_pr):
+        with patch.object(mock_provider, "create_pull_request") as mock_create_pr:
+            with patch.object(mock_provider, "push_branch") as mock_push:
+                signed_bundle, pr_proposal = orchestrator.run_upgrade(
+                    repo_path=local_repo,
+                    ecosystem="python",
+                    target_branch="main",
+                    publish=True,
+                    git_provider=mock_provider,
+                    repo_id="my-org/milestone-app",
+                    remote_url=str(bare_remote),
+                )
+
+                # Verified: Skipped duplicate creation, returned existing PR details
+                assert pr_proposal.publish_status == "ALREADY_EXISTS"
+                assert pr_proposal.remote_pr_number == 101
+                assert pr_proposal.remote_pr_url == "https://github.com/my-org/milestone-app/pull/101"
+
+                # Crucial: No duplicate push or PR creation API calls occurred
+                assert not mock_create_pr.called
+                assert not mock_push.called
+
+
+def test_milestone_stale_base_commit_rejection(test_git_environment):
+    """Milestone Criterion 6A: A bundle built against a stale base commit is rejected."""
+    local_repo = test_git_environment["local_repo"]
+    orchestrator = UpgradeOrchestrator()
+
+    # Generate a bundle against initial commit
+    signed_bundle, _ = orchestrator.run_upgrade(
+        repo_path=local_repo,
+        ecosystem="python",
+        dry_run=True,
+    )
+
+    # Now simulate concurrent push to local repo HEAD
+    dummy_file = local_repo / "drift.txt"
+    dummy_file.write_text("concurrent commit", encoding="utf-8")
+    run_git(["add", "."], cwd=local_repo)
+    run_git(["commit", "-m", "drift: concurrent commit moves HEAD"], cwd=local_repo)
+
+    # Stage B must reject the bundle immediately due to base commit mismatch
+    with pytest.raises(StageBPublishError, match="Stale base commit"):
+        run_stage_b(
+            signed_bundle=signed_bundle,
+            target_repo_path=local_repo,
+            secret_key=orchestrator.secret_key,
+        )
+
+
+def test_milestone_tampered_bundle_rejection(test_git_environment):
+    """Milestone Criterion 6B: A tampered bundle is rejected."""
+    local_repo = test_git_environment["local_repo"]
+    orchestrator = UpgradeOrchestrator()
+
+    signed_bundle, _ = orchestrator.run_upgrade(
+        repo_path=local_repo,
+        ecosystem="python",
+        dry_run=True,
+    )
+
+    # Malicious tampering with patch content after signing
+    signed_bundle.bundle.patch += "\n+malicious_injected_code = True\n"
+
+    with pytest.raises(Exception, match="Bundle patch tampered|HMAC signature verification failed"):
+        run_stage_b(
+            signed_bundle=signed_bundle,
+            target_repo_path=local_repo,
+            secret_key=orchestrator.secret_key,
+        )
+
+
+def test_milestone_push_retry_recovery(test_git_environment):
+    """Milestone Criterion 5 & 7: Branch already pushed to remote (e.g. prior API timeout) recovers cleanly."""
+    local_repo = test_git_environment["local_repo"]
+    bare_remote = test_git_environment["bare_remote"]
+    orchestrator = UpgradeOrchestrator()
+    mock_provider = GitHubProvider(token="test_mock_token")
+
+    # Simulate: branch was already pushed to remote, but PR not opened yet
+    with patch.object(mock_provider, "get_open_pr", return_value=None):
+        with patch.object(mock_provider, "remote_branch_matches_head", return_value=True):
+            with patch.object(mock_provider, "push_branch") as mock_push:
+                with patch.object(
+                    mock_provider,
+                    "create_pull_request",
+                    return_value=RemotePR(
+                        number=102,
+                        url="https://github.com/my-org/milestone-app/pull/102",
+                        branch="amstralift/requests-2.32.3",
+                        title="chore(deps): upgrade requests",
+                    ),
+                ):
+                    _, pr_proposal = orchestrator.run_upgrade(
+                        repo_path=local_repo,
+                        ecosystem="python",
+                        target_branch="main",
+                        publish=True,
+                        git_provider=mock_provider,
+                        repo_id="my-org/milestone-app",
+                        remote_url=str(bare_remote),
+                    )
+
+                    assert pr_proposal.publish_status == "CREATED"
+                    assert pr_proposal.remote_pr_number == 102
+                    # Since remote_branch_matches_head was True, push was skipped safely
+                    assert not mock_push.called

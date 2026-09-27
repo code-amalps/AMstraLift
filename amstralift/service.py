@@ -16,11 +16,13 @@ from amstralift.adapters.python import PythonAdapter
 from amstralift.adapters.react import ReactAdapter
 from amstralift.core.crypto import sign_bundle
 from amstralift.core.models import PullRequestProposal, SignedAdvisoryBundle
-from amstralift.core.workspace import prepare_stage_a_workspace
+from amstralift.core.workspace import prepare_stage_a_workspace, run_git
 from amstralift.execution.stage_a import run_stage_a
 from amstralift.execution.stage_b import run_stage_b
 from amstralift.governance.angular_lts import AngularLTSConfig
 from amstralift.governance.python_runtime import PythonRuntimeConfig
+from amstralift.publisher.base import BaseGitProvider
+from amstralift.publisher.github import GitHubProvider, parse_github_repo_id
 
 
 class OrchestrationError(Exception):
@@ -67,6 +69,11 @@ class UpgradeOrchestrator:
         ecosystem: str | None = None,
         target_branch: str = "main",
         dry_run: bool = False,
+        publish: bool = False,
+        git_provider: BaseGitProvider | None = None,
+        git_token: str | None = None,
+        repo_id: str | None = None,
+        remote_url: str | None = None,
     ) -> tuple[SignedAdvisoryBundle, PullRequestProposal]:
         """Execute complete upgrade workflow for a repository."""
         repo_path = repo_path.resolve()
@@ -78,6 +85,27 @@ class UpgradeOrchestrator:
             raise OrchestrationError(
                 f"Repository at {repo_path} is not recognized as a valid {ecosystem_name} project."
             )
+
+        # Provider and remote setup if publishing requested
+        effective_provider = git_provider
+        effective_token = git_token or os.environ.get("GITHUB_TOKEN")
+        effective_remote_url = remote_url
+        effective_repo_id = repo_id
+
+        if publish:
+            if not effective_remote_url:
+                res = run_git(["remote", "get-url", "origin"], cwd=repo_path)
+                if res.returncode == 0:
+                    effective_remote_url = res.stdout.strip()
+
+            if effective_remote_url and not effective_repo_id:
+                try:
+                    effective_repo_id = parse_github_repo_id(effective_remote_url)
+                except ValueError:
+                    pass
+
+            if effective_provider is None:
+                effective_provider = GitHubProvider(token=effective_token)
 
         # Create temporary, isolated workspace for Stage A
         sandbox_dir = Path(tempfile.mkdtemp(prefix="amstralift_stage_a_"))
@@ -110,6 +138,11 @@ class UpgradeOrchestrator:
                 target_repo_path=repo_path,
                 secret_key=self.secret_key,
                 dry_run=dry_run,
+                provider=effective_provider,
+                repo_id=effective_repo_id,
+                remote_url=effective_remote_url,
+                git_token=effective_token,
+                publish=publish,
             )
 
             return signed_bundle, pr_proposal

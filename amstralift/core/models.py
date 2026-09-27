@@ -149,6 +149,11 @@ class UpgradeRequest(BaseModel):
     package_targets: list[str] | None = None
     dry_run: bool = False
     allow_breaking: bool = False
+    publish: bool = False
+    git_token: str | None = None
+    git_provider: str = "github"
+    repo_id: str | None = None
+    remote_url: str | None = None
 
 
 class PullRequestProposal(BaseModel):
@@ -162,3 +167,8 @@ class PullRequestProposal(BaseModel):
     base_commit_sha: str
     patch_sha256: str
     tier: DependencyTier
+    idempotency_key: str | None = None
+    remote_pr_number: int | None = None
+    remote_pr_url: str | None = None
+    publish_status: str = "LOCAL_ONLY"
+

@@ -5,8 +5,10 @@ and NEVER executes repository-controlled code or scripts.
 
 Validates bundle authenticity, expiration, branch head concurrency,
 path allowlists, and required gate passes before opening any PR.
+Provides idempotent remote PR publishing and duplicate detection.
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,6 +16,13 @@ from amstralift.core.crypto import verify_bundle
 from amstralift.core.models import PullRequestProposal, SignedAdvisoryBundle
 from amstralift.core.security import validate_patch_security
 from amstralift.core.workspace import get_head_commit, run_git, verify_rediff_integrity
+from amstralift.publisher.base import (
+    BaseGitProvider,
+    calculate_idempotency_key,
+    derive_deterministic_branch_name,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class StageBPublishError(Exception):
@@ -27,8 +36,13 @@ def run_stage_b(
     target_repo_path: Path,
     secret_key: bytes,
     dry_run: bool = False,
+    provider: BaseGitProvider | None = None,
+    repo_id: str | None = None,
+    remote_url: str | None = None,
+    git_token: str | None = None,
+    publish: bool = False,
 ) -> PullRequestProposal:
-    """Validate signed advisory bundle and create a reviewable pull request proposal."""
+    """Validate signed advisory bundle, handle duplicate checks, and create or open a PR."""
     bundle = signed_bundle.bundle
 
     # 1. Cryptographic signature and TTL verification
@@ -60,11 +74,19 @@ def run_stage_b(
         bundle.patch_sha256,
     )
 
-    # 6. Construct Branch Name and PR Metadata
+    # 6. Construct Deterministic Branch Name and Idempotency Key
     tier = bundle.highest_tier
     primary_pkg = bundle.changes[0].package_name if bundle.changes else "dependencies"
-    timestamp_slug = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
-    branch_name = f"amstralift/{primary_pkg.replace('/', '-')}-{timestamp_slug}"
+    target_ver = bundle.changes[0].to_version if bundle.changes else "update"
+    branch_name = derive_deterministic_branch_name(primary_pkg, target_ver)
+
+    effective_repo_id = repo_id or target_repo_path.name
+    idempotency_key = calculate_idempotency_key(
+        repo_id=effective_repo_id,
+        target_branch=bundle.target_branch,
+        changes=bundle.changes,
+        base_commit_sha=bundle.base_commit_sha,
+    )
 
     now = datetime.now(timezone.utc)
     deadline_24h = now + timedelta(hours=24)
@@ -103,6 +125,7 @@ def run_stage_b(
             f"- **Run ID:** `{bundle.run_id}`",
             f"- **Base Commit SHA:** `{bundle.base_commit_sha}`",
             f"- **Patch Hash (SHA-256):** `{bundle.patch_sha256}`",
+            f"- **Idempotency Key:** `{idempotency_key}`",
             f"- **CI Completion Deadline (24h SLA):** `{deadline_24h.isoformat()}`",
             "",
             "> ⚠️ **MANDATORY POLICY ENFORCEMENT:** Auto-merge is strictly disabled for all tiers. "
@@ -112,29 +135,63 @@ def run_stage_b(
 
     pr_proposal = PullRequestProposal(
         branch_name=branch_name,
-        title=f"chore(deps): upgrade {primary_pkg} ({tier.value})",
+        title=f"chore(deps): upgrade {primary_pkg} to {target_ver} ({tier.value})",
         body="\n".join(body_lines),
         labels=labels,
         deadline_24h=deadline_24h,
         base_commit_sha=bundle.base_commit_sha,
         patch_sha256=bundle.patch_sha256,
         tier=tier,
+        idempotency_key=idempotency_key,
+        publish_status="LOCAL_ONLY",
     )
 
-    # 7. Apply patch to branch if not dry-run
+    # 7. Check for existing open duplicate PR before any remote or local branch work
+    if provider and effective_repo_id:
+        existing_pr = provider.get_open_pr(effective_repo_id, branch_name)
+        if existing_pr:
+            logger.info("Existing open PR #%d already found for branch %s. Idempotent skip.", existing_pr.number, branch_name)
+            pr_proposal.remote_pr_number = existing_pr.number
+            pr_proposal.remote_pr_url = existing_pr.url
+            pr_proposal.publish_status = "ALREADY_EXISTS"
+            return pr_proposal
+
+    # 8. Apply patch to local branch if not dry-run
     if not dry_run:
-        # Create and checkout upgrade branch
-        run_git(["checkout", "-b", branch_name], cwd=target_repo_path)
-        # Apply patch with input_data and --binary
+        # Check if local branch already exists
+        branch_exists = run_git(["rev-parse", "--verify", branch_name], cwd=target_repo_path).returncode == 0
+        if not branch_exists:
+            run_git(["checkout", "-b", branch_name], cwd=target_repo_path)
+        else:
+            run_git(["checkout", branch_name], cwd=target_repo_path)
+
+        # Apply patch if changes not already committed
         apply_res = run_git(
             ["apply", "--binary", "--ignore-space-change", "--ignore-whitespace", "-"],
             cwd=target_repo_path,
             input_data=bundle.patch,
         )
-        if apply_res.returncode != 0:
-            raise StageBPublishError(f"Failed to apply patch in Stage B: {apply_res.stderr}")
-        # Stage all changes
-        run_git(["add", "."], cwd=target_repo_path)
-        run_git(["commit", "-m", f"chore(deps): {pr_proposal.title}"], cwd=target_repo_path)
+        if apply_res.returncode == 0:
+            run_git(["add", "."], cwd=target_repo_path)
+            run_git(["commit", "-m", f"chore(deps): {pr_proposal.title}"], cwd=target_repo_path)
+
+        # 9. Remote Publishing (if enabled, provider provided, and remote_url configured)
+        if publish and provider and remote_url and effective_repo_id:
+            # Check if remote branch already exists and matches current HEAD (push retry recovery)
+            if not provider.remote_branch_matches_head(target_repo_path, branch_name, remote_url, git_token):
+                provider.push_branch(target_repo_path, branch_name, remote_url, git_token)
+
+            # Create the remote PR
+            remote_pr = provider.create_pull_request(
+                repo_id=effective_repo_id,
+                head_branch=branch_name,
+                base_branch=bundle.target_branch,
+                title=pr_proposal.title,
+                body=pr_proposal.body,
+                labels=pr_proposal.labels,
+            )
+            pr_proposal.remote_pr_number = remote_pr.number
+            pr_proposal.remote_pr_url = remote_pr.url
+            pr_proposal.publish_status = "CREATED"
 
     return pr_proposal
