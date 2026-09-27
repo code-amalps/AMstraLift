@@ -117,6 +117,29 @@ def run(
         raise typer.Exit(code=1) from e
 
 
+@app.command("init-ci")
+def init_ci(
+    provider: Annotated[str, typer.Option("--provider", "-p", help="CI provider: 'github' or 'gitlab'.")] = "github",
+    variant: Annotated[str, typer.Option("--variant", help="Template variant: 'scheduled' or 'reusable'.")] = "scheduled",
+    repo: Annotated[Path, typer.Option("--repo", "-r", help="Target repository directory.")] = Path("."),
+    overwrite: Annotated[bool, typer.Option("--overwrite", help="Overwrite existing configuration file.")] = False,
+):
+    """Generate turnkey CI workflow configuration in the target repository."""
+    from amstralift.templates.loader import generate_ci_template
+
+    try:
+        out_file = generate_ci_template(
+            target_dir=repo,
+            provider=provider,
+            variant=variant,
+            overwrite=overwrite,
+        )
+        console.print(f"[bold green]✔ CI template generated successfully:[/bold green] [cyan]{out_file}[/cyan]")
+    except Exception as e:
+        console.print(f"[bold red]✖ Failed to generate CI template:[/bold red] {e}")
+        raise typer.Exit(code=1) from e
+
+
 @app.command()
 def version():
     """Display AMstraLift version."""

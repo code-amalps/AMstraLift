@@ -1,0 +1,91 @@
+name: AMstraLift Reusable Upgrade Workflow
+
+on:
+  workflow_call:
+    inputs:
+      ecosystem:
+        description: 'Target ecosystem (leave blank for auto-detection)'
+        required: false
+        type: string
+        default: 'auto'
+      target_branch:
+        description: 'Base branch to upgrade against'
+        required: false
+        type: string
+        default: 'main'
+      dry_run:
+        description: 'Simulate without creating branch or PR'
+        required: false
+        type: boolean
+        default: false
+      publish:
+        description: 'Publish reviewable PR to GitHub'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      token:
+        description: 'GitHub Token with contents:write, pull-requests:write, issues:write permissions'
+        required: false
+
+jobs:
+  upgrade:
+    name: AMstraLift Execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Configure Git Author
+        run: |
+          git config user.name "amstralift-bot[bot]"
+          git config user.email "amstralift-bot[bot]@users.noreply.github.com"
+          git config core.autocrlf false
+
+      - name: Run AMstraLift
+        env:
+          GITHUB_TOKEN: ${{ secrets.token || secrets.GITHUB_TOKEN }}
+        run: |
+          ECO_ARG=""
+          if [ "${{ inputs.ecosystem }}" != "" ] && [ "${{ inputs.ecosystem }}" != "auto" ]; then
+            ECO_ARG="--ecosystem ${{ inputs.ecosystem }}"
+          fi
+
+          FLAGS="--branch ${{ inputs.target_branch }} --output-bundle amstralift-bundle.json"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            FLAGS="$FLAGS --dry-run"
+          fi
+          if [ "${{ inputs.publish }}" = "true" ] && [ "${{ inputs.dry_run }}" != "true" ]; then
+            FLAGS="$FLAGS --publish"
+          fi
+
+          uvx amstralift run --repo . $ECO_ARG $FLAGS
+
+      - name: Archive Advisory Bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: amstralift-bundle-${{ github.run_id }}
+          path: amstralift-bundle.json
+          retention-days: 90
+          if-no-files-found: ignore

@@ -1,0 +1,46 @@
+# AMstraLift Scheduled Dependency Upgrade for GitLab CI
+# Include this in your .gitlab-ci.yml or schedule a pipeline
+
+stages:
+  - upgrade
+
+variables:
+  UV_CACHE_DIR: "$CI_PROJECT_DIR/.cache/uv"
+  AMSTRALIFT_DRY_RUN: "false"
+  AMSTRALIFT_PUBLISH: "true"
+
+cache:
+  paths:
+    - .cache/uv
+
+amstralift:upgrade:
+  stage: upgrade
+  image: python:3.12-slim
+  rules:
+    # Run automatically on pipeline schedules or manually via web interface
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates
+    - curl -LsSf https://astral.sh/uv/install.sh | sh
+    - export PATH="$HOME/.local/bin:$PATH"
+    - git config --global user.name "amstralift-bot"
+    - git config --global user.email "amstralift-bot@gitlab.internal"
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+  script:
+    - |
+      FLAGS="--output-bundle amstralift-bundle.json"
+      if [ "$AMSTRALIFT_DRY_RUN" = "true" ]; then
+        FLAGS="$FLAGS --dry-run"
+      fi
+      if [ "$AMSTRALIFT_PUBLISH" = "true" ] && [ "$AMSTRALIFT_DRY_RUN" != "true" ]; then
+        FLAGS="$FLAGS --publish"
+      fi
+
+      uvx amstralift run --repo . $FLAGS
+  artifacts:
+    name: "amstralift-bundle-$CI_JOB_ID"
+    when: always
+    expire_in: 90 days
+    paths:
+      - amstralift-bundle.json

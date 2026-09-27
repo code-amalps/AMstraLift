@@ -1,0 +1,115 @@
+name: AMstraLift Scheduled Dependency Upgrade
+
+on:
+  schedule:
+    # Run weekly on Monday at 04:00 UTC (staggered off-peak)
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      ecosystem:
+        description: 'Target ecosystem (leave blank for auto-detection)'
+        required: false
+        type: choice
+        default: 'auto'
+        options:
+          - 'auto'
+          - 'angular'
+          - 'python'
+          - 'dotnet'
+          - 'react'
+      dry_run:
+        description: 'Dry run mode (simulate without pushing or opening PR)'
+        required: false
+        type: boolean
+        default: false
+      publish:
+        description: 'Publish reviewable PR on GitHub'
+        required: false
+        type: boolean
+        default: true
+
+# Concurrency group ensures repeated or overlapping runs do not race
+concurrency:
+  group: amstralift-${{ github.ref }}
+  cancel-in-progress: false
+
+# Least-privilege permissions required for Stage B publishing
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  amstralift-upgrade:
+    name: AMstraLift Two-Stage Upgrade
+    runs-on: ubuntu-latest
+    timeout-minutes: 30 # Hard execution timeout per Section 13
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 ensures commit history is available for base commit SHA verification
+          fetch-depth: 0
+
+      - name: Install uv package manager
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Node.js (for Angular / React adapters)
+        if: ${{ inputs.ecosystem == 'angular' || inputs.ecosystem == 'react' || inputs.ecosystem == 'auto' || github.event_name == 'schedule' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up .NET (for .NET adapter)
+        if: ${{ inputs.ecosystem == 'dotnet' || inputs.ecosystem == 'auto' || github.event_name == 'schedule' }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Configure Git Author Identity
+        run: |
+          git config user.name "amstralift-bot[bot]"
+          git config user.email "amstralift-bot[bot]@users.noreply.github.com"
+          git config core.autocrlf false
+
+      - name: Execute AMstraLift Engine
+        id: upgrade
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Determine ecosystem argument
+          ECO_ARG=""
+          if [ "${{ inputs.ecosystem }}" != "" ] && [ "${{ inputs.ecosystem }}" != "auto" ]; then
+            ECO_ARG="--ecosystem ${{ inputs.ecosystem }}"
+          fi
+
+          # Determine flags
+          FLAGS="--output-bundle amstralift-bundle.json"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            FLAGS="$FLAGS --dry-run"
+          fi
+          if [ "${{ inputs.publish }}" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
+            if [ "${{ inputs.dry_run }}" != "true" ]; then
+              FLAGS="$FLAGS --publish"
+            fi
+          fi
+
+          # Run AMstraLift orchestrator
+          uvx amstralift run --repo . $ECO_ARG $FLAGS
+
+      - name: Upload Cryptographic Advisory Bundle Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: amstralift-bundle-${{ github.run_id }}
+          path: amstralift-bundle.json
+          retention-days: 90
+          if-no-files-found: ignore
