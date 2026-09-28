@@ -61,9 +61,64 @@ AMstraLift is an automated dependency and framework upgrade engine built around 
 
 ---
 
-## 🚀 Quick Start (Local Run)
+## 🚀 Quick Start & Testing Guide
 
-```powershell
-# Run AMstraLift locally in dry-run mode
-uv run amstralift run --repo "path/to/target-repo" --dry-run
-```
+You can run and test AMstraLift using either standard **`pip`** or **`uv`**.
+
+### Method 1: Using Standard `pip` (Python 3.11+)
+
+1. **Create and activate a virtual environment:**
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   # (On Linux/macOS: source .venv/bin/activate)
+   ```
+
+2. **Install dependencies:**
+   ```powershell
+   # Option A: Install from requirements-dev.txt (includes tests & linting)
+   pip install -r requirements-dev.txt
+   pip install -e .
+
+   # Option B: Or install directly in editable mode with dev dependencies
+   pip install -e ".[dev]"
+   ```
+
+3. **Run the test suite:**
+   ```powershell
+   pytest
+   ```
+
+4. **Run the CLI:**
+   ```powershell
+   amstralift --help
+   amstralift run --repo "path/to/target-repo" --dry-run
+   ```
+
+---
+
+### Method 2: Using `uv` (Recommended — zero manual env setup)
+
+If you have `uv` installed, it manages the virtual environment automatically:
+
+1. **Run the test suite:**
+   ```powershell
+   uv run pytest
+   ```
+
+2. **Run lint checks:**
+   ```powershell
+   uv run ruff check .
+   ```
+
+3. **Run the CLI:**
+   ```powershell
+   uv run amstralift --help
+   uv run amstralift run --repo "path/to/target-repo" --dry-run
+   ```
+
+4. **Generate CI Workflows:**
+   ```powershell
+   # Generate turnkey GitHub Actions workflows in a target repository
+   uv run amstralift init-ci --provider github --repo .
+   ```
