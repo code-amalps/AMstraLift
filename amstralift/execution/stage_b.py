@@ -244,7 +244,7 @@ def run_stage_b(
                 raise StageBPublishError(f"Failed to stage verified patch file '{file_path}': {add_res.stderr}")
 
         # Commit with checked error
-        commit_res = run_git(["commit", "-m", f"chore(deps): {pr_proposal.title}"], cwd=target_repo_path)
+        commit_res = run_git(["commit", "-m", pr_proposal.title], cwd=target_repo_path)
         if commit_res.returncode != 0:
             if "nothing to commit" not in commit_res.stdout:
                 run_git(["checkout", bundle.target_branch], cwd=target_repo_path)
