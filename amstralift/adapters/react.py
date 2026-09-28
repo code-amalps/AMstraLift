@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 
-from amstralift.adapters.base import BaseAdapter
+from amstralift.adapters.base import BaseAdapter, get_node_execution_env
 from amstralift.core.models import (
     DependencyChange,
     DependencyTier,
@@ -194,7 +194,8 @@ class ReactAdapter(BaseAdapter):
         data = json.loads(pkg_file.read_text(encoding="utf-8"))
         scripts = data.get("scripts", {})
 
-        has_npm = shutil.which("npm") is not None
+        gate_env = get_node_execution_env()
+        has_npm = shutil.which("npm", path=gate_env.get("PATH")) is not None
 
         gates = [
             ("test", scripts.get("test"), True),
@@ -246,6 +247,7 @@ class ReactAdapter(BaseAdapter):
                     encoding="utf-8",
                     errors="replace",
                     timeout=300,
+                    env=gate_env,
                 )
                 duration = time.time() - start_t
                 stdout = proc.stdout or ""

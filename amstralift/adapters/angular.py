@@ -15,7 +15,7 @@ from pathlib import Path
 
 import httpx
 
-from amstralift.adapters.base import BaseAdapter
+from amstralift.adapters.base import BaseAdapter, get_node_execution_env
 from amstralift.core.models import (
     DependencyChange,
     DependencyTier,
@@ -275,7 +275,12 @@ class AngularAdapter(BaseAdapter):
         data = json.loads(pkg_file.read_text(encoding="utf-8"))
         scripts = data.get("scripts", {})
 
-        has_npm = shutil.which("npm") is not None
+        gate_env = get_node_execution_env()
+        existing_opts = gate_env.get("NODE_OPTIONS", "")
+        if "--openssl-legacy-provider" not in existing_opts:
+            gate_env["NODE_OPTIONS"] = (existing_opts + " --openssl-legacy-provider").strip()
+
+        has_npm = shutil.which("npm", path=gate_env.get("PATH")) is not None
 
         # Define gates in priority order
         gates = [
@@ -291,11 +296,6 @@ class AngularAdapter(BaseAdapter):
                 stale_lock.unlink(missing_ok=True)
             except Exception:
                 pass
-
-        gate_env = os.environ.copy()
-        existing_opts = gate_env.get("NODE_OPTIONS", "")
-        if "--openssl-legacy-provider" not in existing_opts:
-            gate_env["NODE_OPTIONS"] = (existing_opts + " --openssl-legacy-provider").strip()
 
         for gate_name, script_cmd, is_required in gates:
             if not script_cmd:
