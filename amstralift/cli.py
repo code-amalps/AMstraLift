@@ -10,6 +10,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from amstralift.core.workspace import get_active_branch, run_git
+from amstralift.execution.stage_b import StageBPublishError
 from amstralift.service import UpgradeOrchestrator
 
 # Ensure UTF-8 output on Windows consoles
@@ -178,6 +179,23 @@ def run(
             output_bundle.write_text(signed_bundle.model_dump_json(indent=2), encoding="utf-8")
             console.print(f"[dim]Signed bundle saved to: {output_bundle.resolve()}[/dim]")
 
+    except StageBPublishError as e:
+        console.print(f"[bold red]✖ Upgrade failed:[/bold red] {e}\n")
+        if e.gate_summary and e.gate_summary.results:
+            gate_table = Table(title="Build & Test Gates (Stage A Verification)", show_header=True, header_style="bold red")
+            gate_table.add_column("Gate")
+            gate_table.add_column("Command")
+            gate_table.add_column("Status")
+            gate_table.add_column("Diagnostic Details / Reason")
+            for g in e.gate_summary.results:
+                reason = (g.stdout or g.stderr or f"completed in {g.duration_seconds:.2f}s").strip().replace("\r", "").split("\n")[0]
+                gate_table.add_row(g.name, g.command, g.status.value, reason[:80])
+            console.print(gate_table)
+            console.print(
+                "\n[yellow]💡 Tip: In a live run (without --dry-run), all required gates must pass in the sandbox before a branch/PR can be created.[/yellow]\n"
+                "[dim]To inspect proposed package changes without enforcing gates, run with '--dry-run'.[/dim]"
+            )
+        raise typer.Exit(code=1)
     except Exception as e:
         console.print(f"[bold red]✖ Upgrade failed:[/bold red] {e}")
         raise typer.Exit(code=1) from e

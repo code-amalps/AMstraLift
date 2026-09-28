@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from amstralift.core.crypto import verify_bundle
-from amstralift.core.models import PullRequestProposal, SignedAdvisoryBundle
+from amstralift.core.models import GateStatus, GateSummary, PullRequestProposal, SignedAdvisoryBundle
 from amstralift.core.security import validate_patch_security
 from amstralift.core.workspace import (
     extract_patch_files,
@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 class StageBPublishError(Exception):
     """Raised when Stage B validation or publishing fails."""
 
-    pass
+    def __init__(self, message: str, gate_summary: GateSummary | None = None):
+        super().__init__(message)
+        self.gate_summary = gate_summary
 
 
 def run_stage_b(
@@ -95,9 +97,19 @@ def run_stage_b(
 
     # 6. Required gates verification (Section 1: never open a PR if required checks failed)
     if not dry_run and not bundle.gate_summary.all_required_passed:
+        issues = []
+        for r in bundle.gate_summary.results:
+            if r.status == GateStatus.REQUIRED_FAILED:
+                msg = (r.stderr or r.stdout or f"exit code {r.exit_code}").strip().replace("\r", "").replace("\n", " ")
+                issues.append(f"'{r.name}' FAILED: {msg[:100]}")
+            elif r.status == GateStatus.REQUIRED_SKIPPED:
+                msg = (r.stdout or "tooling not available in environment").strip().replace("\r", "").replace("\n", " ")
+                issues.append(f"'{r.name}' SKIPPED: {msg[:100]}")
+        details = f" ({'; '.join(issues)})" if issues else ""
         raise StageBPublishError(
-            "Cannot open PR: Not all required build/test gates passed in Stage A. "
-            "Per Section 1 and 3, AMstraLift fails closed with an issue, never a PR."
+            f"Cannot open PR: Not all required build/test gates passed in Stage A{details}. "
+            "Per Section 1 and 3, AMstraLift fails closed with an issue, never a PR.",
+            gate_summary=bundle.gate_summary,
         )
 
     # 7. Re-diff and clean application check
