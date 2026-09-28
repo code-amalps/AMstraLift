@@ -150,6 +150,18 @@ def prepare_stage_a_workspace(
                 raise ValueError("Publishing token detected in registry config! Only read-only tokens allowed.")
             (target_workspace_path / filename).write_text(content, encoding="utf-8")
 
+    # Share local dependency cache (node_modules) if present on host for sandbox tool execution
+    source_nm = source_repo_path / "node_modules"
+    target_nm = target_workspace_path / "node_modules"
+    if source_nm.exists() and source_nm.is_dir() and not target_nm.exists():
+        try:
+            if os.name == "nt":
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(target_nm), str(source_nm)], capture_output=True)
+            else:
+                target_nm.symlink_to(source_nm, target_is_directory=True)
+        except Exception:
+            pass
+
     return base_sha
 
 

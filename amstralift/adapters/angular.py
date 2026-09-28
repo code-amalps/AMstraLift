@@ -243,10 +243,22 @@ class AngularAdapter(BaseAdapter):
             try:
                 lock_data = json.loads(lock_file.read_text(encoding="utf-8"))
                 for change in changes:
+                    clean_ver = change.to_version.lstrip("^~>=<")
+                    # 1. Update packages["node_modules/<package_name>"]
                     if "packages" in lock_data and f"node_modules/{change.package_name}" in lock_data["packages"]:
-                        lock_data["packages"][f"node_modules/{change.package_name}"]["version"] = (
-                            change.to_version.lstrip("^~")
-                        )
+                        lock_data["packages"][f"node_modules/{change.package_name}"]["version"] = clean_ver
+                    # 2. Update root package manifest packages[""]
+                    if "packages" in lock_data and "" in lock_data["packages"]:
+                        root_pkg = lock_data["packages"][""]
+                        if change.change_type == "direct" and "dependencies" in root_pkg:
+                            if change.package_name in root_pkg["dependencies"]:
+                                root_pkg["dependencies"][change.package_name] = change.to_version
+                        elif change.change_type == "dev" and "devDependencies" in root_pkg:
+                            if change.package_name in root_pkg["devDependencies"]:
+                                root_pkg["devDependencies"][change.package_name] = change.to_version
+                    # 3. Update legacy v1 dependencies section if present
+                    if "dependencies" in lock_data and change.package_name in lock_data["dependencies"]:
+                        lock_data["dependencies"][change.package_name]["version"] = clean_ver
                 lock_file.write_text(json.dumps(lock_data, indent=2) + "\n", encoding="utf-8")
             except Exception:
                 pass
