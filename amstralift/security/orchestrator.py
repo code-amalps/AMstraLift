@@ -172,15 +172,21 @@ class SecurityOrchestrator:
                 explicit_changes=changes,
             )
 
-            # Tag PR with uncertainty label if 0 tests were discovered
-            if confidence == VerificationConfidence.COMPILED_UNVERIFIED:
-                pr_proposal.labels.append("unverified-no-tests-discovered")
+            # Tag PR with uncertainty labels according to verification outcome
+            if confidence == VerificationStatus.UNVERIFIED_NO_TESTS:
+                pr_proposal.labels.extend(["unverified-no-tests", "requires-manual-qa", "policy-manual-approval-required"])
+                pr_proposal.title = f"[UNVERIFIED - NO TESTS] {pr_proposal.title}"
+            elif confidence == VerificationStatus.VERIFICATION_INCOMPLETE:
+                pr_proposal.labels.extend(["verification-incomplete", "requires-manual-qa", "policy-manual-approval-required"])
+                pr_proposal.title = f"[INCOMPLETE VERIFICATION] {pr_proposal.title}"
+            else:
+                pr_proposal.labels.append("verified-safe")
 
             return RemediationResult(
                 mode="apply",
                 report=report,
                 plan=plan,
-                confidence=confidence,
+                verification_status=confidence,
                 gate_summary=gate_summary,
                 rescan_report=rescan_report,
                 branch_name=pr_proposal.branch_name,

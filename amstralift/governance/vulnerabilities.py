@@ -22,15 +22,20 @@ class VulnerabilitySeverity(str, Enum):
     MEDIUM = "MEDIUM"
     LOW = "LOW"
 
-    @property
-    def default_expiry_days(self) -> int:
-        match self:
-            case VulnerabilitySeverity.CRITICAL:
-                return 30
-            case VulnerabilitySeverity.HIGH:
-                return 60
-            case VulnerabilitySeverity.MEDIUM | VulnerabilitySeverity.LOW:
-                return 90
+
+class RemediationStatus(str, Enum):
+    """Lifecycle tracking of a discovered vulnerability under organizational SLA governance.
+
+    NOTE: An SLA deadline determines governance urgency, prioritization, and escalation.
+    It does NOT determine whether a package upgrade is technically safe.
+    Technical safety is determined strictly by dependency compatibility, build validation, and test gates.
+    """
+
+    IDENTIFIED = "IDENTIFIED"
+    IN_REMEDIATION = "IN_REMEDIATION"
+    EXEMPTED = "EXEMPTED"
+    SLA_BREACHED = "SLA_BREACHED"
+    RESOLVED = "RESOLVED"
 
 
 class ExceptionStatus(str, Enum):
@@ -41,7 +46,10 @@ class ExceptionStatus(str, Enum):
 
 
 class VulnerabilityPolicyConfig(BaseModel):
-    """Organization-configurable security and vulnerability remediation policy."""
+    """Organization-configurable security and vulnerability remediation policy.
+
+    Separates policy definition from governance enforcement.
+    """
 
     sla_days: dict[VulnerabilitySeverity, int] = Field(
         default_factory=lambda: {
@@ -56,14 +64,37 @@ class VulnerabilityPolicyConfig(BaseModel):
         default_factory=lambda: [VulnerabilitySeverity.CRITICAL, VulnerabilitySeverity.HIGH]
     )
     allow_major_version_upgrades: bool = False
+    allow_unverified_upgrades_for_review: bool = True
     require_joint_signoff: bool = True
     mandatory_compensating_controls: bool = True
     max_exception_extension_days: int = 30
     require_zero_test_uncertainty_flag: bool = True
 
     def get_sla_days(self, severity: VulnerabilitySeverity) -> int:
-        """Get the configured SLA days for a given severity."""
-        return self.sla_days.get(severity, severity.default_expiry_days)
+        """Get the configured SLA days for a given severity from organization policy."""
+        return self.sla_days.get(severity, 30)
+
+    def calculate_deadline(self, severity: VulnerabilitySeverity, detected_at: date) -> date:
+        """Calculate the SLA deadline date for a finding based on configured organization policy."""
+        days = self.get_sla_days(severity)
+        return detected_at + timedelta(days=days)
+
+    def evaluate_sla_status(
+        self,
+        severity: VulnerabilitySeverity,
+        detected_at: date,
+        reference_date: date | None = None,
+        is_exempted: bool = False,
+    ) -> tuple[RemediationStatus, int]:
+        """Evaluate SLA compliance status and remaining/overdue days."""
+        if is_exempted:
+            return RemediationStatus.EXEMPTED, 0
+        ref = reference_date or date.today()
+        deadline = self.calculate_deadline(severity, detected_at)
+        delta_days = (deadline - ref).days
+        if delta_days >= 0:
+            return RemediationStatus.IDENTIFIED, delta_days
+        return RemediationStatus.SLA_BREACHED, abs(delta_days)
 
 
 class VulnerabilityException(BaseModel):

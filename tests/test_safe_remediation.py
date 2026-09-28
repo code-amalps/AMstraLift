@@ -151,17 +151,90 @@ def test_dotnet_transitive_pin_application(tmp_path: Path):
 
 
 def test_gate_3_uncertainty_detection():
-    """Verify Gate 3 distinguishes VERIFIED_SAFE (>0 tests) from COMPILED_UNVERIFIED (0 tests)."""
-    # 1. 0 tests executed -> COMPILED_UNVERIFIED with uncertainty warning
+    """Verify Gate 3 distinguishes VERIFIED_SAFE (>0 tests) from UNVERIFIED_NO_TESTS (0 tests)."""
+    # 1. 0 tests executed -> UNVERIFIED_NO_TESTS
     with patch("subprocess.run") as mock_sub:
         mock_sub.return_value = MagicMock(return_value=0, returncode=0, stdout="Passed: 0, Failed: 0, Total: 0", stderr="")
-        g3, count = VerificationEngine._run_gate_3_tests(Path("/tmp"), "dotnet")
+        g3, count, is_skipped = VerificationEngine._run_gate_3_tests(Path("/tmp"), "dotnet")
         assert g3.status == GateStatus.REQUIRED_PASSED
         assert count == 0
+        assert not is_skipped
 
     # 2. 15 tests executed and passed -> VERIFIED_SAFE
     with patch("subprocess.run") as mock_sub:
         mock_sub.return_value = MagicMock(return_value=0, returncode=0, stdout="Passed: 15, Failed: 0, Total: 15", stderr="")
-        g3, count = VerificationEngine._run_gate_3_tests(Path("/tmp"), "dotnet")
+        g3, count, is_skipped = VerificationEngine._run_gate_3_tests(Path("/tmp"), "dotnet")
         assert g3.status == GateStatus.REQUIRED_PASSED
         assert count == 15
+        assert not is_skipped
+
+    # 3. Tests skipped or missing script -> VERIFICATION_INCOMPLETE
+    with patch("subprocess.run") as mock_sub:
+        mock_sub.return_value = MagicMock(return_value=0, returncode=0, stdout="npm ERR! missing script: test", stderr="missing script: test")
+        g3, count, is_skipped = VerificationEngine._run_gate_3_tests(Path("/tmp"), "angular")
+        assert is_skipped
+
+
+def test_verification_matrix_situations():
+    """Verify the explicit 6-situation behavioral matrix in VerificationEngine."""
+    from amstralift.security.models import RemediationPlan, VerificationStatus
+
+    dummy_plan = RemediationPlan()
+
+    # Situation 1: Build fails -> Remediation fails (BUILD_FAILED)
+    with patch.object(VerificationEngine, "_run_gate_1_resolution", return_value=GateResult(name="res", command="npm", status=GateStatus.REQUIRED_PASSED, exit_code=0)), \
+         patch.object(VerificationEngine, "_run_gate_2_build", return_value=GateResult(name="build", command="npm run build", status=GateStatus.REQUIRED_FAILED, exit_code=1, stderr="TypeScript error TS2304")):
+        eligible, status, summary, rescan, warn = VerificationEngine.execute_gates(Path("/tmp"), "npm", dummy_plan)
+        assert not eligible
+        assert status == VerificationStatus.BUILD_FAILED
+        assert "Gate 2 Build failed" in warn
+
+    # Situation 2: Tests fail -> Remediation fails (TESTS_FAILED)
+    with patch.object(VerificationEngine, "_run_gate_1_resolution", return_value=GateResult(name="res", command="npm", status=GateStatus.REQUIRED_PASSED, exit_code=0)), \
+         patch.object(VerificationEngine, "_run_gate_2_build", return_value=GateResult(name="build", command="npm run build", status=GateStatus.REQUIRED_PASSED, exit_code=0)), \
+         patch.object(VerificationEngine, "_run_gate_3_tests", return_value=(GateResult(name="test", command="npm test", status=GateStatus.REQUIRED_FAILED, exit_code=1, stderr="AssertionError: expected true to be false"), 0, False)):
+        eligible, status, summary, rescan, warn = VerificationEngine.execute_gates(Path("/tmp"), "npm", dummy_plan)
+        assert not eligible
+        assert status == VerificationStatus.TESTS_FAILED
+        assert "Gate 3 Tests failed" in warn
+
+    # Situation 3: No relevant tests exist (0 tests run) -> UNVERIFIED_NO_TESTS (Eligible under review policy)
+    with patch.object(VerificationEngine, "_run_gate_1_resolution", return_value=GateResult(name="res", command="npm", status=GateStatus.REQUIRED_PASSED, exit_code=0)), \
+         patch.object(VerificationEngine, "_run_gate_2_build", return_value=GateResult(name="build", command="npm run build", status=GateStatus.REQUIRED_PASSED, exit_code=0)), \
+         patch.object(VerificationEngine, "_run_gate_3_tests", return_value=(GateResult(name="test", command="npm test", status=GateStatus.REQUIRED_PASSED, exit_code=0), 0, False)), \
+         patch.object(VerificationEngine, "_run_gate_4_rescan", return_value=(None, True, "All resolved")):
+        eligible, status, summary, rescan, warn = VerificationEngine.execute_gates(Path("/tmp"), "npm", dummy_plan)
+        assert eligible  # Eligible for manual review PR proposal
+        assert status == VerificationStatus.UNVERIFIED_NO_TESTS
+        assert "UNVERIFIED (NO AUTOMATED TESTS)" in warn
+
+    # Situation 4: Tests skipped or cannot run -> VERIFICATION_INCOMPLETE
+    with patch.object(VerificationEngine, "_run_gate_1_resolution", return_value=GateResult(name="res", command="npm", status=GateStatus.REQUIRED_PASSED, exit_code=0)), \
+         patch.object(VerificationEngine, "_run_gate_2_build", return_value=GateResult(name="build", command="npm run build", status=GateStatus.REQUIRED_PASSED, exit_code=0)), \
+         patch.object(VerificationEngine, "_run_gate_3_tests", return_value=(GateResult(name="test", command="npm test", status=GateStatus.REQUIRED_SKIPPED, exit_code=0), 0, True)), \
+         patch.object(VerificationEngine, "_run_gate_4_rescan", return_value=(None, True, "All resolved")):
+        eligible, status, summary, rescan, warn = VerificationEngine.execute_gates(Path("/tmp"), "npm", dummy_plan)
+        assert eligible
+        assert status == VerificationStatus.VERIFICATION_INCOMPLETE
+        assert "VERIFICATION INCOMPLETE" in warn
+
+    # Situation 5: Vulnerability rescan fails -> RESCAN_FAILED (Do not claim resolved)
+    with patch.object(VerificationEngine, "_run_gate_1_resolution", return_value=GateResult(name="res", command="npm", status=GateStatus.REQUIRED_PASSED, exit_code=0)), \
+         patch.object(VerificationEngine, "_run_gate_2_build", return_value=GateResult(name="build", command="npm run build", status=GateStatus.REQUIRED_PASSED, exit_code=0)), \
+         patch.object(VerificationEngine, "_run_gate_3_tests", return_value=(GateResult(name="test", command="npm test", status=GateStatus.REQUIRED_PASSED, exit_code=0), 10, False)), \
+         patch.object(VerificationEngine, "_run_gate_4_rescan", return_value=(None, False, "Vulnerability CVE-2024-1234 still present")):
+        eligible, status, summary, rescan, warn = VerificationEngine.execute_gates(Path("/tmp"), "npm", dummy_plan)
+        assert not eligible
+        assert status == VerificationStatus.RESCAN_FAILED
+        assert "Gate 4 Vulnerability Rescan failed" in warn
+        assert "Do not claim vulnerability is resolved" in warn
+
+    # Situation 6: Build & required tests pass (>0 tests) -> VERIFIED_SAFE
+    with patch.object(VerificationEngine, "_run_gate_1_resolution", return_value=GateResult(name="res", command="npm", status=GateStatus.REQUIRED_PASSED, exit_code=0)), \
+         patch.object(VerificationEngine, "_run_gate_2_build", return_value=GateResult(name="build", command="npm run build", status=GateStatus.REQUIRED_PASSED, exit_code=0)), \
+         patch.object(VerificationEngine, "_run_gate_3_tests", return_value=(GateResult(name="test", command="npm test", status=GateStatus.REQUIRED_PASSED, exit_code=0), 10, False)), \
+         patch.object(VerificationEngine, "_run_gate_4_rescan", return_value=(None, True, "All resolved")):
+        eligible, status, summary, rescan, warn = VerificationEngine.execute_gates(Path("/tmp"), "npm", dummy_plan)
+        assert eligible
+        assert status == VerificationStatus.VERIFIED_SAFE
+        assert warn is None

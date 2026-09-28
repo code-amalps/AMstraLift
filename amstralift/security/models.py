@@ -7,12 +7,23 @@ from pydantic import BaseModel, Field
 from amstralift.governance.vulnerabilities import VulnerabilitySeverity
 
 
-class VerificationConfidence(str, Enum):
-    """Classification of upgrade verification confidence."""
+class VerificationStatus(str, Enum):
+    """Explicit classification of remediation verification outcomes per behavioral contract."""
 
-    VERIFIED_SAFE = "VERIFIED_SAFE"  # Build and tests passed (> 0 tests executed)
-    COMPILED_UNVERIFIED = "COMPILED_UNVERIFIED"  # Build passed, but 0 automated tests found
-    GATES_FAILED = "GATES_FAILED"  # Required build or test gate failed
+    VERIFIED_SAFE = "VERIFIED_SAFE"  # Build and required tests pass (>0 tests run) -> Eligible for next configured approval gate
+    UNVERIFIED_NO_TESTS = "UNVERIFIED_NO_TESTS"  # Build passed, but no relevant tests exist -> Mark as unverified
+    VERIFICATION_INCOMPLETE = "VERIFICATION_INCOMPLETE"  # Tests skipped or cannot run -> Mark verification as incomplete
+    BUILD_FAILED = "BUILD_FAILED"  # Build fails -> Remediation fails; do not publish automatically
+    TESTS_FAILED = "TESTS_FAILED"  # Tests fail -> Remediation fails; provide diagnostics
+    RESCAN_FAILED = "RESCAN_FAILED"  # Vulnerability rescan fails -> Do not claim the vulnerability is resolved
+
+    # Compatibility aliases
+    COMPILED_UNVERIFIED = "UNVERIFIED_NO_TESTS"
+    GATES_FAILED = "TESTS_FAILED"
+
+
+# Backward compatibility alias
+VerificationConfidence = VerificationStatus
 
 
 class DiscoveredDependency(BaseModel):
@@ -142,7 +153,7 @@ class RemediationResult(BaseModel):
     mode: str  # "audit", "preview", "apply"
     report: AuditReport
     plan: RemediationPlan | None = None
-    confidence: VerificationConfidence = VerificationConfidence.VERIFIED_SAFE
+    verification_status: VerificationStatus = VerificationStatus.VERIFIED_SAFE
     gate_summary: Any = None
     rescan_report: AuditReport | None = None
     branch_name: str | None = None
@@ -150,3 +161,7 @@ class RemediationResult(BaseModel):
     uncertainty_warning: str | None = None
     error_message: str | None = None
     remediation_successful: bool = False
+
+    @property
+    def confidence(self) -> VerificationStatus:
+        return self.verification_status

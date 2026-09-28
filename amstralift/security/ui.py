@@ -177,14 +177,36 @@ class SecurityUI:
             )
             return
 
-        console.print(
-            Panel.fit(
-                f"[bold green]✔ Security Remediation Completed Successfully![/bold green]\n"
-                f"[dim]All verification gates passed inside the isolated Stage A sandbox.[/dim]",
-                title="Remediation Success",
-                border_style="green",
+        from amstralift.security.models import VerificationStatus
+
+        if result.verification_status == VerificationStatus.UNVERIFIED_NO_TESTS:
+            console.print(
+                Panel.fit(
+                    "[bold yellow]⚠️ Build Compiled Successfully - Unverified Safety (0 Tests Found)[/bold yellow]\n"
+                    "[dim]Remediation candidate compiled cleanly, but NO automated tests exist to verify functional safety.\n"
+                    "Prepared for policy-controlled manual review and human approval.[/dim]",
+                    title="Remediation Proposal (Unverified)",
+                    border_style="yellow",
+                )
             )
-        )
+        elif result.verification_status == VerificationStatus.VERIFICATION_INCOMPLETE:
+            console.print(
+                Panel.fit(
+                    "[bold yellow]⚠️ Build Compiled Successfully - Verification Incomplete (Tests Skipped)[/bold yellow]\n"
+                    "[dim]Automated test runner was skipped or unavailable. Policy-controlled manual approval required.[/dim]",
+                    title="Remediation Proposal (Incomplete)",
+                    border_style="yellow",
+                )
+            )
+        else:
+            console.print(
+                Panel.fit(
+                    "[bold green]✔ Security Remediation Verified Safe![/bold green]\n"
+                    "[dim]Build and automated tests passed with verified evidence inside the isolated sandbox.[/dim]",
+                    title="Remediation Success (Fully Verified)",
+                    border_style="green",
+                )
+            )
 
         # Uncertainty Warning Banner
         if result.uncertainty_warning:

@@ -57,7 +57,7 @@ def test_prevents_unsolicited_framework_major_desync():
     )
     assert not res.is_compatible
     assert res.target_version is None
-    assert "desync core framework" in res.rationale
+    assert any("desyncs from core project framework" in reason for reason in res.rejected_candidates.values())
     assert res.advisory is not None
 
 
@@ -73,3 +73,52 @@ def test_unfixable_advisory_when_no_fixed_versions():
     assert res.target_version is None
     assert "No fixed versions reported" in res.rationale
     assert "abandoned-lib" in res.advisory
+
+
+def test_rejects_dotnet_candidate_exceeding_target_framework():
+    """Rejects .NET package version that requires a higher TargetFramework than the project."""
+    res = CompatibilityAwareVersionSelector.select_version(
+        package_name="Microsoft.Extensions.Logging",
+        current_version="9.0.0",
+        fixed_versions=["10.0.1"],
+        ecosystem="dotnet",
+        project_context={"target_framework": "net9.0"},
+    )
+    assert not res.is_compatible
+    assert res.target_version is None
+    assert "10.0.1" in res.rejected_candidates
+    assert "Requires TargetFramework net10.0, which exceeds project framework net9.0" in res.rejected_candidates["10.0.1"]
+    assert "Manual Remediation Recommended" in res.advisory
+
+
+def test_rejects_candidate_violating_peer_dependencies():
+    """Rejects candidate whose peer dependencies conflict with installed project dependencies."""
+    res = CompatibilityAwareVersionSelector.select_version(
+        package_name="@angular/material",
+        current_version="18.0.0",
+        fixed_versions=["19.0.2"],
+        ecosystem="npm",
+        project_context={
+            "installed_dependencies": {"@angular/core": "18.2.0"},
+            "peer_dependencies": {"19.0.2": {"@angular/core": "19.0.0"}},
+        },
+    )
+    assert not res.is_compatible
+    assert res.target_version is None
+    assert "19.0.2" in res.rejected_candidates
+    assert "peerDependency '@angular/core' '19.0.0' is not satisfied by installed 18.2.0" in res.rejected_candidates["19.0.2"]
+
+
+def test_rejects_candidate_violating_manifest_version_constraint():
+    """Rejects candidate that violates explicit upper-bound manifest constraint."""
+    res = CompatibilityAwareVersionSelector.select_version(
+        package_name="example-lib",
+        current_version="4.2.0",
+        fixed_versions=["5.1.0"],
+        ecosystem="npm",
+        project_context={"version_constraints": {"example-lib": "< 5.0.0"}},
+    )
+    assert not res.is_compatible
+    assert res.target_version is None
+    assert "5.1.0" in res.rejected_candidates
+    assert "Violates project manifest constraint '< 5.0.0'" in res.rejected_candidates["5.1.0"]

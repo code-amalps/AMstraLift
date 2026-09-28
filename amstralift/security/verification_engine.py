@@ -13,7 +13,7 @@ from amstralift.security.dependency_graph import DependencyGraphAnalyzer
 from amstralift.security.models import (
     AuditReport,
     RemediationPlan,
-    VerificationConfidence,
+    VerificationStatus,
 )
 from amstralift.security.osv_client import OSVClient
 
@@ -29,11 +29,11 @@ class VerificationEngine:
         plan: RemediationPlan,
         scanner: OSVClient | None = None,
         governance_manager: Any = None,
-    ) -> tuple[bool, VerificationConfidence, GateSummary, AuditReport | None, str | None]:
-        """Execute Gates 1-5 inside the isolated workspace.
+    ) -> tuple[bool, VerificationStatus, GateSummary, AuditReport | None, str | None]:
+        """Execute Gates 1-5 inside the isolated workspace according to the explicit behavior contract.
 
         Returns:
-            (success, confidence, gate_summary, rescan_report, uncertainty_warning)
+            (eligible_for_stage_b, verification_status, gate_summary, rescan_report, uncertainty_warning)
         """
         results: list[GateResult] = []
         scanner = scanner or OSVClient()
@@ -46,7 +46,7 @@ class VerificationEngine:
         if g1_res.status == GateStatus.REQUIRED_FAILED:
             return (
                 False,
-                VerificationConfidence.GATES_FAILED,
+                VerificationStatus.BUILD_FAILED,
                 GateSummary(results=results),
                 None,
                 f"Gate 1 Dependency Resolution failed: {g1_res.stderr or g1_res.stdout}",
@@ -60,7 +60,7 @@ class VerificationEngine:
         if g2_res.status == GateStatus.REQUIRED_FAILED:
             return (
                 False,
-                VerificationConfidence.GATES_FAILED,
+                VerificationStatus.BUILD_FAILED,
                 GateSummary(results=results),
                 None,
                 f"Gate 2 Build failed: {g2_res.stderr or g2_res.stdout}",
@@ -69,26 +69,32 @@ class VerificationEngine:
         # ====================================================
         # Gate 3: Automated Tests & Uncertainty Evaluation
         # ====================================================
-        g3_res, test_count = cls._run_gate_3_tests(workspace_path, ecosystem)
+        g3_res, test_count, is_skipped = cls._run_gate_3_tests(workspace_path, ecosystem)
         results.append(g3_res)
         if g3_res.status == GateStatus.REQUIRED_FAILED:
             return (
                 False,
-                VerificationConfidence.GATES_FAILED,
+                VerificationStatus.TESTS_FAILED,
                 GateSummary(results=results),
                 None,
                 f"Gate 3 Tests failed: {g3_res.stderr or g3_res.stdout}",
             )
 
-        uncertainty_warning = None
-        if test_count == 0:
-            confidence = VerificationConfidence.COMPILED_UNVERIFIED
+        uncertainty_warning: str | None = None
+        if is_skipped or g3_res.status == GateStatus.REQUIRED_SKIPPED:
+            status = VerificationStatus.VERIFICATION_INCOMPLETE
             uncertainty_warning = (
-                "⚠️ UNCERTAINTY WARNING: Build compiled successfully, but NO automated tests were discovered "
-                "in this repository. Functional safety cannot be verified automatically. Manual QA required."
+                "⚠️ VERIFICATION INCOMPLETE: Automated tests were skipped or test runner tooling was unavailable. "
+                "Functional verification is incomplete. Policy-controlled manual approval required."
+            )
+        elif test_count == 0:
+            status = VerificationStatus.UNVERIFIED_NO_TESTS
+            uncertainty_warning = (
+                "⚠️ UNVERIFIED (NO AUTOMATED TESTS): Build compiled cleanly, but NO relevant automated tests exist "
+                "in this repository. Functional safety cannot be verified automatically. Policy-controlled manual approval required."
             )
         else:
-            confidence = VerificationConfidence.VERIFIED_SAFE
+            status = VerificationStatus.VERIFIED_SAFE
 
         # ====================================================
         # Gate 4: Vulnerability Rescan
@@ -110,17 +116,29 @@ class VerificationEngine:
         if not rescan_passed:
             return (
                 False,
-                VerificationConfidence.GATES_FAILED,
+                VerificationStatus.RESCAN_FAILED,
                 GateSummary(results=results),
                 rescan_report,
-                f"Gate 4 Vulnerability Rescan failed: {rescan_reason}",
+                f"Gate 4 Vulnerability Rescan failed: {rescan_reason}. Do not claim vulnerability is resolved.",
             )
 
         # ====================================================
         # Gate 5: Final Decision
         # ====================================================
+        policy = getattr(governance_manager, "policy", None)
+        allow_unverified = getattr(policy, "allow_unverified_upgrades_for_review", True) if policy else True
+
+        if status in (VerificationStatus.UNVERIFIED_NO_TESTS, VerificationStatus.VERIFICATION_INCOMPLETE) and not allow_unverified:
+            return (
+                False,
+                status,
+                GateSummary(results=results),
+                rescan_report,
+                f"Remediation halted: Organizational policy strictly requires passing automated tests. {uncertainty_warning}",
+            )
+
         gate_summary = GateSummary(results=results)
-        return True, confidence, gate_summary, rescan_report, uncertainty_warning
+        return True, status, gate_summary, rescan_report, uncertainty_warning
 
     @classmethod
     def _run_gate_1_resolution(cls, workspace_path: Path, ecosystem: str) -> GateResult:
@@ -222,15 +240,42 @@ class VerificationEngine:
         )
 
     @classmethod
-    def _run_gate_3_tests(cls, workspace_path: Path, ecosystem: str) -> tuple[GateResult, int]:
-        """Run automated test suite and extract executed test count to detect uncertainty."""
+    def _run_gate_3_tests(cls, workspace_path: Path, ecosystem: str) -> tuple[GateResult, int, bool]:
+        """Run automated test suite and extract executed test count to detect uncertainty.
+
+        Returns: (GateResult, test_count, is_skipped)
+        """
         start = time.time()
         eco = ecosystem.lower().strip()
 
         if eco in ("angular", "react", "npm"):
+            if not shutil.which("npm"):
+                return (
+                    GateResult(
+                        name="test",
+                        command="npm test",
+                        status=GateStatus.REQUIRED_SKIPPED,
+                        exit_code=0,
+                        stdout="npm not detected",
+                    ),
+                    0,
+                    True,
+                )
             cmd = "npm test"
             env = get_node_execution_env()
         elif eco in ("dotnet", "nuget"):
+            if not shutil.which("dotnet"):
+                return (
+                    GateResult(
+                        name="test",
+                        command="dotnet test",
+                        status=GateStatus.REQUIRED_SKIPPED,
+                        exit_code=0,
+                        stdout="dotnet CLI not detected",
+                    ),
+                    0,
+                    True,
+                )
             cmd = "dotnet test"
             env = None
         else:
@@ -252,17 +297,14 @@ class VerificationEngine:
 
         # Extract executed test counts across runners
         test_count = 0
-        # .NET: "Total tests: 10. Passed: 10." or "Passed! - Failed: 0, Passed: 5"
         dotnet_m = re.search(r"Passed:\s*(\d+)", stdout, re.IGNORECASE)
         if dotnet_m:
             test_count = int(dotnet_m.group(1))
 
-        # Pytest: "10 passed in 0.5s"
         pytest_m = re.search(r"(\d+)\s+passed", stdout, re.IGNORECASE)
         if pytest_m and test_count == 0:
             test_count = int(pytest_m.group(1))
 
-        # Jest/Karma: "Tests: 12 passed" or "Executed 12 of 12"
         jest_m = re.search(r"Tests:\s*(\d+)\s+passed", stdout, re.IGNORECASE)
         karma_m = re.search(r"Executed\s+(\d+)\s+of\s+(\d+)", stdout, re.IGNORECASE)
         if jest_m and test_count == 0:
@@ -270,9 +312,15 @@ class VerificationEngine:
         elif karma_m and test_count == 0:
             test_count = int(karma_m.group(1))
 
-        # If returncode is 0 but test output contains "No test files found" or "0 passed"
         if "no test files found" in stdout.lower() or "no tests found" in stdout.lower():
             test_count = 0
+
+        # Check if tests were skipped or missing script in npm
+        is_skipped = (
+            "missing script: test" in stderr.lower()
+            or "no test specified" in stdout.lower()
+            or proc.returncode == 0 and "no tests" in stdout.lower() and test_count == 0
+        )
 
         status = GateStatus.REQUIRED_PASSED if proc.returncode == 0 else GateStatus.REQUIRED_FAILED
         result = GateResult(
@@ -284,7 +332,7 @@ class VerificationEngine:
             stderr=stderr,
             duration_seconds=dur,
         )
-        return result, test_count
+        return result, test_count, is_skipped
 
     @classmethod
     def _run_gate_4_rescan(
@@ -305,7 +353,6 @@ class VerificationEngine:
         )
 
         remediated_packages = {item.package_name.lower(): item.target_version for item in plan.items}
-        # Check if any remaining finding matches the targeted CVEs on remediated packages
         unresolved_cves = []
         for f in rescan_report.findings:
             if f.package_name.lower() in remediated_packages and not f.is_exempted:
