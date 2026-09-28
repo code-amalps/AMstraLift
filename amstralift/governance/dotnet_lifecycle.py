@@ -9,8 +9,9 @@ and end-of-life dates.
 
 from datetime import date
 from typing import Literal
+
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 DOTNET_RELEASES_INDEX_URL = "https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/releases-index.json"
 

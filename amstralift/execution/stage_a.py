@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from amstralift.adapters.base import BaseAdapter
 from amstralift.core.crypto import compute_file_sha256, compute_sha256
-from amstralift.core.models import UnsignedAdvisoryBundle
+from amstralift.core.models import DependencyChange, UnsignedAdvisoryBundle
 from amstralift.core.security import classify_migration_diff, validate_patch_security
 from amstralift.core.workspace import generate_patch, get_head_commit
 

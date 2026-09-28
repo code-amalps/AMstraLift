@@ -4,15 +4,11 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from amstralift.core.models import GateResult, GateStatus, GateSummary
+from amstralift.core.models import GateResult, GateStatus
 from amstralift.governance.vulnerabilities import VulnerabilitySeverity
 from amstralift.security.models import (
     AuditReport,
-    DiscoveredDependency,
     RemediationPlan,
-    VerificationConfidence,
     VulnerabilityFinding,
 )
 from amstralift.security.plan_generator import RemediationPlanGenerator
@@ -177,7 +173,7 @@ def test_gate_3_uncertainty_detection():
 
 def test_verification_matrix_situations():
     """Verify the explicit 6-situation behavioral matrix in VerificationEngine."""
-    from amstralift.security.models import RemediationPlan, VerificationStatus
+    from amstralift.security.models import VerificationStatus
 
     dummy_plan = RemediationPlan()
 

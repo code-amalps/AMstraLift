@@ -6,7 +6,6 @@ Enforces Angular LTS governance policy when configured.
 """
 
 import json
-import os
 import re
 import shutil
 import subprocess

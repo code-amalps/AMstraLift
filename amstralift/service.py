@@ -15,7 +15,7 @@ from amstralift.adapters.dotnet import DotNetAdapter
 from amstralift.adapters.python import PythonAdapter
 from amstralift.adapters.react import ReactAdapter
 from amstralift.core.crypto import sign_bundle
-from amstralift.core.models import PullRequestProposal, SignedAdvisoryBundle
+from amstralift.core.models import DependencyChange, PullRequestProposal, SignedAdvisoryBundle
 from amstralift.core.workspace import prepare_stage_a_workspace, run_git
 from amstralift.execution.stage_a import run_stage_a
 from amstralift.execution.stage_b import run_stage_b

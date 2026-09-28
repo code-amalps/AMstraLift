@@ -1,10 +1,8 @@
 """Generates actionable, risk-analyzed remediation plans from vulnerability audit findings."""
 
 from typing import Any
-from pathlib import Path
 
 from amstralift.core.models import DependencyChange, DependencyTier
-from amstralift.governance.vulnerabilities import VulnerabilitySeverity
 from amstralift.security.compatibility_selector import CompatibilityAwareVersionSelector
 from amstralift.security.models import (
     AuditReport,

@@ -2,16 +2,14 @@
 
 import tempfile
 from pathlib import Path
-from typing import Any
 
 from amstralift.core.workspace import get_active_branch, prepare_stage_a_workspace
 from amstralift.governance.vulnerabilities import VulnerabilityManager
 from amstralift.security.dependency_graph import DependencyGraphAnalyzer
 from amstralift.security.models import (
-    AuditReport,
-    RemediationPlan,
     RemediationResult,
     VerificationConfidence,
+    VerificationStatus,
 )
 from amstralift.security.osv_client import OSVClient
 from amstralift.security.plan_generator import RemediationPlanGenerator
@@ -126,7 +124,7 @@ class SecurityOrchestrator:
             )
 
             # 6. Apply minimal direct and transitive dependency changes inside sandbox
-            modified_files = RemediationEngine.apply_plan(sandbox_dir, effective_ecosystem, plan)
+            _modified_files = RemediationEngine.apply_plan(sandbox_dir, effective_ecosystem, plan)
 
             # 7. Execute the 5 Verification Gates
             (

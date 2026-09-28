@@ -9,7 +9,6 @@ from amstralift.security.models import (
     AuditReport,
     RemediationPlan,
     RemediationResult,
-    VerificationConfidence,
 )
 
 

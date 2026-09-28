@@ -4,9 +4,7 @@ import json
 import re
 import shutil
 import subprocess
-import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any
 
 from amstralift.adapters.base import get_node_execution_env
 from amstralift.security.models import RemediationPlan

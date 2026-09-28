@@ -89,7 +89,7 @@ def run(
 
     if publish and not yes:
         confirmed = typer.confirm(
-            f"You specified --publish. This will push a new branch to the remote repository and open a Pull Request. Continue?",
+            "You specified --publish. This will push a new branch to the remote repository and open a Pull Request. Continue?",
             default=False,
         )
         if not confirmed:
@@ -213,7 +213,7 @@ def run(
                 border_style="green",
             )
         )
-        raise typer.Exit(code=0)
+        raise typer.Exit(code=0) from None
     except StageBPublishError as e:
         console.print(f"[bold red]✖ Upgrade failed:[/bold red] {e}\n")
         if e.gate_summary and e.gate_summary.results:
@@ -230,7 +230,7 @@ def run(
                 "\n[yellow]💡 Tip: In a live run (without --dry-run), all required gates must pass in the sandbox before a branch/PR can be created.[/yellow]\n"
                 "[dim]To inspect proposed package changes without enforcing gates, run with '--dry-run'.[/dim]"
             )
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
     except Exception as e:
         console.print(f"[bold red]✖ Upgrade failed:[/bold red] {e}")
         raise typer.Exit(code=1) from e

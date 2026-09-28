@@ -6,6 +6,7 @@ Docs: https://google.github.io/osv.dev/post-v1-query/
 
 import re
 from typing import Any
+
 import httpx
 
 from amstralift.governance.vulnerabilities import VulnerabilitySeverity

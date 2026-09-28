@@ -9,7 +9,6 @@ Deadlines and policies are organization-configurable, not hardcoded.
 from datetime import date, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 import yaml
