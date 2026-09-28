@@ -283,7 +283,84 @@ class OSVClient:
             current_version=current_version,
             severity=severity,
             fixed_version=fixed_ver,
+            all_fixed_versions=fixed_versions,
             summary=summary,
             details=raw_vuln.get("details", ""),
             cvss_score=cvss,
+        )
+
+    def scan_discovered_dependencies(
+        self,
+        dependencies: list[Any],  # list[DiscoveredDependency]
+        ecosystem: str,
+        repo_path: str = "",
+        governance_manager: Any = None,
+    ) -> AuditReport:
+        """Scan a list of DiscoveredDependency objects, preserving direct/transitive relationships."""
+        osv_eco = self.map_ecosystem(ecosystem)
+        findings: list[VulnerabilityFinding] = []
+
+        if not dependencies:
+            return AuditReport(
+                repo_path=repo_path,
+                ecosystem=ecosystem,
+                scanned_packages_count=0,
+                findings=[],
+            )
+
+        # Batch query in chunks of 100
+        chunk_size = 100
+        for i in range(0, len(dependencies), chunk_size):
+            chunk = dependencies[i : i + chunk_size]
+            queries = [
+                {
+                    "package": {"name": dep.package_name, "ecosystem": osv_eco},
+                    "version": dep.version.lstrip("^~>=<v").strip(),
+                }
+                for dep in chunk
+                if dep.version and dep.version != "*"
+            ]
+
+            if not queries:
+                continue
+
+            try:
+                with httpx.Client(timeout=self.timeout_seconds * 2) as client:
+                    res = client.post(OSV_BATCH_URL, json={"queries": queries})
+                    if res.status_code == 200:
+                        batch_res = res.json().get("results", [])
+                        for idx, item in enumerate(batch_res):
+                            vulns = item.get("vulns", [])
+                            dep = chunk[idx]
+                            for v in vulns:
+                                finding = self._build_finding(v, dep.package_name, dep.version, osv_eco, client=client)
+                                if finding:
+                                    finding.is_direct = dep.is_direct
+                                    finding.introduced_by = dep.introduced_by
+                                    if governance_manager:
+                                        cov = governance_manager.check_coverage(
+                                            finding.cve_id, finding.package_name, finding.current_version
+                                        )
+                                        if cov:
+                                            finding.is_exempted = True
+                                            finding.exemption_id = cov.exception_id
+                                    findings.append(finding)
+            except Exception:
+                for dep in chunk:
+                    sub_findings = self.query_package(dep.package_name, dep.version, ecosystem)
+                    for sf in sub_findings:
+                        sf.is_direct = dep.is_direct
+                        sf.introduced_by = dep.introduced_by
+                        if governance_manager:
+                            cov = governance_manager.check_coverage(sf.cve_id, sf.package_name, sf.current_version)
+                            if cov:
+                                sf.is_exempted = True
+                                sf.exemption_id = cov.exception_id
+                    findings.extend(sub_findings)
+
+        return AuditReport(
+            repo_path=repo_path,
+            ecosystem=ecosystem,
+            scanned_packages_count=len(dependencies),
+            findings=findings,
         )

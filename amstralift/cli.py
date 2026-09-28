@@ -263,161 +263,67 @@ def init_ci(
 def audit(
     repo: Annotated[Path, typer.Option("--repo", "-r", help="Target repository directory to audit.")] = Path("."),
     ecosystem: Annotated[str | None, typer.Option("--ecosystem", "-e", help="Ecosystem override: 'angular', 'react', 'dotnet', 'python'.")] = None,
+    mode: Annotated[str, typer.Option("--mode", "-m", help="Remediation mode: 'audit' (scan only), 'preview' (plan only), or 'apply' (sandbox remediation).")] = "audit",
+    fix: Annotated[bool, typer.Option("--fix", help="Alias for --mode apply.")] = False,
+    policy: Annotated[Path | None, typer.Option("--policy", "-p", help="Path to organizational security policy YAML.")] = None,
     branch: Annotated[str | None, typer.Option("--branch", "-b", help="Target git branch to branch from.")] = None,
-    fix: Annotated[bool, typer.Option("--fix", help="Automatically apply minimal surgical security patches.")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Simulate fixes without modifying the repository.")] = False,
     publish: Annotated[bool, typer.Option("--publish", help="Publish pull request to remote Git provider.")] = False,
     token: Annotated[str | None, typer.Option("--token", "-t", help="Git provider authentication token.")] = None,
 ):
-    """Scan dependencies for security vulnerabilities (CVEs) via OSV.dev and apply surgical patches."""
+    """Scan dependencies for security vulnerabilities (CVEs) and safely remediate them across Angular, React, .NET, and Python."""
     if not repo.exists() or not repo.is_dir():
         console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {repo.resolve()}")
         raise typer.Exit(code=1)
 
-    from amstralift.governance.vulnerabilities import VulnerabilitySeverity
-    from amstralift.security.osv_client import OSVClient
-    from amstralift.security.patch_planner import VulnerabilityPatchPlanner
-
-    orchestrator = UpgradeOrchestrator()
-    try:
-        eco_name = ecosystem or orchestrator.auto_detect_ecosystem(repo)
-        adapter = orchestrator.get_adapter(eco_name)
-    except Exception as e:
-        console.print(f"[bold red]✖ Error detecting ecosystem:[/bold red] {e}")
+    effective_mode = "apply" if fix else mode.lower().strip()
+    if effective_mode not in ("audit", "preview", "apply"):
+        console.print(f"[bold red]✖ Error:[/bold red] Invalid mode '{mode}'. Supported modes: audit, preview, apply.")
         raise typer.Exit(code=1)
 
-    deps = adapter.get_declared_dependencies(repo)
-    if not deps:
-        console.print(f"[yellow]No declared dependencies found to audit in {repo.resolve()}[/yellow]")
-        raise typer.Exit(code=0)
+    from amstralift.security.orchestrator import SecurityOrchestrator
+    from amstralift.security.ui import SecurityUI
 
-    console.print(
-        Panel.fit(
-            f"[bold blue]AMstraLift Security Auditor[/bold blue] - Scanning [cyan]{repo.resolve()}[/cyan] ({eco_name})\n"
-            f"[dim]Dependencies declared: {len(deps)} | Fix Mode: {fix} | Dry-run: {dry_run}[/dim]",
-            border_style="blue",
-        )
-    )
+    orchestrator = SecurityOrchestrator(policy_path=policy)
 
-    scanner = OSVClient()
-    with console.status(f"[bold cyan]Querying Google OSV.dev vulnerability database across {len(deps)} packages..."):
-        report = scanner.scan_dependencies(deps, ecosystem=eco_name, repo_path=str(repo.resolve()))
-
-    if not report.findings:
-        console.print(
-            Panel.fit(
-                f"[bold green]✔ Zero Vulnerabilities Found![/bold green]\n\n"
-                f"[dim]All {report.scanned_packages_count} scanned dependencies are clean according to OSV database.\n"
-                f"No known security advisories affecting this repository.[/dim]",
-                title="Security Audit Passed",
-                border_style="green",
-            )
-        )
-        raise typer.Exit(code=0)
-
-    # Render Vulnerabilities Table
-    table = Table(
-        title=f"Security Vulnerabilities Detected ({len(report.findings)} advisories across {report.vulnerable_packages_count} packages)",
-        show_header=True,
-        header_style="bold red",
-    )
-    table.add_column("Advisory / CVE", style="bold")
-    table.add_column("Package")
-    table.add_column("Installed")
-    table.add_column("Severity")
-    table.add_column("Fixed Version", style="bold green")
-    table.add_column("Summary")
-
-    for f in report.findings:
-        sev_color = (
-            "bold red"
-            if f.severity == VulnerabilitySeverity.CRITICAL
-            else (
-                "red"
-                if f.severity == VulnerabilitySeverity.HIGH
-                else ("yellow" if f.severity == VulnerabilitySeverity.MEDIUM else "cyan")
-            )
-        )
-        fix_str = f.fixed_version if f.fixed_version else "[red]No patch yet[/red]"
-        summary_short = f.summary[:60] + "..." if len(f.summary) > 60 else f.summary
-        table.add_row(
-            f.cve_id,
-            f.package_name,
-            f.current_version,
-            f"[{sev_color}]{f.severity.value}[/{sev_color}]",
-            fix_str,
-            summary_short,
-        )
-
-    console.print(table)
-
-    if not fix:
-        console.print(
-            "\n[yellow]💡 Tip: Run 'amstralift audit --fix' to automatically apply minimal surgical patches, "
-            "verify compilation/tests in Stage A sandbox, and create security fix pull requests.[/yellow]\n"
-        )
-        raise typer.Exit(code=1 if report.has_critical_or_high else 0)
-
-    # Fix Mode: Plan surgical patches
-    surgical_changes = VulnerabilityPatchPlanner.plan_remediation(report)
-    if not surgical_changes:
-        console.print("[yellow]⚠ None of the detected vulnerabilities have an upstream fix available yet.[/yellow]")
-        raise typer.Exit(code=1)
-
-    console.print(
-        f"\n[bold green]Initiating surgical remediation for {len(surgical_changes)} vulnerable packages...[/bold green]\n"
-    )
-
-    effective_branch = branch
-    if not effective_branch:
-        active = get_active_branch(repo)
-        manifest_names = ("package.json", "pyproject.toml", "requirements.txt")
-        has_manifest = any(
-            run_git(["cat-file", "-e", f"{active}:{m}"], cwd=repo).returncode == 0
-            for m in manifest_names
-        )
-        if not has_manifest:
-            for candidate in ("master", "main"):
-                if candidate != active and run_git(["rev-parse", "--verify", candidate], cwd=repo).returncode == 0:
-                    if any(
-                        run_git(["cat-file", "-e", f"{candidate}:{m}"], cwd=repo).returncode == 0
-                        for m in manifest_names
-                    ):
-                        active = candidate
-                        break
-        effective_branch = active or "main"
-
-    try:
-        with console.status("[bold green]Executing Stage A sandbox verification & Stage B publisher..."):
-            signed_bundle, pr_proposal = orchestrator.run_upgrade(
+    with console.status(f"[bold cyan]Scanning repository and resolving dependency graph ({effective_mode} mode)..."):
+        try:
+            result = orchestrator.run_remediation(
                 repo_path=repo,
-                ecosystem=eco_name,
-                target_branch=effective_branch,
+                ecosystem=ecosystem,
+                mode=effective_mode,
+                target_branch=branch,
                 dry_run=dry_run,
                 publish=publish,
                 git_token=token,
-                explicit_changes=surgical_changes,
             )
+        except Exception as e:
+            console.print(f"[bold red]✖ Security audit failed:[/bold red] {e}")
+            raise typer.Exit(code=1) from e
 
-        console.print("[bold green]✔ Security remediation completed successfully![/bold green]\n")
-        if not dry_run:
-            console.print(
-                f"[bold green]✔ Committed surgical security patch to branch:[/bold green] [cyan]{pr_proposal.branch_name}[/cyan]\n"
-                f"[dim]Run 'git checkout {pr_proposal.branch_name}' to inspect the remediated dependencies.[/dim]\n"
-            )
+    # 1. Always render the Vulnerability Dashboard
+    SecurityUI.render_dashboard(result.report, console)
 
-        gate_table = Table(title="Build & Test Verification Gates", show_header=True, header_style="bold green")
-        gate_table.add_column("Gate")
-        gate_table.add_column("Command")
-        gate_table.add_column("Status")
-        gate_table.add_column("Duration")
-        for g in signed_bundle.bundle.gate_summary.results:
-            gate_table.add_row(g.name, g.command, g.status.value, f"{g.duration_seconds:.2f}s")
-        console.print(gate_table)
+    # 2. Render Preview Plan if preview or apply mode
+    if effective_mode in ("preview", "apply") and result.plan:
+        SecurityUI.render_preview(result.plan, console)
 
-    except Exception as e:
-        console.print(f"[bold red]✖ Security remediation failed verification:[/bold red] {e}")
-        raise typer.Exit(code=1) from e
+    # 3. Render Execution & Verification Results if apply mode
+    if effective_mode == "apply":
+        SecurityUI.render_result(result, console)
+        if not result.remediation_successful:
+            raise typer.Exit(code=1)
+        raise typer.Exit(code=0)
+
+    # Mode advice for audit mode
+    if effective_mode == "audit" and result.report.findings:
+        console.print(
+            "\n[yellow]💡 Tip: Run 'amstralift audit --mode preview' to preview compatible upgrade plans, "
+            "or 'amstralift audit --mode apply' (or --fix) to execute sandbox verification gates and create fix branches.[/yellow]\n"
+        )
+        raise typer.Exit(code=1 if result.report.has_critical_or_high else 0)
+
+    raise typer.Exit(code=0)
 
 
 @app.command()
