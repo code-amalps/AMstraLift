@@ -6,6 +6,7 @@ Enforces Angular LTS governance policy when configured.
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -283,6 +284,19 @@ class AngularAdapter(BaseAdapter):
             ("lint", scripts.get("lint"), False),
         ]
 
+        # Remove any stale ngcc lock files before running gates
+        stale_lock = repo_path / "node_modules" / "@angular" / "compiler-cli" / "ngcc" / "__ngcc_lock_file__"
+        if stale_lock.exists():
+            try:
+                stale_lock.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        gate_env = os.environ.copy()
+        existing_opts = gate_env.get("NODE_OPTIONS", "")
+        if "--openssl-legacy-provider" not in existing_opts:
+            gate_env["NODE_OPTIONS"] = (existing_opts + " --openssl-legacy-provider").strip()
+
         for gate_name, script_cmd, is_required in gates:
             if not script_cmd:
                 status = GateStatus.REQUIRED_SKIPPED if is_required else GateStatus.OPTIONAL_PASSED
@@ -327,6 +341,7 @@ class AngularAdapter(BaseAdapter):
                     encoding="utf-8",
                     errors="replace",
                     timeout=300,
+                    env=gate_env,
                 )
                 duration = time.time() - start_t
                 stdout = proc.stdout or ""
