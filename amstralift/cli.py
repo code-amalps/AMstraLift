@@ -31,6 +31,9 @@ def run(
     output_bundle: Annotated[
         Path | None, typer.Option("--output-bundle", help="Save signed bundle JSON to disk.")
     ] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Skip interactive confirmation before remote push/PR.")
+    ] = False,
 ):
     """Run full two-stage upgrade workflow on a target repository."""
     repo_str = str(repo)
@@ -53,6 +56,15 @@ def run(
             f"[dim]Please ensure the directory exists and contains your project files.[/dim]"
         )
         raise typer.Exit(code=1)
+
+    if publish and not yes:
+        confirmed = typer.confirm(
+            f"You specified --publish. This will push a new branch to the remote repository and open a Pull Request. Continue?",
+            default=False,
+        )
+        if not confirmed:
+            console.print("[yellow]Remote publishing aborted by user. Exited safely without modifying remote.[/yellow]")
+            raise typer.Exit(code=0)
 
     eco_str = ecosystem or "auto-detect"
     console.print(

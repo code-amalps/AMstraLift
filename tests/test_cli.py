@@ -64,3 +64,12 @@ def test_cli_rejects_nonexistent_directory(tmp_path: Path):
     assert result.exit_code != 0
     assert "Target directory does not exist" in result.stdout
 
+
+def test_cli_publish_confirmation_declined(tmp_path: Path):
+    repo_path = tmp_path / "test-repo"
+    repo_path.mkdir()
+    result = runner.invoke(app, ["run", "--repo", str(repo_path), "--publish"], input="n\n")
+    assert result.exit_code == 0
+    assert "Remote publishing aborted by user" in result.stdout
+
+
