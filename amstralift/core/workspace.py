@@ -97,9 +97,18 @@ def prepare_stage_a_workspace(
         shutil.rmtree(target_workspace_path, ignore_errors=True)
     target_workspace_path.mkdir(parents=True, exist_ok=True)
 
-    # Clone locally
+    # Clone locally with core.autocrlf=false
     res = run_git(
-        ["clone", "--depth", "1", str(source_repo_path), str(target_workspace_path)], cwd=source_repo_path.parent
+        [
+            "-c",
+            "core.autocrlf=false",
+            "clone",
+            "--depth",
+            "1",
+            str(source_repo_path),
+            str(target_workspace_path),
+        ],
+        cwd=source_repo_path.parent,
     )
     if res.returncode != 0:
         # Fallback to copy if clone fails
@@ -109,6 +118,11 @@ def prepare_stage_a_workspace(
             run_git(["config", "core.autocrlf", "false"], cwd=target_workspace_path)
             run_git(["add", "."], cwd=target_workspace_path)
             run_git(["commit", "-m", "Initial commit"], cwd=target_workspace_path)
+
+    # Ensure the sandbox is pristine: reset to HEAD and remove any untracked/dirty artifacts from parent
+    run_git(["config", "core.autocrlf", "false"], cwd=target_workspace_path)
+    run_git(["reset", "--hard", "HEAD"], cwd=target_workspace_path)
+    run_git(["clean", "-fdx"], cwd=target_workspace_path)
 
     base_sha = get_head_commit(target_workspace_path)
     scrub_credentials(target_workspace_path)
