@@ -33,6 +33,27 @@ def run(
     ] = None,
 ):
     """Run full two-stage upgrade workflow on a target repository."""
+    repo_str = str(repo)
+    if (
+        repo_str.startswith(("http://", "https://", "http:\\", "https:\\", "git@", "ssh://"))
+        or "://" in repo_str
+        or "github.com" in repo_str
+        or "gitlab.com" in repo_str
+    ):
+        console.print(
+            f"[bold red]✖ Invalid repository path:[/bold red] '{repo_str}' is a remote Git URL.\n"
+            f"[yellow]AMstraLift operates on a local cloned repository so it can execute builds and tests in Stage A.[/yellow]\n"
+            f"[dim]Tip: Clone the repository first with 'git clone <url>' and pass the local folder path (e.g. --repo .)[/dim]"
+        )
+        raise typer.Exit(code=1)
+
+    if not repo.exists() or not repo.is_dir():
+        console.print(
+            f"[bold red]✖ Target directory does not exist:[/bold red] '{repo.resolve()}'\n"
+            f"[dim]Please ensure the directory exists and contains your project files.[/dim]"
+        )
+        raise typer.Exit(code=1)
+
     eco_str = ecosystem or "auto-detect"
     console.print(
         Panel.fit(

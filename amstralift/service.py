@@ -96,7 +96,7 @@ class UpgradeOrchestrator:
             if not effective_remote_url:
                 res = run_git(["remote", "get-url", "origin"], cwd=repo_path)
                 if res.returncode == 0:
-                    effective_remote_url = res.stdout.strip()
+                    effective_remote_url = (res.stdout or "").strip()
 
             if effective_remote_url and not effective_repo_id:
                 try:

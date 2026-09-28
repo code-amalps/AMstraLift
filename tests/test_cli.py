@@ -49,3 +49,18 @@ def test_cli_run_dry_run(tmp_path: Path):
     assert "Upgrade workflow completed successfully" in result.stdout
     assert "Pull Request Proposal (Stage B)" in result.stdout
     assert bundle_output.exists()
+
+
+def test_cli_rejects_remote_url():
+    result = runner.invoke(app, ["run", "--repo", "https://github.com/foo/bar", "--dry-run"])
+    assert result.exit_code != 0
+    assert "Invalid repository path" in result.stdout
+    assert "is a remote Git URL" in result.stdout
+
+
+def test_cli_rejects_nonexistent_directory(tmp_path: Path):
+    nonexistent = tmp_path / "does_not_exist"
+    result = runner.invoke(app, ["run", "--repo", str(nonexistent), "--dry-run"])
+    assert result.exit_code != 0
+    assert "Target directory does not exist" in result.stdout
+

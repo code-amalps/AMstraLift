@@ -222,7 +222,7 @@ class GitHubProvider(BaseGitProvider):
             cmd_prefix = ["-c", f"http.extraheader=AUTHORIZATION: basic {auth_b64}"]
 
         res = run_git([*cmd_prefix, *cmd, remote_url, f"refs/heads/{branch_name}"], cwd=repo_path)
-        if res.returncode == 0 and res.stdout.strip():
+        if res.returncode == 0 and (res.stdout or "").strip():
             # Output format: "<SHA>\trefs/heads/<branch>"
             return res.stdout.strip().split()[0]
         return None

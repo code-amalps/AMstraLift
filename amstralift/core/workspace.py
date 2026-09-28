@@ -42,9 +42,15 @@ def run_git(
         cwd=cwd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=clean_env,
         input=input_data,
     )
+    if result.stdout is None:
+        result.stdout = ""
+    if result.stderr is None:
+        result.stderr = ""
     return result
 
 
@@ -53,7 +59,7 @@ def get_head_commit(repo_path: Path) -> str:
     res = run_git(["rev-parse", "HEAD"], cwd=repo_path)
     if res.returncode != 0:
         raise GitError(f"Failed to get HEAD commit in {repo_path}: {res.stderr}")
-    return res.stdout.strip()
+    return (res.stdout or "").strip()
 
 
 def scrub_credentials(repo_path: Path) -> None:
@@ -123,7 +129,7 @@ def generate_patch(repo_path: Path, base_commit: str) -> str:
     res = run_git(["diff", "--full-index", "--binary", base_commit], cwd=repo_path)
     if res.returncode != 0:
         raise GitError(f"Failed to generate diff against {base_commit}: {res.stderr}")
-    return res.stdout
+    return res.stdout or ""
 
 
 def verify_rediff_integrity(
@@ -146,7 +152,7 @@ def verify_rediff_integrity(
 
     # 2. Check that working tree is clean
     status_res = run_git(["status", "--porcelain"], cwd=repo_path)
-    if status_res.stdout.strip():
+    if (status_res.stdout or "").strip():
         raise GitError(f"Target repository has uncommitted changes: {status_res.stdout}")
 
     # 3. Check patch apply dry-run with --binary and whitespace ignoring
@@ -164,7 +170,7 @@ def verify_rediff_integrity(
 def is_working_tree_clean(repo_path: Path) -> bool:
     """Check if the working tree has no uncommitted or untracked changes."""
     res = run_git(["status", "--porcelain"], cwd=repo_path)
-    return res.returncode == 0 and not res.stdout.strip()
+    return res.returncode == 0 and not (res.stdout or "").strip()
 
 
 def extract_patch_files(patch: str) -> list[str]:

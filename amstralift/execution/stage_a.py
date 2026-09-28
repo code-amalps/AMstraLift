@@ -65,7 +65,7 @@ def run_stage_a(
 
     # 4. Generate unified git patch
     patch = generate_patch(workspace_path, base_commit_sha)
-    if not patch.strip():
+    if not (patch and patch.strip()):
         raise StageAExecutionError("Upgrade resulted in an empty patch.")
 
     patch_sha256 = compute_sha256(patch)

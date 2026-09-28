@@ -237,9 +237,13 @@ class AngularAdapter(BaseAdapter):
                     cwd=repo_path,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=300,
                 )
                 duration = time.time() - start_t
+                stdout = proc.stdout or ""
+                stderr = proc.stderr or ""
                 if proc.returncode == 0:
                     status = GateStatus.REQUIRED_PASSED if is_required else GateStatus.OPTIONAL_PASSED
                 else:
@@ -251,8 +255,8 @@ class AngularAdapter(BaseAdapter):
                         command=cmd,
                         status=status,
                         exit_code=proc.returncode,
-                        stdout=proc.stdout,
-                        stderr=proc.stderr,
+                        stdout=stdout,
+                        stderr=stderr,
                         duration_seconds=duration,
                     )
                 )
