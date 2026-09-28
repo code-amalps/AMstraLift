@@ -283,3 +283,31 @@ class PythonAdapter(BaseAdapter):
                 )
 
         return GateSummary(results=results)
+
+    def get_declared_dependencies(self, repo_path: Path) -> dict[str, str]:
+        deps: dict[str, str] = {}
+        pyproject_file = repo_path / "pyproject.toml"
+        if pyproject_file.exists():
+            try:
+                text = pyproject_file.read_text(encoding="utf-8")
+                matches = re.findall(r'["\']([a-zA-Z0-9_\-]+)\s*([~>=<][=~><0-9\.\*]+)?["\']', text)
+                for pkg, ver_spec in matches:
+                    if pkg.lower() not in ("python", "project", "tool", "dependencies"):
+                        deps[pkg] = ver_spec.lstrip("~>=<").strip() if ver_spec else "1.0.0"
+            except Exception:
+                pass
+        req_file = repo_path / "requirements.txt"
+        if req_file.exists():
+            try:
+                for line in req_file.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        match = re.match(r"^([a-zA-Z0-9_\-]+)\s*([~>=<][=~><0-9\.\*]+)?", line)
+                        if match:
+                            pkg = match.group(1)
+                            ver = match.group(2) or "1.0.0"
+                            deps[pkg] = ver.lstrip("~>=<").strip()
+            except Exception:
+                pass
+        return deps
+

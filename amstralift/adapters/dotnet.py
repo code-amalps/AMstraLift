@@ -262,3 +262,18 @@ class DotNetAdapter(BaseAdapter):
                 )
 
         return GateSummary(results=results)
+
+    def get_declared_dependencies(self, repo_path: Path) -> dict[str, str]:
+        deps: dict[str, str] = {}
+        for csproj in repo_path.glob("**/*.csproj"):
+            try:
+                tree = ET.parse(csproj)
+                for pr in tree.getroot().findall(".//PackageReference"):
+                    pkg = pr.get("Include") or pr.get("Update")
+                    ver = pr.get("Version")
+                    if pkg and ver:
+                        deps[pkg] = ver
+            except Exception:
+                continue
+        return deps
+

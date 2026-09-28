@@ -54,3 +54,8 @@ class BaseAdapter(ABC):
     def run_build_and_tests(self, repo_path: Path) -> GateSummary:
         """Execute build and test gates declared in the repository."""
         pass
+
+    def get_declared_dependencies(self, repo_path: Path) -> dict[str, str]:
+        """Return declared {package_name: version} for security auditing."""
+        return {}
+

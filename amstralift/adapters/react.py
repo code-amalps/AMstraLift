@@ -283,3 +283,14 @@ class ReactAdapter(BaseAdapter):
                 )
 
         return GateSummary(results=results)
+
+    def get_declared_dependencies(self, repo_path: Path) -> dict[str, str]:
+        pkg_file = repo_path / "package.json"
+        if not pkg_file.exists():
+            return {}
+        try:
+            data = json.loads(pkg_file.read_text(encoding="utf-8"))
+            return {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+        except Exception:
+            return {}
+

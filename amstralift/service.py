@@ -77,6 +77,7 @@ class UpgradeOrchestrator:
         repo_id: str | None = None,
         remote_url: str | None = None,
         allow_failed_gates: bool = False,
+        explicit_changes: list[DependencyChange] | None = None,
     ) -> tuple[SignedAdvisoryBundle, PullRequestProposal]:
         """Execute complete upgrade workflow for a repository."""
         repo_path = repo_path.resolve()
@@ -127,6 +128,7 @@ class UpgradeOrchestrator:
                 adapter=adapter,
                 repo_url=str(repo_path),
                 target_branch=target_branch,
+                explicit_changes=explicit_changes,
             )
 
             # 3. Trusted Host: Sign the bundle with HMAC-SHA256

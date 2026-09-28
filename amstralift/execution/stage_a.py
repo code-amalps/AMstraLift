@@ -52,14 +52,15 @@ def run_stage_a(
     repo_url: str,
     target_branch: str = "main",
     run_id: str | None = None,
+    explicit_changes: list[DependencyChange] | None = None,
 ) -> UnsignedAdvisoryBundle:
     """Execute Stage A inside the sanitized workspace."""
     run_id = run_id or f"run_{uuid4().hex[:12]}"
     base_commit_sha = get_head_commit(workspace_path)
     lockfiles_before = _capture_lockfile_hashes(workspace_path)
 
-    # 1. Discover upgrade candidates
-    candidates = adapter.discover_candidates(workspace_path)
+    # 1. Discover upgrade candidates or use explicit changes
+    candidates = explicit_changes if explicit_changes is not None else adapter.discover_candidates(workspace_path)
     if not candidates:
         raise NoUpgradesAvailableError("Repository is already up to date. No upgradable dependencies discovered.")
 
