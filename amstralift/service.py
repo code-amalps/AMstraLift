@@ -47,7 +47,7 @@ class UpgradeOrchestrator:
         self.adapters: dict[str, BaseAdapter] = {
             "angular": AngularAdapter(lts_config=angular_lts_config, incremental=incremental),
             "python": PythonAdapter(runtime_config=python_runtime_config),
-            "dotnet": DotNetAdapter(),
+            "dotnet": DotNetAdapter(incremental=incremental),
             "react": ReactAdapter(),
         }
 

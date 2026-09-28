@@ -120,3 +120,35 @@ def test_dotnet_end_to_end_workflow(tmp_path: Path):
     assert current_head != base_sha
     updated_csproj = (repo_path / "Api.csproj").read_text(encoding="utf-8")
     assert 'Version="8.0.8"' in updated_csproj
+
+
+def test_dotnet_lifecycle_governance():
+    from amstralift.governance.dotnet_lifecycle import DotNetLifecycleGovernance
+
+    decision = DotNetLifecycleGovernance.evaluate_tfm("net9.0", prefer_lts=True, incremental=True)
+    assert decision is not None
+    assert decision.should_upgrade is True
+    assert decision.current_major == 9
+    assert decision.current_release_type == "sts"
+    assert decision.target_tfm == "net10.0"
+    assert decision.target_major == 10
+    assert decision.target_release_type == "lts"
+
+
+def test_dotnet_target_framework_upgrade(tmp_path: Path):
+    adapter = DotNetAdapter()
+    csproj = tmp_path / "Service.csproj"
+    csproj.write_text(
+        '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>',
+        encoding="utf-8",
+    )
+
+    candidates = adapter.discover_candidates(tmp_path)
+    tfm_cand = [c for c in candidates if c.package_name == "Microsoft.NET.TargetFramework"]
+    assert len(tfm_cand) == 1
+    assert tfm_cand[0].to_version == "net10.0"
+
+    adapter.apply_upgrade(tmp_path, candidates)
+    updated = csproj.read_text(encoding="utf-8")
+    assert "<TargetFramework>net10.0</TargetFramework>" in updated
+

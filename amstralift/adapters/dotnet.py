@@ -21,6 +21,7 @@ from amstralift.core.models import (
     GateStatus,
     GateSummary,
 )
+from amstralift.governance.dotnet_lifecycle import DotNetLifecycleGovernance
 
 NUGET_FLATCONTAINER_BASE = "https://api.nuget.org/v3-flatcontainer"
 
@@ -57,11 +58,15 @@ class DotNetAdapter(BaseAdapter):
         timeout_seconds: float = 10.0,
         test_command: str | None = None,
         build_command: str | None = None,
+        incremental: bool = True,
+        prefer_lts: bool = True,
     ):
         self.nuget_base = nuget_base.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.test_command = test_command
         self.build_command = build_command
+        self.incremental = incremental
+        self.prefer_lts = prefer_lts
 
     @property
     def name(self) -> str:
@@ -96,10 +101,41 @@ class DotNetAdapter(BaseAdapter):
         return None
 
     def discover_candidates(self, repo_path: Path) -> list[DependencyChange]:
-        """Scan *.csproj files for PackageReference entries and find updates."""
+        """Scan *.csproj files for TargetFramework and PackageReference entries."""
         candidates: list[DependencyChange] = []
         csproj_files = list(repo_path.glob("**/*.csproj"))
 
+        # 1. Discover TargetFramework upgrades
+        discovered_tfms: set[str] = set()
+        for csproj in csproj_files:
+            try:
+                tree = ET.parse(csproj)
+                root = tree.getroot()
+                tfm_node = root.find(".//TargetFramework")
+                if tfm_node is not None and tfm_node.text:
+                    tfm = tfm_node.text.strip()
+                    if tfm not in discovered_tfms:
+                        discovered_tfms.add(tfm)
+                        decision = DotNetLifecycleGovernance.evaluate_tfm(
+                            tfm,
+                            prefer_lts=self.prefer_lts,
+                            incremental=self.incremental,
+                        )
+                        if decision and decision.should_upgrade:
+                            candidates.append(
+                                DependencyChange(
+                                    package_name="Microsoft.NET.TargetFramework",
+                                    from_version=decision.current_tfm,
+                                    to_version=decision.target_tfm,
+                                    change_type="direct",
+                                    tier=DependencyTier.TIER_2_VERIFY_BEHAVIOR,
+                                    rationale=decision.reason,
+                                )
+                            )
+            except Exception:
+                continue
+
+        # 2. Discover PackageReference upgrades
         for csproj in csproj_files:
             try:
                 tree = ET.parse(csproj)
@@ -127,22 +163,27 @@ class DotNetAdapter(BaseAdapter):
         return candidates
 
     def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange]) -> None:
-        """Apply package updates to *.csproj files and packages.lock.json."""
+        """Apply package and TargetFramework updates to *.csproj files and packages.lock.json."""
         csproj_files = list(repo_path.glob("**/*.csproj"))
         for csproj in csproj_files:
             content = csproj.read_text(encoding="utf-8")
             for c in changes:
-                pattern = rf'(<PackageReference\s+[^>]*Include="{re.escape(c.package_name)}"[^>]*Version=)"[^"]*"'
-                replacement = rf'\1"{c.to_version}"'
-                content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
+                if c.package_name == "Microsoft.NET.TargetFramework":
+                    pattern = rf'(<TargetFramework>\s*){re.escape(c.from_version)}(\s*</TargetFramework>)'
+                    content = re.sub(pattern, rf'\g<1>{c.to_version}\g<2>', content, flags=re.IGNORECASE)
+                else:
+                    pattern = rf'(<PackageReference\s+[^>]*Include="{re.escape(c.package_name)}"[^>]*Version=)"[^"]*"'
+                    replacement = rf'\1"{c.to_version}"'
+                    content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
             csproj.write_text(content, encoding="utf-8")
 
         for lock_file in repo_path.glob("**/packages.lock.json"):
             lock_content = lock_file.read_text(encoding="utf-8")
             for c in changes:
-                pattern = rf'("{re.escape(c.package_name)}":\s*\{{[^}}]*"resolved":\s*)"[^"]*"'
-                replacement = rf'\1"{c.to_version}"'
-                lock_content = re.sub(pattern, replacement, lock_content, flags=re.IGNORECASE)
+                if c.package_name != "Microsoft.NET.TargetFramework":
+                    pattern = rf'("{re.escape(c.package_name)}":\s*\{{[^}}]*"resolved":\s*)"[^"]*"'
+                    replacement = rf'\1"{c.to_version}"'
+                    lock_content = re.sub(pattern, replacement, lock_content, flags=re.IGNORECASE)
             lock_file.write_text(lock_content, encoding="utf-8")
 
     def run_build_and_tests(self, repo_path: Path) -> GateSummary:
