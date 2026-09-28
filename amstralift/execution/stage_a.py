@@ -23,6 +23,12 @@ class StageAExecutionError(Exception):
     pass
 
 
+class NoUpgradesAvailableError(StageAExecutionError):
+    """Raised when repository dependencies are already at their latest versions."""
+
+    pass
+
+
 def _capture_lockfile_hashes(repo_path: Path) -> dict[str, str]:
     """Capture SHA-256 hashes of all lockfiles in the repository."""
     lockfiles = (
@@ -55,7 +61,7 @@ def run_stage_a(
     # 1. Discover upgrade candidates
     candidates = adapter.discover_candidates(workspace_path)
     if not candidates:
-        raise StageAExecutionError("No upgradable dependencies discovered by adapter.")
+        raise NoUpgradesAvailableError("Repository is already up to date. No upgradable dependencies discovered.")
 
     # 2. Apply upgrades to manifests/lockfiles
     adapter.apply_upgrade(workspace_path, candidates)

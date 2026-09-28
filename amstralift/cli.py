@@ -10,6 +10,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from amstralift.core.workspace import get_active_branch, run_git
+from amstralift.execution.stage_a import NoUpgradesAvailableError
 from amstralift.execution.stage_b import StageBPublishError
 from amstralift.service import UpgradeOrchestrator
 
@@ -201,6 +202,18 @@ def run(
             output_bundle.write_text(signed_bundle.model_dump_json(indent=2), encoding="utf-8")
             console.print(f"[dim]Signed bundle saved to: {output_bundle.resolve()}[/dim]")
 
+    except NoUpgradesAvailableError:
+        console.print(
+            Panel.fit(
+                "[bold green]✔ All dependencies are already up to date![/bold green]\n\n"
+                "[dim]No new upgradable versions were discovered in the package registry.\n"
+                "Your repository is running the latest available releases.\n"
+                "AMstraLift will check for updates again once a new version is published.[/dim]",
+                title="Ecosystem Status",
+                border_style="green",
+            )
+        )
+        raise typer.Exit(code=0)
     except StageBPublishError as e:
         console.print(f"[bold red]✖ Upgrade failed:[/bold red] {e}\n")
         if e.gate_summary and e.gate_summary.results:

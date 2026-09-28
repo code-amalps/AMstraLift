@@ -129,6 +129,7 @@ class AngularAdapter(BaseAdapter):
                         matching = [v for v in versions if v.startswith(f"{target_major}.")]
                         if matching:
                             return matching[-1]
+                        return None
                     return data.get("dist-tags", {}).get("latest")
         except Exception:
             return None

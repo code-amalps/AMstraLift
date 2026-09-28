@@ -73,3 +73,21 @@ def test_cli_publish_confirmation_declined(tmp_path: Path):
     assert "Remote publishing aborted by user" in result.stdout
 
 
+def test_cli_handles_already_up_to_date(tmp_path: Path, monkeypatch):
+    """Verify that when no upgrades are discovered, CLI exits with 0 and shows friendly message."""
+    from amstralift.execution.stage_a import NoUpgradesAvailableError
+    from amstralift.service import UpgradeOrchestrator
+
+    def mock_run_upgrade(*args, **kwargs):
+        raise NoUpgradesAvailableError("Repository is already up to date.")
+
+    monkeypatch.setattr(UpgradeOrchestrator, "run_upgrade", mock_run_upgrade)
+
+    repo_path = tmp_path / "up-to-date-repo"
+    repo_path.mkdir()
+    result = runner.invoke(app, ["run", "--repo", str(repo_path), "--dry-run"])
+    assert result.exit_code == 0
+    assert "All dependencies are already up to date" in result.stdout
+
+
+
