@@ -51,12 +51,17 @@ def run_stage_b(
     """Validate signed advisory bundle, handle duplicate checks, and create or open a PR."""
     bundle = signed_bundle.bundle
 
-    # 1. Require clean local working tree before any checks or modifications
+    # 1. Require clean local working tree before any modifications
     if not is_working_tree_clean(target_repo_path):
-        raise StageBPublishError(
-            f"Target repository working tree at {target_repo_path} has uncommitted or dirty changes. "
-            "Stage B requires a clean repository."
-        )
+        dirty_output = (run_git(["status", "--short"], cwd=target_repo_path).stdout or "").strip()
+        if not dry_run:
+            raise StageBPublishError(
+                f"Target repository working tree at {target_repo_path} has uncommitted or dirty changes:\n"
+                f"{dirty_output}\n"
+                "Stage B requires a clean repository to safely apply patches."
+            )
+        else:
+            logger.info("Target repository has uncommitted changes, proceeding in dry-run mode.")
 
     # 2. Cryptographic signature and TTL verification
     verify_bundle(signed_bundle, secret_key)
@@ -91,12 +96,13 @@ def run_stage_b(
         )
 
     # 7. Re-diff and clean application check
-    verify_rediff_integrity(
-        target_repo_path,
-        bundle.base_commit_sha,
-        bundle.patch,
-        bundle.patch_sha256,
-    )
+    if not dry_run:
+        verify_rediff_integrity(
+            target_repo_path,
+            bundle.base_commit_sha,
+            bundle.patch,
+            bundle.patch_sha256,
+        )
 
     # 8. Construct Deterministic, Collision-Free Branch Name and Idempotency Key
     tier = bundle.highest_tier
