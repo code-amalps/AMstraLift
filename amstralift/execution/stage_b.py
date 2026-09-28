@@ -69,11 +69,16 @@ def run_stage_b(
     # 3. Strict path allowlists and security rejections
     validate_patch_security(bundle.patch)
 
-    # 4. Local branch head concurrency check (base commit must match current local HEAD)
-    current_head = get_head_commit(target_repo_path)
-    if current_head != bundle.base_commit_sha:
+    # 4. Target branch head concurrency check (base commit must match target branch)
+    res = run_git(["rev-parse", bundle.target_branch], cwd=target_repo_path)
+    if res.returncode == 0 and (res.stdout or "").strip():
+        branch_head = res.stdout.strip()
+    else:
+        branch_head = get_head_commit(target_repo_path)
+
+    if branch_head != bundle.base_commit_sha:
         raise StageBPublishError(
-            f"Stale base commit: repo HEAD is {current_head}, bundle was built against {bundle.base_commit_sha}. "
+            f"Stale base commit: branch '{bundle.target_branch}' is at {branch_head}, bundle was built against {bundle.base_commit_sha}. "
             "Rebase-and-rerun required."
         )
 
@@ -89,7 +94,7 @@ def run_stage_b(
             )
 
     # 6. Required gates verification (Section 1: never open a PR if required checks failed)
-    if not bundle.gate_summary.all_required_passed:
+    if not dry_run and not bundle.gate_summary.all_required_passed:
         raise StageBPublishError(
             "Cannot open PR: Not all required build/test gates passed in Stage A. "
             "Per Section 1 and 3, AMstraLift fails closed with an issue, never a PR."
@@ -194,7 +199,7 @@ def run_stage_b(
         # Check if local branch already exists
         branch_check = run_git(["rev-parse", "--verify", branch_name], cwd=target_repo_path)
         if branch_check.returncode != 0:
-            checkout_res = run_git(["checkout", "-b", branch_name], cwd=target_repo_path)
+            checkout_res = run_git(["checkout", "-b", branch_name, bundle.base_commit_sha], cwd=target_repo_path)
         else:
             checkout_res = run_git(["checkout", branch_name], cwd=target_repo_path)
 

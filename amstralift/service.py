@@ -115,6 +115,7 @@ class UpgradeOrchestrator:
             prepare_stage_a_workspace(
                 source_repo_path=repo_path,
                 target_workspace_path=sandbox_dir,
+                target_branch=target_branch,
             )
 
             # 2. Stage A Execution (Untrusted sandbox: no credentials, no HMAC key)

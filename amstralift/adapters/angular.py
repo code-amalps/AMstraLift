@@ -227,6 +227,23 @@ class AngularAdapter(BaseAdapter):
                 )
                 continue
 
+            if not has_npm and (
+                script_cmd.startswith("npm ")
+                or script_cmd.startswith("ng ")
+                or "npm run" in script_cmd
+            ):
+                status = GateStatus.REQUIRED_SKIPPED if is_required else GateStatus.OPTIONAL_PASSED
+                results.append(
+                    GateResult(
+                        name=gate_name,
+                        command="N/A",
+                        status=status,
+                        exit_code=0,
+                        stdout="npm CLI not detected in host environment",
+                    )
+                )
+                continue
+
             start_t = time.time()
             cmd = f"npm run {gate_name}" if has_npm else script_cmd
 

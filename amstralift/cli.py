@@ -1,5 +1,6 @@
 """CLI entry points for AMstraLift using Typer and Rich."""
 
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -8,21 +9,32 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from amstralift.core.workspace import get_active_branch, run_git
 from amstralift.service import UpgradeOrchestrator
+
+# Ensure UTF-8 output on Windows consoles
+if sys.platform == "win32":
+    try:
+        if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 app = typer.Typer(
     name="amstralift",
     help="AMstraLift: Automated Dependency & Framework Upgrade Engine with an explicit trust boundary.",
     add_completion=False,
 )
-console = Console()
+console = Console(safe_box=True)
 
 
 @app.command()
 def run(
     repo: Annotated[Path, typer.Option("--repo", "-r", help="Path to target repository.")] = Path("."),
     ecosystem: Annotated[str | None, typer.Option("--ecosystem", "-e", help="Target ecosystem (angular, python, dotnet, react). Auto-detected if omitted.")] = None,
-    branch: Annotated[str, typer.Option("--branch", "-b", help="Target base branch name.")] = "main",
+    branch: Annotated[str | None, typer.Option("--branch", "-b", help="Target base branch name (defaults to active branch).")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Simulate without modifying git branch/commit.")] = False,
     publish: Annotated[bool, typer.Option("--publish", help="Push branch and open reviewable PR on remote Git provider.")] = False,
     token: Annotated[str | None, typer.Option("--token", envvar="GITHUB_TOKEN", help="Least-privilege Git provider access token.")] = None,
@@ -66,11 +78,32 @@ def run(
             console.print("[yellow]Remote publishing aborted by user. Exited safely without modifying remote.[/yellow]")
             raise typer.Exit(code=0)
 
+    effective_branch = branch
+    if not effective_branch:
+        active = get_active_branch(repo)
+        # Check if active branch has project manifests in Git tree
+        manifest_names = ("package.json", "pyproject.toml", "requirements.txt")
+        has_manifest = any(
+            run_git(["cat-file", "-e", f"{active}:{m}"], cwd=repo).returncode == 0
+            for m in manifest_names
+        )
+        if not has_manifest:
+            # Fallback to master or main if they contain manifests
+            for candidate in ("master", "main"):
+                if candidate != active and run_git(["rev-parse", "--verify", candidate], cwd=repo).returncode == 0:
+                    if any(
+                        run_git(["cat-file", "-e", f"{candidate}:{m}"], cwd=repo).returncode == 0
+                        for m in manifest_names
+                    ):
+                        active = candidate
+                        break
+        effective_branch = active
+
     eco_str = ecosystem or "auto-detect"
     console.print(
         Panel.fit(
             f"[bold blue]AMstraLift[/bold blue] - Initiating upgrade for [cyan]{repo.resolve()}[/cyan] ({eco_str})\n"
-            f"[dim]Publish: {publish} | Dry-run: {dry_run}[/dim]",
+            f"[dim]Branch: {effective_branch} | Publish: {publish} | Dry-run: {dry_run}[/dim]",
             border_style="blue",
         )
     )
@@ -82,7 +115,7 @@ def run(
             signed_bundle, pr_proposal = orchestrator.run_upgrade(
                 repo_path=repo,
                 ecosystem=ecosystem,
-                target_branch=branch,
+                target_branch=effective_branch,
                 dry_run=dry_run,
                 publish=publish,
                 git_token=token,

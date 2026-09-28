@@ -84,9 +84,20 @@ def scrub_credentials(repo_path: Path) -> None:
     run_git(["config", "user.email", "bot@amstralift.internal"], cwd=repo_path)
 
 
+def get_active_branch(repo_path: Path) -> str:
+    """Get the active branch of the repository."""
+    res = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path)
+    if res.returncode == 0 and (res.stdout or "").strip():
+        b = res.stdout.strip()
+        if b != "HEAD":
+            return b
+    return "main"
+
+
 def prepare_stage_a_workspace(
     source_repo_path: Path,
     target_workspace_path: Path,
+    target_branch: str = "main",
     read_only_configs: dict[str, str] | None = None,
 ) -> str:
     """Clone or copy workspace into an isolated sandbox directory and scrub credentials.
@@ -97,27 +108,32 @@ def prepare_stage_a_workspace(
         shutil.rmtree(target_workspace_path, ignore_errors=True)
     target_workspace_path.mkdir(parents=True, exist_ok=True)
 
-    # Clone locally with core.autocrlf=false
-    res = run_git(
-        [
-            "-c",
-            "core.autocrlf=false",
-            "clone",
-            "--depth",
-            "1",
-            str(source_repo_path),
-            str(target_workspace_path),
-        ],
-        cwd=source_repo_path.parent,
-    )
+    # Clone locally with core.autocrlf=false and target branch
+    clone_args = [
+        "-c",
+        "core.autocrlf=false",
+        "clone",
+        "--depth",
+        "1",
+    ]
+    if target_branch:
+        clone_args.extend(["--branch", target_branch])
+    clone_args.extend([str(source_repo_path), str(target_workspace_path)])
+
+    res = run_git(clone_args, cwd=source_repo_path.parent)
     if res.returncode != 0:
-        # Fallback to copy if clone fails
-        shutil.copytree(source_repo_path, target_workspace_path, dirs_exist_ok=True)
-        if not (target_workspace_path / ".git").exists():
-            run_git(["init"], cwd=target_workspace_path)
-            run_git(["config", "core.autocrlf", "false"], cwd=target_workspace_path)
-            run_git(["add", "."], cwd=target_workspace_path)
-            run_git(["commit", "-m", "Initial commit"], cwd=target_workspace_path)
+        # Fallback to copy if branch clone fails
+        res = run_git(
+            ["-c", "core.autocrlf=false", "clone", "--depth", "1", str(source_repo_path), str(target_workspace_path)],
+            cwd=source_repo_path.parent,
+        )
+        if res.returncode != 0:
+            shutil.copytree(source_repo_path, target_workspace_path, dirs_exist_ok=True)
+            if not (target_workspace_path / ".git").exists():
+                run_git(["init"], cwd=target_workspace_path)
+                run_git(["config", "core.autocrlf", "false"], cwd=target_workspace_path)
+                run_git(["add", "."], cwd=target_workspace_path)
+                run_git(["commit", "-m", "Initial commit"], cwd=target_workspace_path)
 
     # Ensure the sandbox is pristine: reset to HEAD and remove any untracked/dirty artifacts from parent
     run_git(["config", "core.autocrlf", "false"], cwd=target_workspace_path)
