@@ -39,11 +39,13 @@ class UpgradeOrchestrator:
         secret_key: bytes | None = None,
         angular_lts_config: AngularLTSConfig | None = None,
         python_runtime_config: PythonRuntimeConfig | None = None,
+        incremental: bool = False,
     ):
         # The secret HMAC key is held strictly by the orchestrator and Stage B
         self.secret_key = secret_key or os.urandom(32)
+        self.incremental = incremental
         self.adapters: dict[str, BaseAdapter] = {
-            "angular": AngularAdapter(lts_config=angular_lts_config),
+            "angular": AngularAdapter(lts_config=angular_lts_config, incremental=incremental),
             "python": PythonAdapter(runtime_config=python_runtime_config),
             "dotnet": DotNetAdapter(),
             "react": ReactAdapter(),
@@ -74,6 +76,7 @@ class UpgradeOrchestrator:
         git_token: str | None = None,
         repo_id: str | None = None,
         remote_url: str | None = None,
+        allow_failed_gates: bool = False,
     ) -> tuple[SignedAdvisoryBundle, PullRequestProposal]:
         """Execute complete upgrade workflow for a repository."""
         repo_path = repo_path.resolve()
@@ -144,6 +147,7 @@ class UpgradeOrchestrator:
                 remote_url=effective_remote_url,
                 git_token=effective_token,
                 publish=publish,
+                allow_failed_gates=allow_failed_gates,
             )
 
             return signed_bundle, pr_proposal

@@ -49,6 +49,7 @@ def run_stage_b(
     remote_url: str | None = None,
     git_token: str | None = None,
     publish: bool = False,
+    allow_failed_gates: bool = False,
 ) -> PullRequestProposal:
     """Validate signed advisory bundle, handle duplicate checks, and create or open a PR."""
     bundle = signed_bundle.bundle
@@ -96,7 +97,7 @@ def run_stage_b(
             )
 
     # 6. Required gates verification (Section 1: never open a PR if required checks failed)
-    if not dry_run and not bundle.gate_summary.all_required_passed:
+    if not dry_run and not allow_failed_gates and not bundle.gate_summary.all_required_passed:
         issues = []
         for r in bundle.gate_summary.results:
             if r.status == GateStatus.REQUIRED_FAILED:
@@ -145,6 +146,8 @@ def run_stage_b(
     labels = list(tier.labels)
     if bundle.migration.application_source_modified:
         labels.append("migration-manual-review-required")
+    if not bundle.gate_summary.all_required_passed:
+        labels.append("gates-failed-warning")
     labels.append("amstralift-automated")
 
     # Format PR Body

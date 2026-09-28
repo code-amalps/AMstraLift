@@ -47,6 +47,22 @@ def run(
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Skip interactive confirmation before remote push/PR.")
     ] = False,
+    incremental: Annotated[
+        bool,
+        typer.Option(
+            "--incremental/--no-incremental",
+            "-i",
+            help="Upgrade framework dependencies incrementally by one major version (e.g. Angular 12 -> 13).",
+        ),
+    ] = True,
+    allow_failed_gates: Annotated[
+        bool,
+        typer.Option(
+            "--allow-failed-gates",
+            "--skip-gates",
+            help="Allow Stage B to commit the upgrade branch locally even if sandbox verification gates fail.",
+        ),
+    ] = False,
 ):
     """Run full two-stage upgrade workflow on a target repository."""
     repo_str = str(repo)
@@ -109,7 +125,7 @@ def run(
         )
     )
 
-    orchestrator = UpgradeOrchestrator()
+    orchestrator = UpgradeOrchestrator(incremental=incremental)
 
     try:
         with console.status("[bold green]Executing Stage A sandbox & Stage B publisher..."):
@@ -122,9 +138,15 @@ def run(
                 git_token=token,
                 repo_id=repo_id,
                 remote_url=remote_url,
+                allow_failed_gates=allow_failed_gates,
             )
 
         console.print("[bold green]✔ Upgrade workflow completed successfully![/bold green]\n")
+        if not dry_run:
+            console.print(
+                f"[bold green]✔ Committed upgrade patch to branch:[/bold green] [cyan]{pr_proposal.branch_name}[/cyan]\n"
+                f"[dim]Run 'git checkout {pr_proposal.branch_name}' to inspect the modified files in your editor.[/dim]\n"
+            )
 
         # Display Changes Table
         table = Table(title="Proposed Package Changes", show_header=True, header_style="bold magenta")

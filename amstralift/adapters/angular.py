@@ -56,6 +56,30 @@ def classify_angular_tier(package_name: str) -> DependencyTier:
     return DependencyTier.TIER_1_SAFE
 
 
+ANGULAR_TS_MATRIX = {
+    12: 4,
+    13: 4,
+    14: 4,
+    15: 4,
+    16: 5,
+    17: 5,
+    18: 5,
+    19: 5,
+    20: 5,
+    21: 5,
+    22: 5,
+}
+
+
+def extract_major_version(ver_str: str) -> int | None:
+    """Extract integer major version from a version string."""
+    clean = ver_str.strip().lstrip("^~>=<")
+    match = re.match(r"^(\d+)", clean)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 class AngularAdapter(BaseAdapter):
     """Adapter for Angular repositories using npm and Angular CLI."""
 
@@ -64,10 +88,12 @@ class AngularAdapter(BaseAdapter):
         registry_url: str = NPM_REGISTRY_BASE,
         timeout_seconds: float = 10.0,
         lts_config: AngularLTSConfig | None = None,
+        incremental: bool = False,
     ):
         self.registry_url = registry_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.lts_config = lts_config
+        self.incremental = incremental
 
     @property
     def name(self) -> str:
@@ -108,7 +134,7 @@ class AngularAdapter(BaseAdapter):
         return None
 
     def discover_candidates(self, repo_path: Path) -> list[DependencyChange]:
-        """Discover upgradable Angular and related dependencies applying LTS governance."""
+        """Discover upgradable Angular and related dependencies applying LTS or incremental governance."""
         pkg_file = repo_path / "package.json"
         if not pkg_file.exists():
             return []
@@ -119,15 +145,47 @@ class AngularAdapter(BaseAdapter):
         direct_deps = data.get("dependencies", {})
         dev_deps = data.get("devDependencies", {})
 
-        # Evaluate Angular LTS policy
-        policy_decision = AngularLTSGovernance.evaluate(self.lts_config)
-        target_major = policy_decision.target_major if not policy_decision.use_latest_fallback else None
+        # Evaluate Angular LTS policy or Incremental (+1 major)
+        target_major = None
+        policy_reason = ""
+        if self.lts_config:
+            policy_decision = AngularLTSGovernance.evaluate(self.lts_config)
+            target_major = policy_decision.target_major if not policy_decision.use_latest_fallback else None
+            policy_reason = f"LTS Policy: {policy_decision.reason}"
 
+        # Detect current Angular core major from package.json
+        core_ver = direct_deps.get("@angular/core") or dev_deps.get("@angular/core") or direct_deps.get("@angular/common")
+        cur_angular_major = extract_major_version(core_ver) if core_ver else None
+
+        if target_major is None and self.incremental and cur_angular_major is not None:
+            target_major = cur_angular_major + 1
+            policy_reason = f"Incremental upgrade (+1 major): v{cur_angular_major} -> v{target_major}"
+        elif not policy_reason:
+            policy_reason = "Ecosystem Upgrade"
+
+        def get_major_constraint(pkg_name: str) -> int | None:
+            if target_major is None:
+                return None
+            if (
+                pkg_name.startswith("@angular/")
+                or pkg_name.startswith("@angular-devkit/")
+                or pkg_name.startswith("@ngrx/")
+                or pkg_name.startswith("@angular-extensions/")
+            ):
+                return target_major
+            if pkg_name == "typescript":
+                return ANGULAR_TS_MATRIX.get(target_major, 5)
+            if pkg_name == "rxjs":
+                return 7 if target_major >= 13 else 6
+            if pkg_name == "zone.js":
+                return 0
+            return None
+
+        tracked_direct_prefixes = ("@angular/", "@ngrx/", "@angular-extensions/")
         for pkg, cur_ver in direct_deps.items():
-            if pkg.startswith("@angular/") or pkg in ("rxjs", "zone.js", "tslib"):
+            if any(pkg.startswith(p) for p in tracked_direct_prefixes) or pkg in ("rxjs", "zone.js", "tslib"):
                 clean_cur = cur_ver.lstrip("^~>=<")
-                # Angular core packages follow LTS major if policy is active
-                major_constraint = target_major if pkg.startswith("@angular/") else None
+                major_constraint = get_major_constraint(pkg)
                 latest = self.fetch_latest_version(pkg, target_major=major_constraint)
 
                 if latest and latest != clean_cur:
@@ -139,14 +197,14 @@ class AngularAdapter(BaseAdapter):
                             to_version=f"^{latest}",
                             change_type="direct",
                             tier=tier,
-                            rationale=(f"Upgrade {pkg} to {latest}. LTS Policy: {policy_decision.reason}"),
+                            rationale=(f"Upgrade {pkg} to {latest}. {policy_reason}"),
                         )
                     )
 
         for pkg, cur_ver in dev_deps.items():
             if pkg.startswith("@angular-devkit/") or pkg in ("typescript", "@angular/cli"):
                 clean_cur = cur_ver.lstrip("^~>=<")
-                major_constraint = target_major if pkg.startswith("@angular") else None
+                major_constraint = get_major_constraint(pkg)
                 latest = self.fetch_latest_version(pkg, target_major=major_constraint)
 
                 if latest and latest != clean_cur:
@@ -158,7 +216,7 @@ class AngularAdapter(BaseAdapter):
                             to_version=f"^{latest}",
                             change_type="dev",
                             tier=tier,
-                            rationale=(f"Upgrade dev tool {pkg} to {latest}. LTS Policy: {policy_decision.reason}"),
+                            rationale=(f"Upgrade dev tool {pkg} to {latest}. {policy_reason}"),
                         )
                     )
 
