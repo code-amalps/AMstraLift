@@ -69,7 +69,13 @@ class DotNetAdapter(BaseAdapter):
 
     def detect(self, repo_path: Path) -> bool:
         """Detect .NET project via *.csproj, *.fsproj, *.sln, or Directory.Build.props."""
-        return any(repo_path.glob("*.csproj")) or any(repo_path.glob("*.sln")) or any(repo_path.glob("*.fsproj"))
+        return (
+            any(repo_path.glob("*.csproj"))
+            or any(repo_path.glob("*.sln"))
+            or any(repo_path.glob("*.fsproj"))
+            or any(repo_path.glob("**/*.csproj"))
+            or any(repo_path.glob("**/*.sln"))
+        )
 
     def fetch_latest_version(self, package_name: str) -> str | None:
         """Fetch latest stable version from NuGet flatcontainer API."""
@@ -144,8 +150,8 @@ class DotNetAdapter(BaseAdapter):
         results: list[GateResult] = []
         has_dotnet = shutil.which("dotnet") is not None
 
-        default_test = "dotnet test --no-restore" if has_dotnet else None
-        default_build = "dotnet build --no-restore" if has_dotnet else None
+        default_test = "dotnet test" if has_dotnet else None
+        default_build = "dotnet build" if has_dotnet else None
 
         test_cmd = self.test_command if self.test_command is not None else default_test
         build_cmd = self.build_command if self.build_command is not None else default_build
