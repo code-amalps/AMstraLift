@@ -80,6 +80,7 @@ class UpgradeOrchestrator:
         explicit_changes: list[DependencyChange] | None = None,
         test_timeout: float = 300.0,
         output_branch: str | None = None,
+        draft_on_fail: bool = False,
     ) -> tuple[SignedAdvisoryBundle, PullRequestProposal]:
         """Execute complete upgrade workflow for a repository."""
         repo_path = repo_path.resolve()
@@ -154,6 +155,7 @@ class UpgradeOrchestrator:
                 publish=publish,
                 allow_failed_gates=allow_failed_gates,
                 output_branch=output_branch,
+                draft_on_fail=draft_on_fail,
             )
 
             return signed_bundle, pr_proposal

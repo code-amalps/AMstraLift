@@ -79,6 +79,13 @@ def run(
             help="Target branch to commit the upgrade onto (defaults to staying on current amstralift/* branch, or generating an upgrade branch).",
         ),
     ] = None,
+    draft_on_fail: Annotated[
+        bool,
+        typer.Option(
+            "--draft-on-fail",
+            help="If verification gates fail, commit as a draft branch with smart diagnostics for senior review.",
+        ),
+    ] = False,
 ):
     """Run full two-stage upgrade workflow on a target repository."""
     repo_str = str(repo)
@@ -157,11 +164,23 @@ def run(
                 allow_failed_gates=allow_failed_gates,
                 test_timeout=float(test_timeout),
                 output_branch=output_branch,
+                draft_on_fail=draft_on_fail,
             )
 
         console.print("[bold green]✔ Upgrade workflow completed successfully![/bold green]\n")
         if not dry_run:
-            if pr_proposal.publish_status in ("ALREADY_COMMITTED", "ALREADY_APPLIED"):
+            if pr_proposal.publish_status in ("DRAFT_COMMITTED", "DRAFT_PUBLISHED"):
+                console.print(
+                    Panel.fit(
+                        f"[bold yellow]⚠️ Verification Interrupted — Created DRAFT branch:[/bold yellow] [cyan]{pr_proposal.branch_name}[/cyan]\n\n"
+                        f"[dim]Automated gates did not fully pass, but your migration progress was safely preserved in a draft branch.\n"
+                        f"Check out this branch to inspect the failing file or hand off to a senior engineer:[/dim]\n"
+                        f"  [bold cyan]git checkout {pr_proposal.branch_name}[/bold cyan]\n",
+                        title="Draft Migration Handoff",
+                        border_style="yellow",
+                    )
+                )
+            elif pr_proposal.publish_status in ("ALREADY_COMMITTED", "ALREADY_APPLIED"):
                 console.print(
                     f"[bold green]✔ Branch [cyan]{pr_proposal.branch_name}[/cyan] is already up to date with this upgrade![/bold green]\n"
                     f"[yellow]To continue upgrading to the next major version, checkout this branch and run AMstraLift again:[/yellow]\n"
@@ -241,7 +260,15 @@ def run(
         raise typer.Exit(code=0) from None
     except StageBPublishError as e:
         console.print(f"[bold red]✖ Upgrade failed:[/bold red] {e}\n")
-        if e.gate_summary and e.gate_summary.results:
+        if getattr(e, "diagnostic", None):
+            from amstralift.core.diagnostics import format_diagnostic_panel
+
+            console.print(format_diagnostic_panel(e.diagnostic))
+            console.print(
+                "\n[yellow]💡 Tip: You can re-run with '--draft-on-fail' to preserve your progress on a draft branch for senior review:[/yellow]\n"
+                f"  [bold cyan]uv run amstralift run --draft-on-fail[/bold cyan]\n"
+            )
+        elif e.gate_summary and e.gate_summary.results:
             gate_table = Table(title="Build & Test Gates (Stage A Verification)", show_header=True, header_style="bold red")
             gate_table.add_column("Gate")
             gate_table.add_column("Command")

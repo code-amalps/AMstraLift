@@ -186,6 +186,7 @@ def create_app() -> FastAPI:
                 allow_failed_gates=request.allow_failed_gates,
                 test_timeout=request.test_timeout,
                 output_branch=request.output_branch,
+                draft_on_fail=request.draft_on_fail,
             )
 
             changes_data = [
@@ -212,6 +213,8 @@ def create_app() -> FastAPI:
                 for g in signed_bundle.bundle.gate_summary.results
             ]
 
+            is_draft = pr_proposal.publish_status in ("DRAFT_COMMITTED", "DRAFT_PUBLISHED")
+
             return UpgradeApiResponse(
                 success=True,
                 ecosystem=request.ecosystem or "auto-detected",
@@ -219,6 +222,7 @@ def create_app() -> FastAPI:
                 pr_title=pr_proposal.title,
                 publish_status=pr_proposal.publish_status,
                 remote_pr_url=pr_proposal.remote_pr_url,
+                is_draft=is_draft,
                 changes=changes_data,
                 gate_results=gates_data,
                 all_required_passed=signed_bundle.bundle.gate_summary.all_required_passed,
@@ -231,6 +235,14 @@ def create_app() -> FastAPI:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Orchestration error: {str(e)}",
             ) from e
+        except StageBPublishError as e:
+            diag_dict = e.diagnostic.model_dump() if getattr(e, "diagnostic", None) else None
+            return UpgradeApiResponse(
+                success=False,
+                ecosystem=request.ecosystem or "unknown",
+                error_message=str(e),
+                diagnostic=diag_dict,
+            )
         except Exception as e:
             return UpgradeApiResponse(
                 success=False,

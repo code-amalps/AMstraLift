@@ -17,6 +17,7 @@ from amstralift.core.models import GateStatus, GateSummary, PullRequestProposal,
 from amstralift.core.security import validate_patch_security
 from amstralift.core.workspace import (
     extract_patch_files,
+    get_active_branch,
     get_head_commit,
     is_working_tree_clean,
     run_git,
@@ -31,12 +32,20 @@ from amstralift.publisher.base import (
 logger = logging.getLogger(__name__)
 
 
+from typing import Any
+
 class StageBPublishError(Exception):
     """Raised when Stage B validation or publishing fails."""
 
-    def __init__(self, message: str, gate_summary: GateSummary | None = None):
+    def __init__(
+        self,
+        message: str,
+        gate_summary: GateSummary | None = None,
+        diagnostic: Any | None = None,
+    ):
         super().__init__(message)
         self.gate_summary = gate_summary
+        self.diagnostic = diagnostic
 
 
 def run_stage_b(
@@ -51,6 +60,7 @@ def run_stage_b(
     publish: bool = False,
     allow_failed_gates: bool = False,
     output_branch: str | None = None,
+    draft_on_fail: bool = False,
 ) -> PullRequestProposal:
     """Validate signed advisory bundle, handle duplicate checks, and create or open a PR."""
     bundle = signed_bundle.bundle
@@ -98,34 +108,60 @@ def run_stage_b(
             )
 
     # 6. Required gates verification (Section 1: never open a PR if required checks failed)
-    if not dry_run and not allow_failed_gates and not bundle.gate_summary.all_required_passed:
-        issues = []
-        for r in bundle.gate_summary.results:
-            if r.status == GateStatus.REQUIRED_FAILED:
-                msg = (r.stderr or r.stdout or f"exit code {r.exit_code}").strip().replace("\r", "").replace("\n", " ")
-                issues.append(f"'{r.name}' FAILED: {msg[:120]}")
-            elif r.status == GateStatus.REQUIRED_TIMEOUT:
-                msg = (r.stdout or "runner timed out").strip().replace("\r", "").replace("\n", " ")
-                issues.append(f"'{r.name}' TIMED OUT (uncertain — not confirmed broken): {msg[:120]}")
-            elif r.status == GateStatus.REQUIRED_SKIPPED:
-                msg = (r.stdout or "tooling not available in environment").strip().replace("\r", "").replace("\n", " ")
-                issues.append(f"'{r.name}' SKIPPED: {msg[:80]}")
-        details = f" ({'; '.join(issues)})" if issues else ""
-
-        if bundle.gate_summary.has_required_timeouts and not bundle.gate_summary.has_required_failures:
-            tip = (
-                " Test runner timed out — this usually means Chrome/Chromium is not installed. "
-                "Install chromium on this host, or re-run with '--allow-failed-gates' to proceed "
-                "with an explicit acknowledgement that tests are unverified."
-            )
-        else:
-            tip = ""
-
-        raise StageBPublishError(
-            f"Cannot open PR: Not all required build/test gates passed in Stage A{details}.{tip} "
-            "Per Section 1 and 3, AMstraLift fails closed with an issue, never a PR.",
-            gate_summary=bundle.gate_summary,
+    is_draft = False
+    gate_diagnostic = None
+    if not bundle.gate_summary.all_required_passed:
+        failing_gate = next(
+            (
+                r
+                for r in bundle.gate_summary.results
+                if r.status in (GateStatus.REQUIRED_FAILED, GateStatus.REQUIRED_TIMEOUT)
+            ),
+            None,
         )
+        if failing_gate:
+            from amstralift.core.diagnostics import diagnose_gate_failure
+
+            gate_diagnostic = diagnose_gate_failure(
+                gate_name=failing_gate.name,
+                command=failing_gate.command,
+                stdout=failing_gate.stdout,
+                stderr=failing_gate.stderr,
+            )
+
+    if not dry_run and not allow_failed_gates and not bundle.gate_summary.all_required_passed:
+        if draft_on_fail:
+            is_draft = True
+            logger.info("Stage A verification gates failed, but draft_on_fail is enabled. Packaging as Draft PR.")
+        else:
+            issues = []
+            for r in bundle.gate_summary.results:
+                if r.status == GateStatus.REQUIRED_FAILED:
+                    msg = (r.stderr or r.stdout or f"exit code {r.exit_code}").strip().replace("\r", "").replace("\n", " ")
+                    issues.append(f"'{r.name}' FAILED: {msg[:120]}")
+                elif r.status == GateStatus.REQUIRED_TIMEOUT:
+                    msg = (r.stdout or "runner timed out").strip().replace("\r", "").replace("\n", " ")
+                    issues.append(f"'{r.name}' TIMED OUT (uncertain — not confirmed broken): {msg[:120]}")
+                elif r.status == GateStatus.REQUIRED_SKIPPED:
+                    msg = (r.stdout or "tooling not available in environment").strip().replace("\r", "").replace("\n", " ")
+                    issues.append(f"'{r.name}' SKIPPED: {msg[:80]}")
+            details = f" ({'; '.join(issues)})" if issues else ""
+
+            if bundle.gate_summary.has_required_timeouts and not bundle.gate_summary.has_required_failures:
+                tip = (
+                    " Test runner timed out — this usually means Chrome/Chromium is not installed. "
+                    "Install chromium on this host, or re-run with '--allow-failed-gates' to proceed "
+                    "with an explicit acknowledgement that tests are unverified."
+                )
+            else:
+                tip = ""
+
+            raise StageBPublishError(
+                f"Cannot open PR: Not all required build/test gates passed in Stage A{details}.{tip} "
+                "Per Section 1 and 3, AMstraLift fails closed with an issue, never a PR.",
+                gate_summary=bundle.gate_summary,
+                diagnostic=gate_diagnostic,
+            )
 
     # 7. Re-diff and clean application check
     if not dry_run:
@@ -151,6 +187,9 @@ def run_stage_b(
         target_ver = "update"
         pr_title = f"chore(deps): upgrade dependencies ({tier.value})"
 
+    if is_draft:
+        pr_title = f"[DRAFT] {pr_title} (Needs Human Review)"
+
     effective_repo_id = repo_id or target_repo_path.name
     idempotency_key = calculate_idempotency_key(
         repo_id=effective_repo_id,
@@ -161,7 +200,8 @@ def run_stage_b(
     # Branch Name Determination:
     # 1. Explicit output_branch option if specified by user
     # 2. Stay on current branch if active branch is already an amstralift/* branch
-    # 3. Derive deterministic branch name
+    # 3. Derive deterministic branch name (or draft branch name)
+    import re
     from amstralift.core.workspace import get_active_branch
 
     active_branch = get_active_branch(target_repo_path)
@@ -169,6 +209,10 @@ def run_stage_b(
         branch_name = output_branch
     elif active_branch and active_branch.startswith("amstralift/"):
         branch_name = active_branch
+    elif is_draft:
+        clean_slug = re.sub(r"[^a-zA-Z0-9]+", "-", primary_pkg.lower()).strip("-")
+        clean_ver = re.sub(r"[^a-zA-Z0-9.]+", "", target_ver)
+        branch_name = f"amstralift/draft-{clean_slug}-{clean_ver}"
     else:
         branch_name = derive_deterministic_branch_name(
             primary_pkg, target_ver, idempotency_key=idempotency_key
@@ -183,14 +227,34 @@ def run_stage_b(
         labels.append("migration-manual-review-required")
     if not bundle.gate_summary.all_required_passed:
         labels.append("gates-failed-warning")
+    if is_draft:
+        labels.extend(["draft", "needs-review"])
     labels.append("amstralift-automated")
 
     # Format PR Body with Cohesive Batches
     body_lines = [
-        f"## 🚀 AMstraLift Automated Dependency Upgrade ({tier.value})",
+        f"## 🚀 AMstraLift Automated Dependency Upgrade ({tier.value})" + (" [DRAFT - Verification Interrupted]" if is_draft else ""),
         "",
-        "### 📦 Proposed Changes:",
     ]
+
+    if is_draft and gate_diagnostic:
+        body_lines.extend(
+            [
+                "> ⚠️ **DRAFT UPGRADE — VERIFICATION INTERRUPTED**",
+                "> Automated build/test gates did not pass in Stage A. Changes have been committed to this draft branch for inspection and remediation.",
+                ">",
+                f"> • **Failing Gate:** `{gate_diagnostic.gate_name}`",
+                f"> • **Location:** `{gate_diagnostic.location_str}`",
+                f"> • **Error:** `{gate_diagnostic.error_message}`",
+            ]
+        )
+        if gate_diagnostic.remediation_tip:
+            body_lines.append(f"> • **Tip:** {gate_diagnostic.remediation_tip}")
+        if gate_diagnostic.docs_url:
+            body_lines.append(f"> • **Docs:** {gate_diagnostic.docs_url}")
+        body_lines.extend(["", "---", ""])
+
+    body_lines.append("### 📦 Proposed Changes:")
     if batches:
         for batch in batches:
             if len(batches) > 1 or len(batch.changes) > 1:
@@ -238,7 +302,7 @@ def run_stage_b(
         patch_sha256=bundle.patch_sha256,
         tier=tier,
         idempotency_key=idempotency_key,
-        publish_status="LOCAL_ONLY",
+        publish_status="DRAFT_COMMITTED" if is_draft else "LOCAL_ONLY",
     )
 
 
@@ -344,6 +408,6 @@ def run_stage_b(
             )
             pr_proposal.remote_pr_number = remote_pr.number
             pr_proposal.remote_pr_url = remote_pr.url
-            pr_proposal.publish_status = "CREATED"
+            pr_proposal.publish_status = "DRAFT_PUBLISHED" if is_draft else "CREATED"
 
     return pr_proposal
