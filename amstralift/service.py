@@ -81,6 +81,7 @@ class UpgradeOrchestrator:
         test_timeout: float = 300.0,
         output_branch: str | None = None,
         draft_on_fail: bool = False,
+        modernize: list[str] | None = None,
     ) -> tuple[SignedAdvisoryBundle, PullRequestProposal]:
         """Execute complete upgrade workflow for a repository."""
         repo_path = repo_path.resolve()
@@ -133,6 +134,7 @@ class UpgradeOrchestrator:
                 target_branch=target_branch,
                 explicit_changes=explicit_changes,
                 test_timeout=test_timeout,
+                modernize=modernize,
             )
 
             # 3. Trusted Host: Sign the bundle with HMAC-SHA256

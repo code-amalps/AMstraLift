@@ -86,6 +86,14 @@ def run(
             help="If verification gates fail, commit as a draft branch with smart diagnostics for senior review.",
         ),
     ] = False,
+    modernize: Annotated[
+        str | None,
+        typer.Option(
+            "--modernize",
+            "-m",
+            help="Comma-separated list of post-upgrade modernizations (e.g. 'control-flow', 'standalone', 'style', 'all').",
+        ),
+    ] = None,
 ):
     """Run full two-stage upgrade workflow on a target repository."""
     repo_str = str(repo)
@@ -150,6 +158,8 @@ def run(
 
     orchestrator = UpgradeOrchestrator(incremental=incremental)
 
+    modernize_list = [x.strip() for x in modernize.split(",") if x.strip()] if modernize else None
+
     try:
         with console.status("[bold green]Executing Stage A sandbox & Stage B publisher..."):
             signed_bundle, pr_proposal = orchestrator.run_upgrade(
@@ -165,6 +175,7 @@ def run(
                 test_timeout=float(test_timeout),
                 output_branch=output_branch,
                 draft_on_fail=draft_on_fail,
+                modernize=modernize_list,
             )
 
         console.print("[bold green]✔ Upgrade workflow completed successfully![/bold green]\n")
@@ -214,6 +225,14 @@ def run(
         for g in signed_bundle.bundle.gate_summary.results:
             gate_table.add_row(g.name, g.command, g.status.value, f"{g.duration_seconds:.2f}s")
         console.print(gate_table)
+
+        # Display Automated Modernizations
+        if getattr(signed_bundle.bundle, "modernizations", None):
+            mod_table = Table(title="Automated Modernizations Applied", show_header=False, border_style="cyan")
+            mod_table.add_column("Modernization")
+            for m in signed_bundle.bundle.modernizations:
+                mod_table.add_row(f"[bold cyan]⚡[/bold cyan] {m}")
+            console.print(mod_table)
 
         # PR Summary
         pr_lines = [

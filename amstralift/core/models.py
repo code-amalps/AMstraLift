@@ -127,6 +127,7 @@ class UnsignedAdvisoryBundle(BaseModel):
     gate_summary: GateSummary = Field(default_factory=GateSummary)
     migration: MigrationClassification = Field(default_factory=MigrationClassification)
     advisory_notes: list[str] = Field(default_factory=list)
+    modernizations: list[str] = Field(default_factory=list)
 
     @computed_field
     def highest_tier(self) -> DependencyTier:

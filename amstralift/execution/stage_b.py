@@ -266,6 +266,15 @@ def run_stage_b(
         for c in bundle.changes:
             body_lines.append(f"- **`{c.package_name}`**: `{c.from_version}` → `{c.to_version}` ({c.tier.value})")
 
+    if getattr(bundle, "modernizations", None):
+        body_lines.extend(
+            [
+                "### ⚡ Automated Modernizations Applied:",
+                *[f"- {m}" for m in bundle.modernizations],
+                "",
+            ]
+        )
+
     body_lines.extend(
         [
             "### 🛡️ Build & Test Evidence (Stage A):",

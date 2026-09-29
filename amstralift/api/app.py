@@ -187,6 +187,7 @@ def create_app() -> FastAPI:
                 test_timeout=request.test_timeout,
                 output_branch=request.output_branch,
                 draft_on_fail=request.draft_on_fail,
+                modernize=request.modernize,
             )
 
             changes_data = [
@@ -223,6 +224,7 @@ def create_app() -> FastAPI:
                 publish_status=pr_proposal.publish_status,
                 remote_pr_url=pr_proposal.remote_pr_url,
                 is_draft=is_draft,
+                modernizations=signed_bundle.bundle.modernizations,
                 changes=changes_data,
                 gate_results=gates_data,
                 all_required_passed=signed_bundle.bundle.gate_summary.all_required_passed,

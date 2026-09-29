@@ -275,6 +275,62 @@ class AngularAdapter(BaseAdapter):
             from amstralift.adapters.docker_updater import DockerfileUpdater
             DockerfileUpdater.update(repo_path, ecosystem="angular", target_version=target_ver)
 
+    def apply_modernizations(self, repo_path: Path, modernize_flags: list[str]) -> list[str]:
+        """Apply modern Angular schematics (control-flow, standalone)."""
+        if not modernize_flags:
+            return []
+
+        pkg_file = repo_path / "package.json"
+        if not pkg_file.exists():
+            return []
+
+        try:
+            data = json.loads(pkg_file.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+
+        deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+        core_ver = deps.get("@angular/core", "")
+        major = extract_major_version(core_ver) if core_ver else None
+
+        applied = []
+        gate_env = get_node_execution_env()
+        has_npx = shutil.which("npx", path=gate_env.get("PATH")) is not None
+
+        normalized = [f.strip().lower() for f in modernize_flags]
+
+        # 1. Control-Flow (*ngIf -> @if, *ngFor -> @for)
+        if any(f in ("control-flow", "controlflow", "all") for f in normalized):
+            if major and major >= 17:
+                if has_npx:
+                    cmd = ["npx", "@angular/cli", "generate", "@angular/core:control-flow", "--interactive=false"]
+                    res = subprocess.run(cmd, cwd=repo_path, env=gate_env, capture_output=True, text=True, timeout=180)
+                    if res.returncode == 0:
+                        applied.append("Migrated templates to modern Angular control flow (@if, @for, @switch)")
+                    else:
+                        applied.append(f"Control-flow migration returned exit code {res.returncode}: {res.stderr[:80]}")
+                else:
+                    applied.append("Skipped control-flow migration: npx CLI not found in environment")
+            else:
+                applied.append(f"Skipped control-flow migration: requires Angular 17+ (current is v{major or 'unknown'})")
+
+        # 2. Standalone Migration (NgModule -> Standalone components)
+        if any(f in ("standalone", "all") for f in normalized):
+            if major and major >= 15:
+                if has_npx:
+                    cmd = ["npx", "@angular/cli", "generate", "@angular/core:standalone", "--mode=convert-to-standalone", "--interactive=false"]
+                    res = subprocess.run(cmd, cwd=repo_path, env=gate_env, capture_output=True, text=True, timeout=180)
+                    if res.returncode == 0:
+                        applied.append("Converted components and directives to Angular Standalone architecture")
+                    else:
+                        applied.append(f"Standalone migration returned exit code {res.returncode}: {res.stderr[:80]}")
+                else:
+                    applied.append("Skipped standalone migration: npx CLI not found in environment")
+            else:
+                applied.append(f"Skipped standalone migration: requires Angular 15+ (current is v{major or 'unknown'})")
+
+        return applied
+
     def run_build_and_tests(self, repo_path: Path, timeout_seconds: float = 300.0) -> GateSummary:
         """Execute build and test gates declared in package.json.
 

@@ -58,6 +58,7 @@ class UpgradeApiRequest(BaseModel):
     remote_url: str | None = Field(default=None, description="Explicit Git remote URL for push.")
     output_branch: str | None = Field(default=None, description="Target branch name for the upgrade commits.")
     draft_on_fail: bool = Field(default=False, description="Commit to a draft branch if verification gates fail.")
+    modernize: list[str] | None = Field(default=None, description="Optional modernizations to apply ('control-flow', 'standalone', etc.).")
 
 
 class UpgradeApiResponse(BaseModel):
@@ -70,6 +71,7 @@ class UpgradeApiResponse(BaseModel):
     remote_pr_url: str | None = None
     is_draft: bool = False
     diagnostic: dict[str, Any] | None = None
+    modernizations: list[str] = Field(default_factory=list)
     changes: list[dict[str, Any]] = Field(default_factory=list)
     gate_results: list[dict[str, Any]] = Field(default_factory=list)
     all_required_passed: bool = False

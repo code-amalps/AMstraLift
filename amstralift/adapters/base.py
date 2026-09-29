@@ -59,3 +59,7 @@ class BaseAdapter(ABC):
         """Return declared {package_name: version} for security auditing."""
         return {}
 
+    def apply_modernizations(self, repo_path: Path, modernize_flags: list[str]) -> list[str]:
+        """Apply ecosystem modernizations (e.g. control-flow, standalone, syntax)."""
+        return []
+

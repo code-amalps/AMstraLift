@@ -54,6 +54,7 @@ def run_stage_a(
     run_id: str | None = None,
     explicit_changes: list[DependencyChange] | None = None,
     test_timeout: float = 300.0,
+    modernize: list[str] | None = None,
 ) -> UnsignedAdvisoryBundle:
     """Execute Stage A inside the sanitized workspace."""
     run_id = run_id or f"run_{uuid4().hex[:12]}"
@@ -67,6 +68,11 @@ def run_stage_a(
 
     # 2. Apply upgrades to manifests/lockfiles
     adapter.apply_upgrade(workspace_path, candidates)
+
+    # 2b. Apply optional ecosystem modernizations (e.g. control-flow, standalone)
+    applied_modernizations: list[str] = []
+    if modernize:
+        applied_modernizations = adapter.apply_modernizations(workspace_path, modernize)
 
     # 3. Run declared build and test gates
     gate_summary = adapter.run_build_and_tests(workspace_path, timeout_seconds=test_timeout)
@@ -98,6 +104,7 @@ def run_stage_a(
         changes=candidates,
         gate_summary=gate_summary,
         migration=migration,
+        modernizations=applied_modernizations,
         advisory_notes=[
             f"Ecosystem: {adapter.name}",
             f"Touched files: {len(touched_paths)}",
