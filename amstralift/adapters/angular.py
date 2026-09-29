@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -141,6 +142,246 @@ def _modernize_angular_workspace_json(repo_path: Path, target_major: int | None 
 def _remove_legacy_default_project(repo_path: Path) -> None:
     """Backward-compatible alias for legacy callers and unit tests."""
     _modernize_angular_workspace_json(repo_path)
+
+
+def _modernize_angular_tsconfig(repo_path: Path, target_major: int | None = None) -> list[str]:
+    """Modernize TypeScript configurations across the Angular workspace.
+
+    - Sets 'moduleResolution': 'bundler' for Angular 16+ (enables modern package.json 'exports' subpath resolution)
+    - Sets 'target': 'ES2022' for Angular 17+
+    - Updates 'lib' to ['ES2022', 'dom'] for Angular 17+
+    - Sets 'useDefineForClassFields': false for Angular 17+ (preserves decorator semantics)
+    - Sets 'ignoreDeprecations': '6.0' for Angular 22+ (TypeScript 6.x)
+    - Removes deprecated 'fullTemplateTypeCheck' from 'angularCompilerOptions'
+    """
+    applied = []
+    excluded_dirs = {"node_modules", ".angular", ".nx", ".git", "dist", "coverage", ".venv"}
+
+    for tsconfig_file in repo_path.rglob("tsconfig*.json"):
+        if any(part in excluded_dirs for part in tsconfig_file.parts):
+            continue
+
+        try:
+            raw_text = tsconfig_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        try:
+            data = json.loads(raw_text)
+        except json.JSONDecodeError:
+            cleaned = re.sub(r"(?m)^\s*//.*?$", "", raw_text)
+            cleaned = re.sub(r"""(?<![:"'])\s*//(?!["']).*?$""", "", cleaned)
+            cleaned = re.sub(r"/\*.*?\*/", "", cleaned, flags=re.DOTALL)
+            cleaned = re.sub(r",\s*([\]}])", r"\1", cleaned)
+            try:
+                data = json.loads(cleaned)
+            except Exception:
+                continue
+
+        if not isinstance(data, dict):
+            continue
+
+        changed = False
+        compiler_opts = data.setdefault("compilerOptions", {})
+
+        # 1. moduleResolution -> 'bundler' for Angular 16+
+        if target_major is None or target_major >= 16:
+            cur_mod_res = str(compiler_opts.get("moduleResolution", "")).lower()
+            if cur_mod_res in ("node", "classic", ""):
+                compiler_opts["moduleResolution"] = "bundler"
+                changed = True
+
+        # 2. target -> 'ES2022' for Angular 17+
+        if target_major is None or target_major >= 17:
+            cur_target = str(compiler_opts.get("target", "")).lower()
+            if cur_target in ("es5", "es6", "es2015", "es2016", "es2017", "es2018", "es2019", "es2020", "es2021"):
+                compiler_opts["target"] = "ES2022"
+                changed = True
+
+        # 3. lib -> include ES2022 for Angular 17+
+        if target_major is None or target_major >= 17:
+            cur_lib = compiler_opts.get("lib")
+            if isinstance(cur_lib, list):
+                new_lib = []
+                has_es2022 = False
+                for item in cur_lib:
+                    item_str = str(item)
+                    item_lower = item_str.lower()
+                    if item_lower.startswith("es") and not item_lower.startswith("es2022"):
+                        if not has_es2022:
+                            new_lib.append("ES2022")
+                            has_es2022 = True
+                    elif item_lower == "es2022":
+                        new_lib.append("ES2022")
+                        has_es2022 = True
+                    else:
+                        new_lib.append(item_str)
+                if not has_es2022:
+                    new_lib.insert(0, "ES2022")
+                if new_lib != cur_lib:
+                    compiler_opts["lib"] = new_lib
+                    changed = True
+
+        # 4. useDefineForClassFields -> False for Angular 17+ (preserves decorator semantics)
+        if target_major is None or target_major >= 17:
+            if "useDefineForClassFields" not in compiler_opts:
+                compiler_opts["useDefineForClassFields"] = False
+                changed = True
+
+        # 5. ignoreDeprecations -> '6.0' for TypeScript 6 / Angular 22+
+        if target_major is not None and target_major >= 22:
+            if compiler_opts.get("ignoreDeprecations") != "6.0":
+                compiler_opts["ignoreDeprecations"] = "6.0"
+                changed = True
+
+        # 6. angularCompilerOptions -> clean up fullTemplateTypeCheck
+        if "angularCompilerOptions" in data and isinstance(data["angularCompilerOptions"], dict):
+            if "fullTemplateTypeCheck" in data["angularCompilerOptions"]:
+                del data["angularCompilerOptions"]["fullTemplateTypeCheck"]
+                changed = True
+
+        if changed:
+            try:
+                tsconfig_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+                try:
+                    rel_path = str(tsconfig_file.relative_to(repo_path))
+                except Exception:
+                    rel_path = tsconfig_file.name
+                applied.append(
+                    f"Modernized {rel_path} for Angular {target_major or 'modern'} "
+                    "(moduleResolution=bundler, target=ES2022)"
+                )
+            except Exception:
+                pass
+
+    return applied
+
+
+def _modernize_angular_stylesheets(repo_path: Path) -> list[str]:
+    """Modernize Angular stylesheets for modern Dart Sass.
+
+    Strips obsolete Webpack tilde ('~') prefix from @import, @use, and @forward statements
+    (e.g., '@use \"~@angular/material\"' -> '@use \"@angular/material\"').
+    """
+    applied = []
+    excluded_dirs = {"node_modules", ".angular", ".nx", ".git", "dist", "coverage", ".venv"}
+    tilde_pattern = re.compile(r"""(@(?:import|use|forward)\s+(?:url\()?['\"])~""")
+
+    count = 0
+    for ext in ("*.scss", "*.sass", "*.css"):
+        for file_path in repo_path.rglob(ext):
+            if any(part in excluded_dirs for part in file_path.parts):
+                continue
+            try:
+                content = file_path.read_text(encoding="utf-8")
+                new_content, n = tilde_pattern.subn(r"\1", content)
+                if n > 0:
+                    file_path.write_text(new_content, encoding="utf-8")
+                    count += 1
+            except Exception:
+                pass
+
+    if count > 0:
+        applied.append(f"Modernized {count} stylesheet(s) for Dart Sass (stripped obsolete '~' Webpack prefixes)")
+    return applied
+
+
+def _modernize_angular_source_files(repo_path: Path, target_major: int | None = None) -> list[str]:
+    """Modernize deprecated patterns in TypeScript source files.
+
+    - Removes obsolete 'Effect' import from '@ngrx/effects' when target_major >= 15
+    - Modernizes '@Effect()' decorators to 'createEffect' when target_major >= 15
+    - Fixes type-only imports from '@angular/common/http' (e.g., 'HttpEvent')
+    """
+    applied = []
+    excluded_dirs = {"node_modules", ".angular", ".nx", ".git", "dist", "coverage", ".venv"}
+
+    ngrx_cleaned_count = 0
+    type_import_count = 0
+
+    for ts_file in repo_path.rglob("*.ts"):
+        if any(part in excluded_dirs for part in ts_file.parts):
+            continue
+
+        try:
+            content = ts_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        modified = False
+
+        # 1. Clean up obsolete Effect from @ngrx/effects in Angular/NgRx 15+
+        if target_major is None or target_major >= 15:
+            if "@ngrx/effects" in content and "Effect" in content:
+                # Convert @Effect(opts?) to createEffect if present
+                effect_pattern = re.compile(
+                    r"@Effect\(\s*(.*?)\s*\)\s*\n\s*([a-zA-Z0-9_$]+)\s*=\s*(.+?);",
+                    re.DOTALL,
+                )
+                if effect_pattern.search(content):
+                    def repl_effect(m: re.Match) -> str:
+                        opts = m.group(1).strip()
+                        prop = m.group(2)
+                        expr = m.group(3).strip()
+                        if opts:
+                            return f"{prop} = createEffect(() => {expr}, {opts});"
+                        return f"{prop} = createEffect(() => {expr});"
+
+                    content = effect_pattern.sub(repl_effect, content)
+                    modified = True
+
+                # Clean import: remove Effect from @ngrx/effects
+                def _strip_effect_import(m: re.Match) -> str:
+                    imports = m.group(1).split(",")
+                    cleaned = [imp.strip() for imp in imports if imp.strip() not in ("Effect", "")]
+                    has_create = any(imp.strip() == "createEffect" for imp in cleaned)
+                    if not has_create and "createEffect" in content:
+                        cleaned.append("createEffect")
+                    if cleaned:
+                        return f"import {{ {', '.join(cleaned)} }} from {m.group(2)};"
+                    return ""
+
+                new_content = re.sub(
+                    r"import\s*\{([^}]+)\}\s*from\s*(['\"]@ngrx/effects['\"]);?",
+                    _strip_effect_import,
+                    content,
+                )
+                if new_content != content:
+                    content = new_content
+                    modified = True
+                    ngrx_cleaned_count += 1
+
+        # 2. Modernize type-only HttpEvent import from @angular/common/http
+        if target_major is None or target_major >= 17:
+            if "@angular/common/http" in content and "HttpEvent" in content:
+                http_import_match = re.search(
+                    r"import\s*\{([^}]+)\}\s*from\s*(['\"]@angular/common/http['\"]);?",
+                    content,
+                )
+                if http_import_match:
+                    raw_symbols = [s.strip() for s in http_import_match.group(1).split(",") if s.strip()]
+                    if "HttpEvent" in raw_symbols and "type HttpEvent" not in raw_symbols:
+                        new_symbols = [
+                            f"type {s}" if s == "HttpEvent" else s
+                            for s in raw_symbols
+                        ]
+                        replacement = f"import {{ {', '.join(new_symbols)} }} from {http_import_match.group(2)};"
+                        content = content[:http_import_match.start()] + replacement + content[http_import_match.end():]
+                        modified = True
+                        type_import_count += 1
+
+        if modified:
+            try:
+                ts_file.write_text(content, encoding="utf-8")
+            except Exception:
+                pass
+
+    if ngrx_cleaned_count > 0:
+        applied.append(f"Modernized {ngrx_cleaned_count} file(s) removing obsolete @ngrx/effects 'Effect' member")
+    if type_import_count > 0:
+        applied.append(f"Modernized {type_import_count} file(s) converting type-only 'HttpEvent' imports")
+
+    return applied
 
 
 class AngularAdapter(BaseAdapter):
@@ -371,6 +612,9 @@ class AngularAdapter(BaseAdapter):
         # Modernize angular.json schema (defaultProject, browserTarget -> buildTarget)
         target_major_int = int(target_major_str) if "target_major_str" in locals() and target_major_str else None
         _modernize_angular_workspace_json(repo_path, target_major=target_major_int)
+        _modernize_angular_tsconfig(repo_path, target_major=target_major_int)
+        _modernize_angular_stylesheets(repo_path)
+        _modernize_angular_source_files(repo_path, target_major=target_major_int)
 
         # Update package-lock.json accurately using npm_lockfile
         from amstralift.adapters.npm_lockfile import install_npm_dependencies, update_npm_lockfile
@@ -410,6 +654,9 @@ class AngularAdapter(BaseAdapter):
         normalized = [f.strip().lower() for f in modernize_flags]
         if major and major >= 14:
             _modernize_angular_workspace_json(repo_path, target_major=major)
+        _modernize_angular_tsconfig(repo_path, target_major=major)
+        _modernize_angular_stylesheets(repo_path)
+        _modernize_angular_source_files(repo_path, target_major=major)
 
         # 1. Control-Flow (*ngIf -> @if, *ngFor -> @for)
         if any(f in ("control-flow", "controlflow", "all") for f in normalized):
@@ -523,8 +770,24 @@ class AngularAdapter(BaseAdapter):
 
         gate_env = get_node_execution_env()
         existing_opts = gate_env.get("NODE_OPTIONS", "")
-        if "--openssl-legacy-provider" not in existing_opts:
-            gate_env["NODE_OPTIONS"] = (existing_opts + " --openssl-legacy-provider").strip()
+        core_ver = (
+            data.get("dependencies", {}).get("@angular/core")
+            or data.get("devDependencies", {}).get("@angular/core")
+        )
+        core_major = extract_major_version(core_ver) if core_ver else None
+
+        if core_major and core_major >= 17:
+            # Modern Angular CLI (17+) uses modern Webpack 5 / esbuild without legacy crypto
+            if "--openssl-legacy-provider" in existing_opts:
+                cleaned_opts = existing_opts.replace("--openssl-legacy-provider", "").strip()
+                if cleaned_opts:
+                    gate_env["NODE_OPTIONS"] = cleaned_opts
+                else:
+                    gate_env.pop("NODE_OPTIONS", None)
+        else:
+            # Legacy Angular (< 17) requires OpenSSL legacy provider on Node 17+
+            if "--openssl-legacy-provider" not in existing_opts:
+                gate_env["NODE_OPTIONS"] = (existing_opts + " --openssl-legacy-provider").strip()
 
         has_npm = shutil.which("npm", path=gate_env.get("PATH")) is not None
 

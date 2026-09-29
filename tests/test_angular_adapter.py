@@ -205,3 +205,194 @@ def test_angular_run_build_and_tests_timeout_handling(tmp_path: Path, monkeypatc
     assert "timed out" in test_result.stdout.lower()
     assert summary.has_required_timeouts
     assert not summary.has_required_failures  # Timeout is classified as UNCERTAIN, not confirmed broken
+
+
+def test_modernize_angular_workspace_json(tmp_path: Path):
+    from amstralift.adapters.angular import _modernize_angular_workspace_json
+
+    workspace_file = tmp_path / "angular.json"
+    workspace_file.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "defaultProject": "legacy-app",
+                "projects": {
+                    "legacy-app": {
+                        "architect": {
+                            "serve": {
+                                "options": {"browserTarget": "legacy-app:build"},
+                                "configurations": {
+                                    "production": {"browserTarget": "legacy-app:build:production"}
+                                },
+                            },
+                            "extract-i18n": {
+                                "options": {"browserTarget": "legacy-app:build"}
+                            },
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _modernize_angular_workspace_json(tmp_path, target_major=17)
+
+    updated = json.loads(workspace_file.read_text(encoding="utf-8"))
+    assert "defaultProject" not in updated
+    serve_opts = updated["projects"]["legacy-app"]["architect"]["serve"]["options"]
+    assert "buildTarget" in serve_opts
+    assert serve_opts["buildTarget"] == "legacy-app:build"
+    assert "browserTarget" not in serve_opts
+    serve_prod = updated["projects"]["legacy-app"]["architect"]["serve"]["configurations"]["production"]
+    assert serve_prod["buildTarget"] == "legacy-app:build:production"
+    assert "browserTarget" not in serve_prod
+    i18n_opts = updated["projects"]["legacy-app"]["architect"]["extract-i18n"]["options"]
+    assert i18n_opts["buildTarget"] == "legacy-app:build"
+
+
+def test_modernize_angular_tsconfig(tmp_path: Path):
+    from amstralift.adapters.angular import _modernize_angular_tsconfig
+
+    tsconfig_file = tmp_path / "tsconfig.json"
+    tsconfig_file.write_text(
+        """// Leading tsconfig comment
+{
+  "compileOnSave": false,
+  "compilerOptions": {
+    "baseUrl": "./src",
+    "moduleResolution": "node",
+    "module": "esnext",
+    "target": "es2015",
+    "lib": ["es2018", "dom"],
+  },
+  "angularCompilerOptions": {
+    "strictTemplates": true,
+    "fullTemplateTypeCheck": true
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    applied = _modernize_angular_tsconfig(tmp_path, target_major=22)
+    assert len(applied) >= 1
+
+    updated = json.loads(tsconfig_file.read_text(encoding="utf-8"))
+    opts = updated["compilerOptions"]
+    assert opts["moduleResolution"] == "bundler"
+    assert opts["target"] == "ES2022"
+    assert opts["lib"] == ["ES2022", "dom"]
+    assert opts["useDefineForClassFields"] is False
+    assert opts["ignoreDeprecations"] == "6.0"
+    assert "fullTemplateTypeCheck" not in updated.get("angularCompilerOptions", {})
+    assert updated["angularCompilerOptions"]["strictTemplates"] is True
+
+
+def test_modernize_angular_stylesheets(tmp_path: Path):
+    from amstralift.adapters.angular import _modernize_angular_stylesheets
+
+    scss_file = tmp_path / "styles.scss"
+    scss_file.write_text(
+        """@use '~@angular/material' as mat;
+@import 'styles-variables';
+@import '~bootstrap/scss/bootstrap-reboot';
+@import '~bootstrap/scss/bootstrap-grid';
+@import url('~font-awesome/css/font-awesome.css');
+""",
+        encoding="utf-8",
+    )
+
+    applied = _modernize_angular_stylesheets(tmp_path)
+    assert len(applied) == 1
+    assert "Modernized 1 stylesheet(s)" in applied[0]
+
+    updated = scss_file.read_text(encoding="utf-8")
+    assert "@use '@angular/material' as mat;" in updated
+    assert "@import 'styles-variables';" in updated
+    assert "@import 'bootstrap/scss/bootstrap-reboot';" in updated
+    assert "@import 'bootstrap/scss/bootstrap-grid';" in updated
+    assert "@import url('font-awesome/css/font-awesome.css');" in updated
+    assert "~" not in updated
+
+
+def test_modernize_angular_source_files(tmp_path: Path):
+    from amstralift.adapters.angular import _modernize_angular_source_files
+
+    # 1. Obsolete Effect from @ngrx/effects
+    effects_file = tmp_path / "sample.effects.ts"
+    effects_file.write_text(
+        """import { Injectable } from '@angular/core';
+import { Actions, Effect, ofType } from '@ngrx/effects';
+
+@Injectable()
+export class SampleEffects {
+  @Effect()
+  loadSomething$ = this.actions$.pipe(ofType('LOAD'));
+
+  @Effect({ dispatch: false })
+  logSomething$ = this.actions$.pipe(ofType('LOG'));
+}
+""",
+        encoding="utf-8",
+    )
+
+    # 2. Type-only HttpEvent from @angular/common/http
+    interceptor_file = tmp_path / "custom.interceptor.ts"
+    interceptor_file.write_text(
+        """import { Injectable } from '@angular/core';
+import { HttpClient, HttpEvent, HttpHandler, HttpRequest } from '@angular/common/http';
+import { Observable } from 'rxjs';
+
+@Injectable()
+export class CustomInterceptor {
+  intercept(req: HttpRequest<any>, next: HttpHandler): Observable<HttpEvent<any>> {
+    return next.handle(req);
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    applied = _modernize_angular_source_files(tmp_path, target_major=17)
+    assert any("Effect" in m for m in applied)
+    assert any("HttpEvent" in m for m in applied)
+
+    updated_effects = effects_file.read_text(encoding="utf-8")
+    assert "Effect" not in updated_effects or "createEffect" in updated_effects
+    assert "createEffect(" in updated_effects
+    assert "@Effect()" not in updated_effects
+    assert "@Effect({ dispatch: false })" not in updated_effects
+
+    updated_interceptor = interceptor_file.read_text(encoding="utf-8")
+    assert "type HttpEvent" in updated_interceptor
+
+
+def test_angular_run_build_and_tests_removes_openssl_legacy_for_v17(tmp_path: Path, monkeypatch):
+    import subprocess
+
+    adapter = AngularAdapter()
+    (tmp_path / "package.json").write_text(
+        json.dumps({
+            "dependencies": {"@angular/core": "^18.2.0"},
+            "scripts": {"build": "ng build"},
+        }),
+        encoding="utf-8",
+    )
+
+    captured_env = {}
+
+    def mock_subprocess_run(cmd, **kwargs):
+        captured_env.update(kwargs.get("env", {}))
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Build ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", mock_subprocess_run)
+    monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "npm")
+
+    summary = adapter.run_build_and_tests(tmp_path)
+    build_result = next((r for r in summary.results if r.name == "build"), None)
+    assert build_result is not None
+    assert build_result.status.value == "REQUIRED_PASSED"
+    # Modern Angular >= 17 should NOT have --openssl-legacy-provider in NODE_OPTIONS
+    assert "--openssl-legacy-provider" not in captured_env.get("NODE_OPTIONS", "")
+
