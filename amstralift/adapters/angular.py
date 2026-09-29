@@ -318,6 +318,18 @@ class AngularAdapter(BaseAdapter):
                     cleaned_val = cleaned_val.replace("--openssl-legacy-provider", "").strip()
                     data["scripts"][script_key] = cleaned_val
 
+        # Align project manifest version with target framework major
+        angular_core = next(
+            (c for c in changes if c.package_name == "@angular/core"),
+            None,
+        )
+        if angular_core and "version" in data and isinstance(data["version"], str):
+            target_major_str = angular_core.to_version.lstrip("^~>=<").split(".")[0]
+            cur_app_ver = data["version"].strip()
+            cur_app_major = extract_major_version(cur_app_ver)
+            if cur_app_major is not None and cur_app_major < int(target_major_str):
+                data["version"] = f"{target_major_str}.0.0"
+
         pkg_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
         # Update package-lock.json accurately using npm_lockfile
@@ -328,11 +340,6 @@ class AngularAdapter(BaseAdapter):
         install_npm_dependencies(repo_path, env=gate_env)
 
         # ── Docker: update FROM / image: tags in Dockerfiles & docker-compose ──
-        # Determine target Angular major from changes if possible
-        angular_core = next(
-            (c for c in changes if c.package_name == "@angular/core"),
-            None,
-        )
         if angular_core:
             target_ver = angular_core.to_version.lstrip("^~>=<").split(".")[0]
             from amstralift.adapters.docker_updater import DockerfileUpdater
