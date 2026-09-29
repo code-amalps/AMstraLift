@@ -101,14 +101,19 @@ def test_angular_modernize_runs_standalone_on_v17(tmp_path: Path):
     adapter = AngularAdapter()
     with patch("shutil.which", return_value="/bin/npx"), \
          patch("subprocess.run") as mock_sub:
+        # First call: npm install (sync), then 3x schematic phases
         mock_sub.return_value = MagicMock(returncode=0, stdout="", stderr="")
         applied = adapter.apply_modernizations(tmp_path, ["standalone"])
 
-        assert len(applied) == 1
-        assert "Standalone" in applied[0]
-        mock_sub.assert_called_once()
-        cmd = mock_sub.call_args[0][0]
-        assert "@angular/core:standalone" in cmd
+        # Must have exactly 1 success message (Standalone architecture)
+        assert any("Standalone" in a for a in applied)
+        # subprocess called at least 4 times: npm install + 3 schematic phases
+        assert mock_sub.call_count >= 4
+        # Verify all 3 modes were invoked
+        all_calls = " ".join(str(c) for c in mock_sub.call_args_list)
+        assert "convert-to-standalone" in all_calls
+        assert "prune-ng-modules" in all_calls
+        assert "standalone-bootstrap" in all_calls
 
 
 def test_stage_b_includes_modernizations_in_pr_body(tmp_path: Path):

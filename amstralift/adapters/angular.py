@@ -372,41 +372,80 @@ class AngularAdapter(BaseAdapter):
         if any(f in ("standalone", "all") for f in normalized):
             if major and major >= 15:
                 if has_npx:
-                    cmd = [
-                        "npx",
-                        "@angular/cli",
-                        "generate",
-                        "@angular/core:standalone",
-                        "--mode=convert-to-standalone",
-                        "--interactive=false",
-                        "--defaults",
-                    ]
-                    try:
-                        res = subprocess.run(
-                            cmd,
-                            cwd=repo_path,
-                            env=gate_env,
-                            capture_output=True,
-                            text=True,
-                            timeout=180,
-                            shell=sys.platform == "win32",
+                    # Ensure node_modules is in sync with updated package.json before running schematic.
+                    # The sandbox shares a symlinked node_modules from the source repo which may be stale.
+                    npm_cmd = shutil.which("npm", path=gate_env.get("PATH")) or shutil.which("npm")
+                    nm_synced = False
+                    if npm_cmd:
+                        try:
+                            sync_res = subprocess.run(
+                                [npm_cmd, "install", "--legacy-peer-deps", "--no-audit", "--no-fund"],
+                                cwd=repo_path,
+                                env=gate_env,
+                                capture_output=True,
+                                text=True,
+                                timeout=300,
+                                shell=sys.platform == "win32",
+                            )
+                            nm_synced = sync_res.returncode == 0
+                        except Exception:
+                            nm_synced = False
+
+                    if not nm_synced:
+                        applied.append(
+                            "Skipped standalone migration: failed to sync node_modules. "
+                            "Run 'npm install --legacy-peer-deps' in the repo then re-run AMstraLift."
                         )
-                        if res.returncode == 0:
-                            applied.append("Converted components and directives to Angular Standalone architecture")
-                        else:
-                            raw_err = (res.stderr or res.stdout or "").strip()
-                            if "does not support schematics" in raw_err:
-                                applied.append(
-                                    "Skipped standalone migration: local node_modules has older Angular version. "
-                                    "Run 'npm install' on upgraded branch first."
+                    else:
+                        # Run full 3-phase standalone migration:
+                        # Phase 1: convert-to-standalone
+                        # Phase 2: prune-ng-modules
+                        # Phase 3: standalone-bootstrap
+                        standalone_ok = True
+                        for mode in ["convert-to-standalone", "prune-ng-modules", "standalone-bootstrap"]:
+                            cmd = [
+                                "npx",
+                                "@angular/cli",
+                                "generate",
+                                "@angular/core:standalone",
+                                f"--mode={mode}",
+                                "--interactive=false",
+                                "--defaults",
+                            ]
+                            try:
+                                res = subprocess.run(
+                                    cmd,
+                                    cwd=repo_path,
+                                    env=gate_env,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=300,
+                                    shell=sys.platform == "win32",
                                 )
-                            elif "TypeScript" in raw_err:
-                                applied.append(f"Standalone migration TypeScript mismatch: {raw_err[:80]}")
-                            else:
-                                err_hint = raw_err[:80]
-                                applied.append(f"Standalone migration returned exit code {res.returncode}: {err_hint}")
-                    except Exception as e:
-                        applied.append(f"Standalone migration error: {str(e)[:80]}")
+                                if res.returncode != 0:
+                                    raw_err = (res.stderr or res.stdout or "").strip()
+                                    standalone_ok = False
+                                    if "does not support schematics" in raw_err or "Cannot find module" in raw_err:
+                                        applied.append(
+                                            f"Standalone migration phase '{mode}' failed: node_modules out of sync. "
+                                            "Run 'npm install' then re-run AMstraLift."
+                                        )
+                                    else:
+                                        applied.append(
+                                            f"Standalone migration phase '{mode}' failed (exit {res.returncode}): "
+                                            f"{raw_err[:120]}"
+                                        )
+                                    break
+                            except Exception as e:
+                                standalone_ok = False
+                                applied.append(f"Standalone migration phase '{mode}' error: {str(e)[:80]}")
+                                break
+
+                        if standalone_ok:
+                            applied.append(
+                                "Converted all components and directives to Angular Standalone architecture "
+                                "(convert-to-standalone → prune-ng-modules → standalone-bootstrap)"
+                            )
                 else:
                     applied.append("Skipped standalone migration: npx CLI not found in environment")
             else:

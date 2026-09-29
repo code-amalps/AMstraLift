@@ -109,37 +109,48 @@ def update_npm_lockfile(
             packages = lock_data["packages"]
             keys_to_delete = []
 
-            for key, entry in packages.items():
+            for key in list(packages.keys()):
                 if not key:
                     continue
 
-                # Delete obsolete devkit packages
-                if any(
-                    key == f"node_modules/{obs}" or key.startswith(f"node_modules/{obs}/")
-                    for obs in OBSOLETE_DEVKIT_PACKAGES
-                ):
+                entry = packages[key]
+
+                # Delete obsolete devkit packages (top-level and nested)
+                if any(f"/{obs}" in key for obs in OBSOLETE_DEVKIT_PACKAGES):
                     keys_to_delete.append(key)
                     continue
 
-                # Delete nested node_modules under devkit, cli, or angular (from legacy installs)
-                if (
-                    key.startswith("node_modules/@angular-devkit/")
-                    or key.startswith("node_modules/@angular/cli/")
-                    or key.startswith("node_modules/@angular/")
-                ) and "/node_modules/" in key:
+                # Delete ANY nested copy of a companion devkit package.
+                # Pattern: "node_modules/<anything>/node_modules/@angular-devkit/<comp>"
+                # This covers:
+                #   node_modules/@angular/cli/node_modules/@angular-devkit/core
+                #   node_modules/@angular-devkit/build-angular/node_modules/@angular-devkit/core
+                #   node_modules/@schematics/angular/node_modules/@angular-devkit/core  etc.
+                is_nested_companion = (
+                    "/node_modules/" in key
+                    and any(f"@angular-devkit/{comp.split('/')[1]}" in key for comp in COMPANION_DEVKIT_PACKAGES)
+                )
+                if is_nested_companion:
                     keys_to_delete.append(key)
                     continue
 
-                # Synchronize companion devkit packages
+                # Also prune old webpack / webassembly etc. nested inside build-angular from Angular 12
+                if "node_modules/@angular-devkit/build-angular/node_modules/" in key:
+                    keys_to_delete.append(key)
+                    continue
+
+                # Synchronize TOP-LEVEL companion devkit packages only
                 for comp in COMPANION_DEVKIT_PACKAGES:
                     if key == f"node_modules/{comp}":
                         entry["version"] = target_devkit_ver
                         entry.pop("integrity", None)
                         entry.pop("resolved", None)
+                        # Clean obsolete sub-deps
                         if "dependencies" in entry and isinstance(entry["dependencies"], dict):
                             for sub_k in list(entry["dependencies"].keys()):
                                 if sub_k in OBSOLETE_DEVKIT_PACKAGES:
                                     del entry["dependencies"][sub_k]
+                        break
 
             for k in keys_to_delete:
                 packages.pop(k, None)
