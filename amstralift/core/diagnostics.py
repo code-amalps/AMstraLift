@@ -60,6 +60,20 @@ KNOWN_BREAKING_CHANGES: list[KnownBreakingChange] = [
         remediation_tip="Install Chrome or Chromium, or set the CHROME_BIN environment variable.",
         docs_url="https://angular.dev/reference/cli/ng-test",
     ),
+    KnownBreakingChange(
+        pattern=re.compile(r"registry\.ɵflatten is not a function|@angular-devkit.*mismatch", re.IGNORECASE),
+        title="Angular CLI / Devkit Version Mismatch in node_modules",
+        explanation="The installed @angular/cli version is newer than @angular-devkit/core in node_modules or package-lock.json.",
+        remediation_tip="Run 'npm update @angular/cli @angular-devkit/core @angular-devkit/build-angular' or 'npm install' to re-sync dependencies.",
+        docs_url="https://angular.dev/reference/cli",
+    ),
+    KnownBreakingChange(
+        pattern=re.compile(r"Failed to load plugin '@angular-eslint/eslint-plugin'|ESLint:.*Failed to load plugin", re.IGNORECASE),
+        title="ESLint / @angular-eslint Incompatibility",
+        explanation="The project's ESLint runner is older than the required version for @angular-eslint.",
+        remediation_tip="Upgrade 'eslint' to ^8.57.1 or higher in devDependencies.",
+        docs_url="https://github.com/angular-eslint/angular-eslint",
+    ),
     # ── .NET ─────────────────────────────────────────────────────────────────
     KnownBreakingChange(
         pattern=re.compile(r"BinaryFormatter.*is obsolete|SYSLIB0011|SYSLIB0050", re.IGNORECASE),

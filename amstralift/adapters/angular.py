@@ -215,12 +215,14 @@ class AngularAdapter(BaseAdapter):
                         )
                     )
 
+        has_angular_eslint = any(p.startswith("@angular-eslint/") for p in dev_deps)
         for pkg, cur_ver in dev_deps.items():
             if (
                 pkg.startswith("@angular-devkit/")
                 or pkg.startswith("@angular/")
                 or pkg.startswith("@angular-eslint/")
-                or pkg in ("typescript", "@angular/cli")
+                or pkg.startswith("@typescript-eslint/")
+                or pkg in ("typescript", "@angular/cli", "eslint")
             ):
                 clean_cur = cur_ver.lstrip("^~>=<")
                 if pkg == "typescript" and target_major and target_major in ANGULAR_TS_RECOMMENDED:
@@ -238,6 +240,23 @@ class AngularAdapter(BaseAdapter):
                             )
                         )
                     continue
+
+                if pkg == "eslint" and (has_angular_eslint or (target_major and target_major >= 17)):
+                    rec_eslint = "^8.57.1"
+                    cur_major = extract_major_version(cur_ver)
+                    if cur_major and cur_major < 8:
+                        tier = classify_angular_tier(pkg)
+                        candidates.append(
+                            DependencyChange(
+                                package_name=pkg,
+                                from_version=cur_ver,
+                                to_version=rec_eslint,
+                                change_type="dev",
+                                tier=tier,
+                                rationale=f"Align ESLint to {rec_eslint} for @angular-eslint compatibility. {policy_reason}",
+                            )
+                        )
+                        continue
 
                 major_constraint = get_major_constraint(pkg)
                 latest = self.fetch_latest_version(pkg, target_major=major_constraint)
