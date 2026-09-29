@@ -82,3 +82,57 @@ def test_angular_adapter_apply_upgrade(tmp_path: Path):
 
     updated_lock = json.loads(lock_path.read_text(encoding="utf-8"))
     assert updated_lock["packages"]["node_modules/@angular/core"]["version"] == "18.1.0"
+
+
+def test_resolve_angular_test_command(tmp_path: Path):
+    adapter = AngularAdapter()
+
+    # 1. Karma / ng test script with configuration -> injects --watch=false --browsers=ChromeHeadless
+    script = "npm run lint && ng test --configuration=test"
+    cmd = adapter._resolve_angular_test_command(script, tmp_path, has_npm=True)
+    assert "--watch=false" in cmd
+    assert "--browsers=ChromeHeadless" in cmd
+    assert "npm test --" in cmd
+
+    # 2. Already headless karma.conf.js in a subproject
+    subproject_dir = tmp_path / "projects" / "my-app"
+    subproject_dir.mkdir(parents=True)
+    (subproject_dir / "karma.conf.js").write_text("browsers: ['ChromeHeadless']", encoding="utf-8")
+
+    cmd2 = adapter._resolve_angular_test_command("ng test", tmp_path, has_npm=True)
+    assert "--watch=false" in cmd2
+    # Should not duplicate --browsers if already ChromeHeadless in karma.conf.js
+    assert cmd2.count("--browsers=ChromeHeadless") <= 1
+
+    # 3. Jest script -> kept as npm run test without Karma flags
+    jest_cmd = adapter._resolve_angular_test_command("jest --coverage", tmp_path, has_npm=True)
+    assert jest_cmd == "npm run test"
+
+    # 4. Vitest -> injects --run
+    vitest_cmd = adapter._resolve_angular_test_command("vitest", tmp_path, has_npm=True)
+    assert "--run" in vitest_cmd
+
+
+def test_angular_run_build_and_tests_timeout_handling(tmp_path: Path, monkeypatch):
+    import subprocess
+    from amstralift.core.models import GateStatus
+
+    adapter = AngularAdapter()
+    (tmp_path / "package.json").write_text(
+        json.dumps({"scripts": {"test": "ng test", "build": "ng build"}}),
+        encoding="utf-8",
+    )
+
+    def mock_subprocess_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout", 30))
+
+    monkeypatch.setattr(subprocess, "run", mock_subprocess_run)
+
+    summary = adapter.run_build_and_tests(tmp_path, timeout_seconds=10.0)
+    test_result = next((r for r in summary.results if r.name == "test"), None)
+    assert test_result is not None
+    assert test_result.status == GateStatus.REQUIRED_TIMEOUT
+    assert test_result.exit_code == 124
+    assert "timed out" in test_result.stdout.lower()
+    assert summary.has_required_timeouts
+    assert not summary.has_required_failures  # Timeout is classified as UNCERTAIN, not confirmed broken

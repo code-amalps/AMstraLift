@@ -53,6 +53,7 @@ def run_stage_a(
     target_branch: str = "main",
     run_id: str | None = None,
     explicit_changes: list[DependencyChange] | None = None,
+    test_timeout: float = 300.0,
 ) -> UnsignedAdvisoryBundle:
     """Execute Stage A inside the sanitized workspace."""
     run_id = run_id or f"run_{uuid4().hex[:12]}"
@@ -68,7 +69,7 @@ def run_stage_a(
     adapter.apply_upgrade(workspace_path, candidates)
 
     # 3. Run declared build and test gates
-    gate_summary = adapter.run_build_and_tests(workspace_path)
+    gate_summary = adapter.run_build_and_tests(workspace_path, timeout_seconds=test_timeout)
 
     # 4. Generate unified git patch
     patch = generate_patch(workspace_path, base_commit_sha)

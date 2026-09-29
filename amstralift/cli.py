@@ -61,9 +61,17 @@ def run(
         typer.Option(
             "--allow-failed-gates",
             "--skip-gates",
-            help="Allow Stage B to commit the upgrade branch locally even if sandbox verification gates fail.",
+            "--skip-tests",
+            help="Allow Stage B to commit the upgrade branch locally even if sandbox verification gates fail or time out.",
         ),
     ] = False,
+    test_timeout: Annotated[
+        int,
+        typer.Option(
+            "--test-timeout",
+            help="Timeout in seconds for each build/test gate (default: 300).",
+        ),
+    ] = 300,
 ):
     """Run full two-stage upgrade workflow on a target repository."""
     repo_str = str(repo)
@@ -140,6 +148,7 @@ def run(
                 repo_id=repo_id,
                 remote_url=remote_url,
                 allow_failed_gates=allow_failed_gates,
+                test_timeout=float(test_timeout),
             )
 
         console.print("[bold green]✔ Upgrade workflow completed successfully![/bold green]\n")

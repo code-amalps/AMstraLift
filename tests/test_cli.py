@@ -90,4 +90,32 @@ def test_cli_handles_already_up_to_date(tmp_path: Path, monkeypatch):
     assert "All dependencies are already up to date" in result.stdout
 
 
+def test_cli_run_help_shows_test_options():
+    result = runner.invoke(app, ["run", "--help"])
+    assert result.exit_code == 0
+    assert "--test-timeout" in result.stdout
+    assert "--allow-failed-gate" in result.stdout
 
+
+def test_cli_passes_skip_tests_and_timeout(tmp_path: Path, monkeypatch):
+    from amstralift.execution.stage_a import NoUpgradesAvailableError
+    from amstralift.service import UpgradeOrchestrator
+
+    captured_kwargs = {}
+
+    def mock_run_upgrade(self, **kwargs):
+        captured_kwargs.update(kwargs)
+        raise NoUpgradesAvailableError("Mock done")
+
+    monkeypatch.setattr(UpgradeOrchestrator, "run_upgrade", mock_run_upgrade)
+
+    repo_path = tmp_path / "test-repo"
+    repo_path.mkdir()
+
+    result = runner.invoke(
+        app,
+        ["run", "--repo", str(repo_path), "--skip-tests", "--test-timeout", "45", "--dry-run"],
+    )
+    assert result.exit_code == 0
+    assert captured_kwargs.get("allow_failed_gates") is True
+    assert captured_kwargs.get("test_timeout") == 45.0

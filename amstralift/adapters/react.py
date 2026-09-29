@@ -193,7 +193,7 @@ class ReactAdapter(BaseAdapter):
             from amstralift.adapters.docker_updater import DockerfileUpdater
             DockerfileUpdater.update(repo_path, ecosystem="react", target_version=target_ver)
 
-    def run_build_and_tests(self, repo_path: Path) -> GateSummary:
+    def run_build_and_tests(self, repo_path: Path, timeout_seconds: float = 300.0) -> GateSummary:
         """Execute build and test gates declared in package.json."""
         pkg_file = repo_path / "package.json"
         results: list[GateResult] = []
@@ -205,6 +205,8 @@ class ReactAdapter(BaseAdapter):
         scripts = data.get("scripts", {})
 
         gate_env = get_node_execution_env()
+        # Set CI=true so test runners like Jest / react-scripts run in non-interactive single-pass mode
+        gate_env["CI"] = "true"
         has_npm = shutil.which("npm", path=gate_env.get("PATH")) is not None
 
         gates = [
@@ -256,7 +258,7 @@ class ReactAdapter(BaseAdapter):
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=300,
+                    timeout=timeout_seconds,
                     env=gate_env,
                 )
                 duration = time.time() - start_t
@@ -275,6 +277,23 @@ class ReactAdapter(BaseAdapter):
                         exit_code=proc.returncode,
                         stdout=stdout,
                         stderr=stderr,
+                        duration_seconds=duration,
+                    )
+                )
+            except subprocess.TimeoutExpired:
+                duration = time.time() - start_t
+                timeout_note = (
+                    f"Test runner timed out after {duration:.0f}s. "
+                    "This usually means the test runner is waiting for interactive input or browser connection. "
+                    "Test result is UNCERTAIN — run with --skip-tests / --allow-failed-gates to proceed."
+                )
+                results.append(
+                    GateResult(
+                        name=gate_name,
+                        command=cmd,
+                        status=GateStatus.REQUIRED_TIMEOUT,
+                        exit_code=124,
+                        stdout=timeout_note,
                         duration_seconds=duration,
                     )
                 )

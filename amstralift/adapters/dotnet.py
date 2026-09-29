@@ -196,7 +196,7 @@ class DotNetAdapter(BaseAdapter):
             from amstralift.adapters.docker_updater import DockerfileUpdater
             DockerfileUpdater.update(repo_path, ecosystem="dotnet", target_version=tfm_change.to_version)
 
-    def run_build_and_tests(self, repo_path: Path) -> GateSummary:
+    def run_build_and_tests(self, repo_path: Path, timeout_seconds: float = 300.0) -> GateSummary:
         """Execute dotnet build and dotnet test gates."""
         results: list[GateResult] = []
         has_dotnet = shutil.which("dotnet") is not None
@@ -236,7 +236,7 @@ class DotNetAdapter(BaseAdapter):
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=300,
+                    timeout=timeout_seconds,
                 )
                 duration = time.time() - start_t
                 stdout = proc.stdout or ""
@@ -254,6 +254,22 @@ class DotNetAdapter(BaseAdapter):
                         exit_code=proc.returncode,
                         stdout=stdout,
                         stderr=stderr,
+                        duration_seconds=duration,
+                    )
+                )
+            except subprocess.TimeoutExpired:
+                duration = time.time() - start_t
+                timeout_note = (
+                    f".NET {gate_name} timed out after {duration:.0f}s. "
+                    "Test result is UNCERTAIN — run with --skip-tests / --allow-failed-gates to proceed."
+                )
+                results.append(
+                    GateResult(
+                        name=gate_name,
+                        command=cmd,
+                        status=GateStatus.REQUIRED_TIMEOUT,
+                        exit_code=124,
+                        stdout=timeout_note,
                         duration_seconds=duration,
                     )
                 )

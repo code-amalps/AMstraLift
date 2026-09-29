@@ -215,7 +215,7 @@ class PythonAdapter(BaseAdapter):
             from amstralift.adapters.docker_updater import DockerfileUpdater
             DockerfileUpdater.update(repo_path, ecosystem="python", target_version=python_change.to_version)
 
-    def run_build_and_tests(self, repo_path: Path) -> GateSummary:
+    def run_build_and_tests(self, repo_path: Path, timeout_seconds: float = 300.0) -> GateSummary:
         """Execute build and test gates declared in the Python project."""
         results: list[GateResult] = []
 
@@ -256,7 +256,7 @@ class PythonAdapter(BaseAdapter):
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=300,
+                    timeout=timeout_seconds,
                 )
                 duration = time.time() - start_t
                 stdout = proc.stdout or ""
@@ -274,6 +274,22 @@ class PythonAdapter(BaseAdapter):
                         exit_code=proc.returncode,
                         stdout=stdout,
                         stderr=stderr,
+                        duration_seconds=duration,
+                    )
+                )
+            except subprocess.TimeoutExpired:
+                duration = time.time() - start_t
+                timeout_note = (
+                    f"Python {gate_name} timed out after {duration:.0f}s. "
+                    "Test result is UNCERTAIN — run with --skip-tests / --allow-failed-gates to proceed."
+                )
+                results.append(
+                    GateResult(
+                        name=gate_name,
+                        command=cmd,
+                        status=GateStatus.REQUIRED_TIMEOUT,
+                        exit_code=124,
+                        stdout=timeout_note,
                         duration_seconds=duration,
                     )
                 )

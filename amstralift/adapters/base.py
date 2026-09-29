@@ -51,7 +51,7 @@ class BaseAdapter(ABC):
         pass
 
     @abstractmethod
-    def run_build_and_tests(self, repo_path: Path) -> GateSummary:
+    def run_build_and_tests(self, repo_path: Path, timeout_seconds: float = 300.0) -> GateSummary:
         """Execute build and test gates declared in the repository."""
         pass
 
