@@ -2,14 +2,87 @@
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
-from amstralift.adapters.npm_lockfile import update_npm_lockfile
+from amstralift.adapters.npm_lockfile import (
+    _remove_node_modules,
+    install_npm_dependencies,
+    update_npm_lockfile,
+)
 from amstralift.core.models import DependencyChange, DependencyTier
 
 
 def test_update_npm_lockfile_no_lockfile(tmp_path: Path):
     result = update_npm_lockfile(tmp_path, [])
     assert result is False
+
+
+def test_install_npm_dependencies_uses_local_workspace(tmp_path: Path, monkeypatch):
+    run_mock = MagicMock(return_value=MagicMock(returncode=0, stdout="", stderr=""))
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr("amstralift.adapters.npm_lockfile._find_npm", lambda env: "npm")
+    monkeypatch.setattr("amstralift.adapters.npm_lockfile._remove_node_modules", lambda path: None)
+    monkeypatch.setattr("amstralift.adapters.npm_lockfile.subprocess.run", run_mock)
+
+    install_npm_dependencies(tmp_path, env={"PATH": "test-path"})
+
+    args, kwargs = run_mock.call_args
+    assert args[0] == [
+        "npm",
+        "install",
+        "--legacy-peer-deps",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+    ]
+    assert kwargs["cwd"] == tmp_path
+    assert kwargs["env"] == {"PATH": "test-path"}
+
+
+def test_update_npm_lockfile_removes_node_modules_before_npm(tmp_path: Path, monkeypatch):
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
+    calls = []
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr("amstralift.adapters.npm_lockfile._find_npm", lambda env: "npm")
+    monkeypatch.setattr(
+        "amstralift.adapters.npm_lockfile._remove_node_modules",
+        lambda path: calls.append("remove"),
+    )
+    monkeypatch.setattr(
+        "amstralift.adapters.npm_lockfile._regenerate_lockfile",
+        lambda *args, **kwargs: calls.append("npm") or True,
+    )
+
+    assert update_npm_lockfile(tmp_path, []) is True
+    assert calls == ["remove", "npm"]
+
+
+def test_remove_node_modules_deletes_stale_directory(tmp_path: Path):
+    node_modules = tmp_path / "node_modules"
+    node_modules.mkdir()
+    (node_modules / "stale.txt").write_text("stale", encoding="utf-8")
+
+    _remove_node_modules(tmp_path)
+
+    assert not node_modules.exists()
+
+
+def test_install_npm_dependencies_reports_install_failure(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr("amstralift.adapters.npm_lockfile._find_npm", lambda env: "npm")
+    monkeypatch.setattr("amstralift.adapters.npm_lockfile._remove_node_modules", lambda path: None)
+    monkeypatch.setattr(
+        "amstralift.adapters.npm_lockfile.subprocess.run",
+        lambda *args, **kwargs: MagicMock(returncode=1, stdout="", stderr="ERESOLVE"),
+    )
+
+    try:
+        install_npm_dependencies(tmp_path)
+    except RuntimeError as exc:
+        assert "ERESOLVE" in str(exc)
+    else:
+        raise AssertionError("expected npm installation failure to be reported")
 
 
 def test_update_npm_lockfile_deterministic_edit_and_strip_integrity(tmp_path: Path):

@@ -38,7 +38,70 @@ def test_angular_adapter_detect(tmp_path: Path):
     assert adapter.detect(tmp_path)
 
 
-def test_angular_adapter_apply_upgrade(tmp_path: Path):
+def test_fetch_latest_version_uses_highest_stable_semver_in_major(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "versions": {
+                    "1.9.0": {},
+                    "1.10.0": {},
+                    "1.10.0-rc.1": {},
+                    "1.10.2": {},
+                    "2.0.0": {},
+                }
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def get(url):
+            return FakeResponse()
+
+    monkeypatch.setattr("amstralift.adapters.angular.httpx.Client", FakeClient)
+
+    assert AngularAdapter().fetch_latest_version("example", target_major=1) == "1.10.2"
+
+
+def test_latest_angular_target_uses_supported_typescript_major(tmp_path: Path, monkeypatch):
+    pkg_path = tmp_path / "package.json"
+    pkg_path.write_text(
+        json.dumps(
+            {
+                "dependencies": {"@angular/core": "~12.2.6"},
+                "devDependencies": {"typescript": "~4.2.4"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    adapter = AngularAdapter()
+
+    def fetch_version(package_name: str, target_major: int | None = None) -> str | None:
+        return {
+            "@angular/core": "22.2.0",
+            "typescript": "7.0.2",
+        }.get(package_name)
+
+    monkeypatch.setattr(adapter, "fetch_latest_version", fetch_version)
+
+    candidates = adapter.discover_candidates(tmp_path)
+    typescript = next(change for change in candidates if change.package_name == "typescript")
+
+    assert typescript.to_version == "^6.0.3"
+    assert "Angular 22 compatibility" in typescript.rationale
+
+
+def test_angular_adapter_apply_upgrade(tmp_path: Path, monkeypatch):
     adapter = AngularAdapter()
     pkg_path = tmp_path / "package.json"
     lock_path = tmp_path / "package-lock.json"
@@ -64,6 +127,11 @@ def test_angular_adapter_apply_upgrade(tmp_path: Path):
     )
 
     from amstralift.core.models import DependencyChange
+
+    monkeypatch.setattr(
+        "amstralift.adapters.npm_lockfile.install_npm_dependencies",
+        lambda *args, **kwargs: None,
+    )
 
     changes = [
         DependencyChange(

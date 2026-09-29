@@ -167,6 +167,26 @@ def prepare_stage_a_workspace(
 
 def generate_patch(repo_path: Path, base_commit: str) -> str:
     """Generate clean unified git diff against base commit."""
+    # Clean ephemeral build and tool cache directories so binary artifacts never corrupt patches
+    for cache_name in (
+        ".angular",
+        ".nx",
+        ".turbo",
+        ".cache",
+        "dist",
+        "out-tsc",
+        "coverage",
+        "__pycache__",
+        "bin",
+        "obj",
+    ):
+        p = repo_path / cache_name
+        if p.exists():
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                p.unlink(missing_ok=True)
+
     run_git(["add", "-N", "."], cwd=repo_path)
     res = run_git(["diff", "--full-index", "--binary", base_commit], cwd=repo_path)
     if res.returncode != 0:

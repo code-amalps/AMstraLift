@@ -101,19 +101,40 @@ def test_angular_modernize_runs_standalone_on_v17(tmp_path: Path):
     adapter = AngularAdapter()
     with patch("shutil.which", return_value="/bin/npx"), \
          patch("subprocess.run") as mock_sub:
-        # First call: npm install (sync), then 3x schematic phases
+        # Dependency sync happens during apply_upgrade, then run the 3 schematic phases.
         mock_sub.return_value = MagicMock(returncode=0, stdout="", stderr="")
         applied = adapter.apply_modernizations(tmp_path, ["standalone"])
 
         # Must have exactly 1 success message (Standalone architecture)
         assert any("Standalone" in a for a in applied)
-        # subprocess called at least 4 times: npm install + 3 schematic phases
-        assert mock_sub.call_count >= 4
+        assert mock_sub.call_count == 3
         # Verify all 3 modes were invoked
         all_calls = " ".join(str(c) for c in mock_sub.call_args_list)
         assert "convert-to-standalone" in all_calls
         assert "prune-ng-modules" in all_calls
         assert "standalone-bootstrap" in all_calls
+
+
+def test_angular_modernize_removes_unsupported_default_project(tmp_path: Path):
+    (tmp_path / "package.json").write_text(
+        json.dumps({"dependencies": {"@angular/core": "^22.2.0"}}),
+        encoding="utf-8",
+    )
+    workspace_file = tmp_path / "angular.json"
+    workspace_file.write_text(
+        json.dumps({"version": 1, "defaultProject": "app", "projects": {"app": {}}}),
+        encoding="utf-8",
+    )
+
+    adapter = AngularAdapter()
+    with patch("shutil.which", return_value="npx"), patch("subprocess.run") as mock_sub:
+        mock_sub.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        applied = adapter.apply_modernizations(tmp_path, ["standalone"])
+
+    workspace = json.loads(workspace_file.read_text(encoding="utf-8"))
+    assert "defaultProject" not in workspace
+    assert any("Converted all components" in message for message in applied)
+    assert mock_sub.call_count == 3
 
 
 def test_stage_b_includes_modernizations_in_pr_body(tmp_path: Path):

@@ -23,6 +23,7 @@ FORBIDDEN_PATH_PREFIXES = (
     ".git/",
     ".vscode/",
     ".idea/",
+    ".angular/",
 )
 
 FORBIDDEN_FILENAMES = {

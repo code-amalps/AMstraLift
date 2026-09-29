@@ -68,7 +68,7 @@ ANGULAR_TS_MATRIX = {
     19: 5,
     20: 5,
     21: 5,
-    22: 5,
+    22: 6,
 }
 
 ANGULAR_TS_RECOMMENDED: dict[int, str] = {
@@ -81,6 +81,7 @@ ANGULAR_TS_RECOMMENDED: dict[int, str] = {
     18: "^5.4.5",
     19: "^5.6.3",
     20: "^5.7.2",
+    22: "^6.0.3",
 }
 
 
@@ -91,6 +92,18 @@ def extract_major_version(ver_str: str) -> int | None:
     if match:
         return int(match.group(1))
     return None
+
+
+def _remove_legacy_default_project(repo_path: Path) -> None:
+    """Remove the workspace option rejected by current Angular CLI schemas."""
+    workspace_file = repo_path / "angular.json"
+    if not workspace_file.exists():
+        return
+
+    workspace = json.loads(workspace_file.read_text(encoding="utf-8"))
+    if "defaultProject" in workspace:
+        del workspace["defaultProject"]
+        workspace_file.write_text(json.dumps(workspace, indent=2) + "\n", encoding="utf-8")
 
 
 class AngularAdapter(BaseAdapter):
@@ -137,10 +150,13 @@ class AngularAdapter(BaseAdapter):
                 if res.status_code == 200:
                     data = res.json()
                     if target_major is not None:
-                        versions = list(data.get("versions", {}).keys())
-                        matching = [v for v in versions if v.startswith(f"{target_major}.")]
+                        matching = []
+                        for version in data.get("versions", {}):
+                            match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
+                            if match and int(match.group(1)) == target_major:
+                                matching.append((tuple(map(int, match.groups())), version))
                         if matching:
-                            return matching[-1]
+                            return max(matching, key=lambda item: item[0])[1]
                         return None
                     return data.get("dist-tags", {}).get("latest")
         except Exception:
@@ -170,6 +186,10 @@ class AngularAdapter(BaseAdapter):
         # Detect current Angular core major from package.json
         core_ver = direct_deps.get("@angular/core") or dev_deps.get("@angular/core") or direct_deps.get("@angular/common")
         cur_angular_major = extract_major_version(core_ver) if core_ver else None
+        target_angular_major = target_major
+        if target_angular_major is None:
+            latest_core = self.fetch_latest_version("@angular/core")
+            target_angular_major = extract_major_version(latest_core) if latest_core else None
 
         if target_major is None and self.incremental and cur_angular_major is not None:
             target_major = cur_angular_major + 1
@@ -225,8 +245,8 @@ class AngularAdapter(BaseAdapter):
                 or pkg in ("typescript", "@angular/cli", "eslint")
             ):
                 clean_cur = cur_ver.lstrip("^~>=<")
-                if pkg == "typescript" and target_major and target_major in ANGULAR_TS_RECOMMENDED:
-                    rec_ts = ANGULAR_TS_RECOMMENDED[target_major]
+                if pkg == "typescript" and target_angular_major in ANGULAR_TS_RECOMMENDED:
+                    rec_ts = ANGULAR_TS_RECOMMENDED[target_angular_major]
                     if clean_cur != rec_ts.lstrip("^~>=<"):
                         tier = classify_angular_tier(pkg)
                         candidates.append(
@@ -236,7 +256,7 @@ class AngularAdapter(BaseAdapter):
                                 to_version=rec_ts,
                                 change_type="dev",
                                 tier=tier,
-                                rationale=f"Align TypeScript to {rec_ts} for Angular {target_major} compatibility. {policy_reason}",
+                                rationale=f"Align TypeScript to {rec_ts} for Angular {target_angular_major} compatibility. {policy_reason}",
                             )
                         )
                     continue
@@ -292,10 +312,11 @@ class AngularAdapter(BaseAdapter):
         pkg_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
         # Update package-lock.json accurately using npm_lockfile
-        from amstralift.adapters.npm_lockfile import update_npm_lockfile
+        from amstralift.adapters.npm_lockfile import install_npm_dependencies, update_npm_lockfile
 
         gate_env = get_node_execution_env()
         update_npm_lockfile(repo_path, changes, env=gate_env)
+        install_npm_dependencies(repo_path, env=gate_env)
 
         # ── Docker: update FROM / image: tags in Dockerfiles & docker-compose ──
         # Determine target Angular major from changes if possible
@@ -331,6 +352,8 @@ class AngularAdapter(BaseAdapter):
         has_npx = shutil.which("npx", path=gate_env.get("PATH")) is not None
 
         normalized = [f.strip().lower() for f in modernize_flags]
+        if major and major >= 17 and has_npx:
+            _remove_legacy_default_project(repo_path)
 
         # 1. Control-Flow (*ngIf -> @if, *ngFor -> @for)
         if any(f in ("control-flow", "controlflow", "all") for f in normalized):
@@ -372,14 +395,21 @@ class AngularAdapter(BaseAdapter):
         if any(f in ("standalone", "all") for f in normalized):
             if major and major >= 15:
                 if has_npx:
-                    # Ensure node_modules is in sync with updated package.json before running schematic.
-                    # The sandbox shares a symlinked node_modules from the source repo which may be stale.
-                    npm_cmd = shutil.which("npm", path=gate_env.get("PATH")) or shutil.which("npm")
-                    nm_synced = False
-                    if npm_cmd:
+                    # Dependencies were installed in the isolated workspace by apply_upgrade.
+                    standalone_ok = True
+                    for mode in ["convert-to-standalone", "prune-ng-modules", "standalone-bootstrap"]:
+                        cmd = [
+                            "npx",
+                            "@angular/cli",
+                            "generate",
+                            "@angular/core:standalone",
+                            f"--mode={mode}",
+                            "--interactive=false",
+                            "--defaults",
+                        ]
                         try:
-                            sync_res = subprocess.run(
-                                [npm_cmd, "install", "--legacy-peer-deps", "--no-audit", "--no-fund"],
+                            res = subprocess.run(
+                                cmd,
                                 cwd=repo_path,
                                 env=gate_env,
                                 capture_output=True,
@@ -387,65 +417,29 @@ class AngularAdapter(BaseAdapter):
                                 timeout=300,
                                 shell=sys.platform == "win32",
                             )
-                            nm_synced = sync_res.returncode == 0
-                        except Exception:
-                            nm_synced = False
-
-                    if not nm_synced:
-                        applied.append(
-                            "Skipped standalone migration: failed to sync node_modules. "
-                            "Run 'npm install --legacy-peer-deps' in the repo then re-run AMstraLift."
-                        )
-                    else:
-                        # Run full 3-phase standalone migration:
-                        # Phase 1: convert-to-standalone
-                        # Phase 2: prune-ng-modules
-                        # Phase 3: standalone-bootstrap
-                        standalone_ok = True
-                        for mode in ["convert-to-standalone", "prune-ng-modules", "standalone-bootstrap"]:
-                            cmd = [
-                                "npx",
-                                "@angular/cli",
-                                "generate",
-                                "@angular/core:standalone",
-                                f"--mode={mode}",
-                                "--interactive=false",
-                                "--defaults",
-                            ]
-                            try:
-                                res = subprocess.run(
-                                    cmd,
-                                    cwd=repo_path,
-                                    env=gate_env,
-                                    capture_output=True,
-                                    text=True,
-                                    timeout=300,
-                                    shell=sys.platform == "win32",
-                                )
-                                if res.returncode != 0:
-                                    raw_err = (res.stderr or res.stdout or "").strip()
-                                    standalone_ok = False
-                                    if "does not support schematics" in raw_err or "Cannot find module" in raw_err:
-                                        applied.append(
-                                            f"Standalone migration phase '{mode}' failed: node_modules out of sync. "
-                                            "Run 'npm install' then re-run AMstraLift."
-                                        )
-                                    else:
-                                        applied.append(
-                                            f"Standalone migration phase '{mode}' failed (exit {res.returncode}): "
-                                            f"{raw_err[:120]}"
-                                        )
-                                    break
-                            except Exception as e:
+                            if res.returncode != 0:
+                                raw_err = (res.stderr or res.stdout or "").strip()
                                 standalone_ok = False
-                                applied.append(f"Standalone migration phase '{mode}' error: {str(e)[:80]}")
+                                if "does not support schematics" in raw_err or "Cannot find module" in raw_err:
+                                    applied.append(
+                                        f"Standalone migration phase '{mode}' failed: node_modules out of sync."
+                                    )
+                                else:
+                                    applied.append(
+                                        f"Standalone migration phase '{mode}' failed (exit {res.returncode}): "
+                                        f"{raw_err[:120]}"
+                                    )
                                 break
+                        except Exception as e:
+                            standalone_ok = False
+                            applied.append(f"Standalone migration phase '{mode}' error: {str(e)[:80]}")
+                            break
 
-                        if standalone_ok:
-                            applied.append(
-                                "Converted all components and directives to Angular Standalone architecture "
-                                "(convert-to-standalone → prune-ng-modules → standalone-bootstrap)"
-                            )
+                    if standalone_ok:
+                        applied.append(
+                            "Converted all components and directives to Angular Standalone architecture "
+                            "(convert-to-standalone -> prune-ng-modules -> standalone-bootstrap)"
+                        )
                 else:
                     applied.append("Skipped standalone migration: npx CLI not found in environment")
             else:
