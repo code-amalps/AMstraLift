@@ -310,6 +310,14 @@ class AngularAdapter(BaseAdapter):
                 if change.package_name in data["devDependencies"]:
                     data["devDependencies"][change.package_name] = change.to_version
 
+        # Clean up obsolete legacy Node/OpenSSL workarounds in scripts (e.g. node --openssl-legacy-provider .../ng)
+        if "scripts" in data and isinstance(data["scripts"], dict):
+            for script_key, script_val in list(data["scripts"].items()):
+                if isinstance(script_val, str) and "--openssl-legacy-provider" in script_val:
+                    cleaned_val = re.sub(r"node\s+--openssl-legacy-provider\s+\S*ng(\.js)?", "ng", script_val)
+                    cleaned_val = cleaned_val.replace("--openssl-legacy-provider", "").strip()
+                    data["scripts"][script_key] = cleaned_val
+
         pkg_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
         # Update package-lock.json accurately using npm_lockfile
