@@ -212,9 +212,9 @@ def verify_rediff_integrity(
             "Branch has moved; must rebase-and-rerun."
         )
 
-    # 2. Check that working tree is clean
-    status_res = run_git(["status", "--porcelain"], cwd=repo_path)
-    if (status_res.stdout or "").strip():
+    # 2. Check that working tree is clean (ignoring ephemeral caches like .angular/ or .nx/)
+    if not is_working_tree_clean(repo_path, ignore_ephemeral=True):
+        status_res = run_git(["status", "--porcelain"], cwd=repo_path)
         raise GitError(f"Target repository has uncommitted changes: {status_res.stdout}")
 
     # 3. Check patch apply dry-run with --binary and whitespace ignoring
