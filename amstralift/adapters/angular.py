@@ -204,7 +204,12 @@ class AngularAdapter(BaseAdapter):
                     )
 
         for pkg, cur_ver in dev_deps.items():
-            if pkg.startswith("@angular-devkit/") or pkg in ("typescript", "@angular/cli"):
+            if (
+                pkg.startswith("@angular-devkit/")
+                or pkg.startswith("@angular/")
+                or pkg.startswith("@angular-eslint/")
+                or pkg in ("typescript", "@angular/cli")
+            ):
                 clean_cur = cur_ver.lstrip("^~>=<")
                 major_constraint = get_major_constraint(pkg)
                 latest = self.fetch_latest_version(pkg, target_major=major_constraint)
