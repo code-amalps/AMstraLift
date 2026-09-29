@@ -95,16 +95,52 @@ def extract_major_version(ver_str: str) -> int | None:
     return None
 
 
-def _remove_legacy_default_project(repo_path: Path) -> None:
-    """Remove the workspace option rejected by current Angular CLI schemas."""
+def _modernize_angular_workspace_json(repo_path: Path, target_major: int | None = None) -> None:
+    """Modernize angular.json schema across Angular major versions.
+
+    - Angular 14+: remove obsolete 'defaultProject' rejected by modern CLI schemas
+    - Angular 17+: migrate 'browserTarget' -> 'buildTarget' in serve / extract-i18n
+    """
     workspace_file = repo_path / "angular.json"
     if not workspace_file.exists():
         return
 
-    workspace = json.loads(workspace_file.read_text(encoding="utf-8"))
-    if "defaultProject" in workspace:
-        del workspace["defaultProject"]
-        workspace_file.write_text(json.dumps(workspace, indent=2) + "\n", encoding="utf-8")
+    try:
+        workspace = json.loads(workspace_file.read_text(encoding="utf-8"))
+        changed = False
+
+        if "defaultProject" in workspace:
+            del workspace["defaultProject"]
+            changed = True
+
+        if target_major is None or target_major >= 17:
+            def _replace_browser_target(obj: Any) -> bool:
+                modified = False
+                if isinstance(obj, dict):
+                    if "browserTarget" in obj:
+                        obj["buildTarget"] = obj.pop("browserTarget")
+                        modified = True
+                    for v in obj.values():
+                        if _replace_browser_target(v):
+                            modified = True
+                elif isinstance(obj, list):
+                    for item in obj:
+                        if _replace_browser_target(item):
+                            modified = True
+                return modified
+
+            if _replace_browser_target(workspace):
+                changed = True
+
+        if changed:
+            workspace_file.write_text(json.dumps(workspace, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _remove_legacy_default_project(repo_path: Path) -> None:
+    """Backward-compatible alias for legacy callers and unit tests."""
+    _modernize_angular_workspace_json(repo_path)
 
 
 class AngularAdapter(BaseAdapter):
@@ -332,6 +368,10 @@ class AngularAdapter(BaseAdapter):
 
         pkg_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
+        # Modernize angular.json schema (defaultProject, browserTarget -> buildTarget)
+        target_major_int = int(target_major_str) if "target_major_str" in locals() and target_major_str else None
+        _modernize_angular_workspace_json(repo_path, target_major=target_major_int)
+
         # Update package-lock.json accurately using npm_lockfile
         from amstralift.adapters.npm_lockfile import install_npm_dependencies, update_npm_lockfile
 
@@ -368,8 +408,8 @@ class AngularAdapter(BaseAdapter):
         has_npx = shutil.which("npx", path=gate_env.get("PATH")) is not None
 
         normalized = [f.strip().lower() for f in modernize_flags]
-        if major and major >= 17 and has_npx:
-            _remove_legacy_default_project(repo_path)
+        if major and major >= 14:
+            _modernize_angular_workspace_json(repo_path, target_major=major)
 
         # 1. Control-Flow (*ngIf -> @if, *ngFor -> @for)
         if any(f in ("control-flow", "controlflow", "all") for f in normalized):
