@@ -115,6 +115,7 @@ def test_resolve_angular_test_command(tmp_path: Path):
 
 def test_angular_run_build_and_tests_timeout_handling(tmp_path: Path, monkeypatch):
     import subprocess
+
     from amstralift.core.models import GateStatus
 
     adapter = AngularAdapter()

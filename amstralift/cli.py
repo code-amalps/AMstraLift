@@ -345,6 +345,32 @@ def audit(
 
 
 @app.command()
+def serve(
+    host: Annotated[str, typer.Option("--host", "-h", help="Host interface to bind the API server to.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", "-p", help="Port to bind the API server to.")] = 8000,
+):
+    """Start the AMstraLift REST API server with interactive Swagger UI."""
+    import uvicorn
+
+    from amstralift.api.app import create_app
+
+    console.print(
+        Panel.fit(
+            f"[bold blue]AMstraLift REST API[/bold blue]\n\n"
+            f"Server running at: [bold cyan]http://{host}:{port}[/bold cyan]\n"
+            f"Interactive Swagger UI: [bold green]http://{host}:{port}/docs[/bold green]\n"
+            f"ReDoc Documentation: [bold magenta]http://{host}:{port}/redoc[/bold magenta]\n"
+            f"[dim]Press Ctrl+C to stop.[/dim]",
+            title="Service Online",
+            border_style="blue",
+        )
+    )
+
+    api_app = create_app()
+    uvicorn.run(api_app, host=host, port=port)
+
+
+@app.command()
 def version():
     """Display AMstraLift version."""
     from amstralift import __version__
