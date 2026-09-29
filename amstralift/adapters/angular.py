@@ -303,6 +303,7 @@ class AngularAdapter(BaseAdapter):
         # 1. Control-Flow (*ngIf -> @if, *ngFor -> @for)
         if any(f in ("control-flow", "controlflow", "all") for f in normalized):
             if major and major >= 17:
+                cf_migrated = False
                 if has_npx:
                     cmd = ["npx", "@angular/cli", "generate", "@angular/core:control-flow", "--interactive=false"]
                     try:
@@ -317,13 +318,21 @@ class AngularAdapter(BaseAdapter):
                         )
                         if res.returncode == 0:
                             applied.append("Migrated templates to modern Angular control flow (@if, @for, @switch)")
-                        else:
-                            err_hint = (res.stderr or res.stdout or "").strip()[:80]
-                            applied.append(f"Control-flow migration returned exit code {res.returncode}: {err_hint}")
-                    except Exception as e:
-                        applied.append(f"Control-flow migration error: {str(e)[:80]}")
-                else:
-                    applied.append("Skipped control-flow migration: npx CLI not found in environment")
+                            cf_migrated = True
+                    except Exception:
+                        pass
+
+                if not cf_migrated:
+                    from amstralift.adapters.angular_control_flow import migrate_repository_control_flow
+
+                    stats = migrate_repository_control_flow(repo_path)
+                    total_directives = sum(stats.values())
+                    if total_directives > 0:
+                        applied.append(
+                            f"Migrated {len(stats)} template(s) ({total_directives} directives) to modern Angular control flow (@if, @for)"
+                        )
+                    else:
+                        applied.append("Control-flow migration completed (no legacy *ngIf/*ngFor directives found)")
             else:
                 applied.append(f"Skipped control-flow migration: requires Angular 17+ (current is v{major or 'unknown'})")
 

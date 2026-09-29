@@ -215,3 +215,57 @@ def test_react_modernize_updates_jsx_transform(tmp_path: Path):
     updated_text = tsconfig.read_text(encoding="utf-8")
     assert '"jsx": "react-jsx"' in updated_text
 
+
+def test_transform_angular_control_flow_directives():
+    from amstralift.adapters.angular_control_flow import transform_angular_control_flow
+
+    template = """
+    <div *ngIf="user$ | async as user">
+      <span>Welcome, {{ user.name }}</span>
+    </div>
+    <ng-container *ngIf="isAdmin">
+      <admin-panel></admin-panel>
+    </ng-container>
+    <ul>
+      <li *ngFor="let item of items; trackBy: customTrack">
+        {{ item }}
+      </li>
+    </ul>
+    """
+    transformed, count = transform_angular_control_flow(template)
+    assert count == 3
+    assert "@if (user$ | async; as user)" in transformed
+    assert "@if (isAdmin)" in transformed
+    assert "@for (let item of items; track customTrack)" in transformed
+    assert "<ng-container" not in transformed
+
+
+def test_angular_modernize_falls_back_when_npx_fails(tmp_path: Path):
+    pkg_file = tmp_path / "package.json"
+    pkg_file.write_text(json.dumps({
+        "dependencies": {
+            "@angular/core": "^18.2.0",
+        }
+    }), encoding="utf-8")
+
+    html_file = tmp_path / "test.component.html"
+    html_file.write_text('<button *ngIf="isLoggedIn">Logout</button>', encoding="utf-8")
+
+    adapter = AngularAdapter()
+    with patch("shutil.which", return_value="/bin/npx"), \
+         patch("subprocess.run") as mock_sub:
+        # Simulate Angular CLI error (e.g. exit code 127 or schematic missing)
+        mock_sub.return_value = MagicMock(returncode=127, stdout="", stderr="Package does not support schematics")
+
+        applied = adapter.apply_modernizations(tmp_path, ["control-flow"])
+
+        assert len(applied) == 1
+        assert "Migrated 1 template(s)" in applied[0]
+        assert "@if" in applied[0]
+
+        # Verify template on disk was actually migrated
+        updated_html = html_file.read_text(encoding="utf-8")
+        assert "@if (isLoggedIn)" in updated_html
+        assert "*ngIf" not in updated_html
+
+
