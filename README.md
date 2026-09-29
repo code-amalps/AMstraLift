@@ -8,10 +8,12 @@ AMstraLift is an automated dependency and framework upgrade engine built around 
 
 ## 📌 Implementation Status
 
-> **Core engine implementation, hardened remote publisher, CI templates, and the Dependency Security & Safe Upgrade Engine are complete.**  
-> The test suite has **111 passing tests (100% pass rate)**.
+> **Core engine implementation, hardened remote publisher, CI templates, live container registry synchronization, REST API service, and the Dependency Security & Safe Upgrade Engine are complete.**  
+> The test suite has **156 passing tests (100% pass rate)**.
 
-### Test Taxonomy (111 Passing Tests)
+### Test Taxonomy (156 Passing Tests)
+- **REST API & Swagger Service (7 tests)**: FastAPI endpoints (`/api/v1/health`, `/api/v1/policy`, `/api/v1/audit`, `/api/v1/upgrade`), root redirect to `/docs`, error handling, and CORS middleware.
+- **Docker & Container Registry Sync (34 tests)**: Multi-stage Dockerfile parsing, suffix-preserving tags (`-alpine`, `-slim`, `-jammy`), live Microsoft Container Registry (MCR) queries for .NET images, Docker Hub Official API for Node.js and Python, and live Node.js LTS release schedule synchronization.
 - **Dependency Security & Safe Upgrade Engine (26 tests)**:
   - **OSV.dev Scanner**: Zero-cost vulnerability queries across ecosystems (npm, NuGet, PyPI), batching, and cache hits.
   - **Direct & Transitive Dependency Graph**: Manifest and lockfile parsing across npm (v1, v2, v3 lockfiles), .NET (`Directory.Packages.props` CPM, direct `.csproj`, `packages.lock.json`), and Python (`pyproject.toml`, `requirements.txt`).
@@ -20,7 +22,7 @@ AMstraLift is an automated dependency and framework upgrade engine built around 
   - **Governance & SLA Enforcement**: Policy file parsing (`.amstralift/security-policy.yaml`), custom severity SLAs, auto-remediation triggers, exceptions, and audit export.
 - **Unit Tests (30 tests)**: Cryptographic signing (`HMAC-SHA256`), canonical bundle serialization, TTL expiry, governance policies (Angular LTS staleness checks, Python runtime default resolution with no-match fallback, time-boxed CVE exceptions, EOL escalation SLAs, Section 16 pilot metrics calculation), GitHub provider client unit tests (idempotency key hashing, deterministic branch names with short hash collision avoidance, 422 recovery, timeout PR recovery, label failure handling, in-memory token sanitization).
 - **CI Template & Security Tests (6 tests)**: YAML schema verification, concurrency protection (`cancel-in-progress: false`), least-privilege permissions (`contents: write`, `pull-requests: write`, `issues: write`), timeout validation, and `amstralift init-ci` generator execution.
-- **Adapter Integration Tests (16 tests)**: Real manifest and lockfile generation, version discovery, and build/test gates across Angular, Python (PyPI), .NET (NuGet), and React (npm).
+- **Adapter Integration Tests (21 tests)**: Real manifest and lockfile generation, version discovery, watch-mode timeout prevention (`REQUIRED_TIMEOUT`), headless browser detection, and build/test gates across Angular, Python (PyPI), .NET (NuGet), and React (npm).
 - **Trust-Boundary & Security Tests (17 tests)**: Path traversal rejection (`..`), symlink blocking (`mode 120000`), pipeline & governance file protection (`.github/workflows/`, `CODEOWNERS`, `SECURITY.md`), git credential scrubbing (`.git/config`, hooks), and re-diff verification.
 - **Remote Publishing & Stage B Hardening Tests (16 tests)**: End-to-end publishing against real bare Git remotes, clean worktree verification, selective patch path staging (no `git add .`), patch apply aborts, duplicate PR detection & idempotency (zero duplicate PRs), push retry recovery (reusing existing pushed branch on API timeout), diverged remote branch conflict rejection (no force push), remote target branch drift detection, stale-base commit rejection, and tampered bundle rejection.
 
@@ -139,6 +141,46 @@ uv run amstralift run --repo "C:\path\to\my-app" --publish --token $env:GITHUB_T
 ```powershell
 # Generate turnkey GitHub Actions workflows in a repository
 uv run amstralift init-ci --provider github --repo .
+```
+
+---
+
+## 🌐 REST API Service (`amstralift serve`)
+
+AMstraLift can run as an HTTP microservice with auto-generated OpenAPI / Swagger UI documentation, allowing teams to trigger scans and upgrades remotely without running local CLI commands.
+
+### Starting the Server
+```powershell
+# Default: binds to http://127.0.0.1:8000
+amstralift serve
+
+# Custom host and port (e.g. for container/cloud deployment)
+amstralift serve --host 0.0.0.0 --port 8080
+```
+
+### Interactive Documentation & Swagger UI
+Once running, open your browser to:
+- **Interactive Swagger UI**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- **ReDoc Documentation**: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
+
+### Key Endpoints
+
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `GET` | `/api/v1/health` | Healthcheck, version, available adapters, and host capabilities (Docker, Git). |
+| `GET` | `/api/v1/policy` | Inspect active organizational SLA and exception policies. |
+| `POST` | `/api/v1/audit` | Scan dependencies for CVEs and optionally preview or apply safe remediations. |
+| `POST` | `/api/v1/upgrade` | Execute complete two-stage framework and dependency upgrades. |
+
+#### Example: Triggering a Security Audit via curl
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/audit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo_path": "/workspace/my-app",
+    "ecosystem": "angular",
+    "mode": "audit"
+  }'
 ```
 
 ---
