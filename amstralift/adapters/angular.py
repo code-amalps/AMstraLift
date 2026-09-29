@@ -9,6 +9,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -304,11 +305,23 @@ class AngularAdapter(BaseAdapter):
             if major and major >= 17:
                 if has_npx:
                     cmd = ["npx", "@angular/cli", "generate", "@angular/core:control-flow", "--interactive=false"]
-                    res = subprocess.run(cmd, cwd=repo_path, env=gate_env, capture_output=True, text=True, timeout=180)
-                    if res.returncode == 0:
-                        applied.append("Migrated templates to modern Angular control flow (@if, @for, @switch)")
-                    else:
-                        applied.append(f"Control-flow migration returned exit code {res.returncode}: {res.stderr[:80]}")
+                    try:
+                        res = subprocess.run(
+                            cmd,
+                            cwd=repo_path,
+                            env=gate_env,
+                            capture_output=True,
+                            text=True,
+                            timeout=180,
+                            shell=sys.platform == "win32",
+                        )
+                        if res.returncode == 0:
+                            applied.append("Migrated templates to modern Angular control flow (@if, @for, @switch)")
+                        else:
+                            err_hint = (res.stderr or res.stdout or "").strip()[:80]
+                            applied.append(f"Control-flow migration returned exit code {res.returncode}: {err_hint}")
+                    except Exception as e:
+                        applied.append(f"Control-flow migration error: {str(e)[:80]}")
                 else:
                     applied.append("Skipped control-flow migration: npx CLI not found in environment")
             else:
@@ -319,11 +332,23 @@ class AngularAdapter(BaseAdapter):
             if major and major >= 15:
                 if has_npx:
                     cmd = ["npx", "@angular/cli", "generate", "@angular/core:standalone", "--mode=convert-to-standalone", "--interactive=false"]
-                    res = subprocess.run(cmd, cwd=repo_path, env=gate_env, capture_output=True, text=True, timeout=180)
-                    if res.returncode == 0:
-                        applied.append("Converted components and directives to Angular Standalone architecture")
-                    else:
-                        applied.append(f"Standalone migration returned exit code {res.returncode}: {res.stderr[:80]}")
+                    try:
+                        res = subprocess.run(
+                            cmd,
+                            cwd=repo_path,
+                            env=gate_env,
+                            capture_output=True,
+                            text=True,
+                            timeout=180,
+                            shell=sys.platform == "win32",
+                        )
+                        if res.returncode == 0:
+                            applied.append("Converted components and directives to Angular Standalone architecture")
+                        else:
+                            err_hint = (res.stderr or res.stdout or "").strip()[:80]
+                            applied.append(f"Standalone migration returned exit code {res.returncode}: {err_hint}")
+                    except Exception as e:
+                        applied.append(f"Standalone migration error: {str(e)[:80]}")
                 else:
                     applied.append("Skipped standalone migration: npx CLI not found in environment")
             else:
