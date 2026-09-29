@@ -173,3 +173,45 @@ index 1111111..2222222 100644
 
         assert "Automated Modernizations Applied" in proposal.body
         assert "@if, @for, @switch" in proposal.body
+
+
+def test_dotnet_modernize_runs_format_style(tmp_path: Path):
+    from amstralift.adapters.dotnet import DotNetAdapter
+
+    adapter = DotNetAdapter()
+    with patch("shutil.which", return_value="/bin/dotnet"), \
+         patch("subprocess.run") as mock_sub:
+        mock_sub.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        applied = adapter.apply_modernizations(tmp_path, ["style"])
+
+        assert len(applied) == 1
+        assert "dotnet format style" in applied[0]
+
+
+def test_python_modernize_runs_ruff_when_available(tmp_path: Path):
+    from amstralift.adapters.python import PythonAdapter
+
+    adapter = PythonAdapter()
+    with patch("shutil.which", side_effect=lambda x: "/bin/ruff" if x == "ruff" else None), \
+         patch("subprocess.run") as mock_sub:
+        mock_sub.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        applied = adapter.apply_modernizations(tmp_path, ["syntax"])
+
+        assert len(applied) == 1
+        assert "Ruff" in applied[0]
+
+
+def test_react_modernize_updates_jsx_transform(tmp_path: Path):
+    from amstralift.adapters.react import ReactAdapter
+
+    tsconfig = tmp_path / "tsconfig.json"
+    tsconfig.write_text('{\n  "compilerOptions": {\n    "jsx": "react"\n  }\n}', encoding="utf-8")
+
+    adapter = ReactAdapter()
+    applied = adapter.apply_modernizations(tmp_path, ["jsx"])
+
+    assert len(applied) == 1
+    assert "react-jsx" in applied[0]
+    updated_text = tsconfig.read_text(encoding="utf-8")
+    assert '"jsx": "react-jsx"' in updated_text
+

@@ -336,3 +336,50 @@ class PythonAdapter(BaseAdapter):
                 pass
         return deps
 
+    def apply_modernizations(self, repo_path: Path, modernize_flags: list[str]) -> list[str]:
+        """Apply modern Python syntax upgrades and code formatting."""
+        if not modernize_flags:
+            return []
+
+        applied = []
+        normalized = [f.strip().lower() for f in modernize_flags]
+
+        # 1. Modern Syntax Upgrades via Ruff / pyupgrade
+        if any(f in ("syntax", "upgrade", "ruff", "all") for f in normalized):
+            if shutil.which("ruff"):
+                res = subprocess.run(
+                    ["ruff", "check", "--select", "UP", "--fix", "."],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                if res.returncode == 0:
+                    applied.append("Applied modern Python syntax upgrades via Ruff (UP rules: union types, built-in generics)")
+                else:
+                    applied.append(f"Ruff syntax check returned exit code {res.returncode}")
+            elif shutil.which("pyupgrade"):
+                res = subprocess.run(
+                    ["pyupgrade", "--py311-plus", "--exit-zero-even-if-changed", *[str(p) for p in repo_path.glob("**/*.py")]],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                if res.returncode == 0:
+                    applied.append("Upgraded Python syntax to Python 3.11+ via pyupgrade")
+
+        # 2. Modern Code Formatting
+        if any(f in ("format", "black", "all") for f in normalized):
+            if shutil.which("ruff"):
+                res = subprocess.run(["ruff", "format", "."], cwd=repo_path, capture_output=True, text=True, timeout=60)
+                if res.returncode == 0:
+                    applied.append("Formatted code using modern Ruff formatter")
+            elif shutil.which("black"):
+                res = subprocess.run(["black", "."], cwd=repo_path, capture_output=True, text=True, timeout=60)
+                if res.returncode == 0:
+                    applied.append("Formatted code using Black formatter")
+
+        return applied
+
+

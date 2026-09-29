@@ -303,3 +303,37 @@ class DotNetAdapter(BaseAdapter):
                 continue
         return deps
 
+    def apply_modernizations(self, repo_path: Path, modernize_flags: list[str]) -> list[str]:
+        """Apply modern .NET code fixes, style rules, and analyzers via dotnet format."""
+        if not modernize_flags:
+            return []
+
+        applied = []
+        normalized = [f.strip().lower() for f in modernize_flags]
+
+        if not shutil.which("dotnet"):
+            return ["Skipped .NET modernizations: dotnet CLI not found in environment"]
+
+        # 1. Code Style / Modern C# Syntax
+        if any(f in ("style", "format", "all") for f in normalized):
+            res = subprocess.run(["dotnet", "format", "style", "--severity", "info"], cwd=repo_path, capture_output=True, text=True, timeout=120)
+            if res.returncode == 0:
+                applied.append("Applied modern C# code style fixes via 'dotnet format style'")
+            else:
+                applied.append(f"dotnet format style returned exit code {res.returncode}")
+
+        # 2. Whitespace and Layout Modernization
+        if any(f in ("whitespace", "all") for f in normalized):
+            res = subprocess.run(["dotnet", "format", "whitespace"], cwd=repo_path, capture_output=True, text=True, timeout=60)
+            if res.returncode == 0:
+                applied.append("Formatted whitespace layout via 'dotnet format whitespace'")
+
+        # 3. Roslyn Analyzers and Deprecation Fixes
+        if any(f in ("analyzers", "fixes", "all") for f in normalized):
+            res = subprocess.run(["dotnet", "format", "analyzers", "--severity", "info"], cwd=repo_path, capture_output=True, text=True, timeout=180)
+            if res.returncode == 0:
+                applied.append("Applied Roslyn analyzer deprecation code fixes via 'dotnet format analyzers'")
+
+        return applied
+
+

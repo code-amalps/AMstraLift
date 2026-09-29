@@ -323,3 +323,42 @@ class ReactAdapter(BaseAdapter):
         except Exception:
             return {}
 
+    def apply_modernizations(self, repo_path: Path, modernize_flags: list[str]) -> list[str]:
+        """Apply modern React transforms (e.g. React 17+ JSX Transform, lint auto-fixes)."""
+        if not modernize_flags:
+            return []
+
+        applied = []
+        normalized = [f.strip().lower() for f in modernize_flags]
+
+        # 1. Modern JSX Transform (React 17+)
+        if any(f in ("jsx", "jsx-transform", "new-jsx", "all") for f in normalized):
+            tsconfig = repo_path / "tsconfig.json"
+            if tsconfig.exists():
+                try:
+                    text = tsconfig.read_text(encoding="utf-8")
+                    if '"jsx": "react"' in text:
+                        text = text.replace('"jsx": "react"', '"jsx": "react-jsx"')
+                        tsconfig.write_text(text, encoding="utf-8")
+                        applied.append("Updated tsconfig.json to use modern React 17+ JSX transform ('react-jsx')")
+                except Exception:
+                    pass
+
+        # 2. Automated Lint Fixes
+        if any(f in ("lint", "fix", "all") for f in normalized):
+            pkg_file = repo_path / "package.json"
+            if pkg_file.exists():
+                try:
+                    data = json.loads(pkg_file.read_text(encoding="utf-8"))
+                    scripts = data.get("scripts", {})
+                    if "lint" in scripts and shutil.which("npm"):
+                        gate_env = get_node_execution_env()
+                        res = subprocess.run(["npm", "run", "lint", "--", "--fix"], cwd=repo_path, env=gate_env, capture_output=True, text=True, timeout=120)
+                        if res.returncode == 0:
+                            applied.append("Applied automated ESLint code fixes via 'npm run lint -- --fix'")
+                except Exception:
+                    pass
+
+        return applied
+
+
