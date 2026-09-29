@@ -127,6 +127,15 @@ def classify_migration_diff(
         "pipfile.lock",
         "nuget.config",
         "packages.lock.json",
+        # Docker files — treated as manifests, not application source
+        "dockerfile",
+        "dockerfile.dev",
+        "dockerfile.prod",
+        "dockerfile.test",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
     }
 
     app_source_extensions = {

@@ -264,6 +264,17 @@ class AngularAdapter(BaseAdapter):
             except Exception:
                 pass
 
+        # ── Docker: update FROM / image: tags in Dockerfiles & docker-compose ──
+        # Determine target Angular major from changes if possible
+        angular_core = next(
+            (c for c in changes if c.package_name == "@angular/core"),
+            None,
+        )
+        if angular_core:
+            target_ver = angular_core.to_version.lstrip("^~>=<").split(".")[0]
+            from amstralift.adapters.docker_updater import DockerfileUpdater
+            DockerfileUpdater.update(repo_path, ecosystem="angular", target_version=target_ver)
+
     def run_build_and_tests(self, repo_path: Path) -> GateSummary:
         """Execute build and test gates declared in package.json."""
         pkg_file = repo_path / "package.json"

@@ -206,6 +206,15 @@ class PythonAdapter(BaseAdapter):
                     content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
             req_file.write_text(content, encoding="utf-8")
 
+        # ── Docker: update FROM / image: tags in Dockerfiles & docker-compose ──
+        python_change = next(
+            (c for c in changes if c.package_name == "python"),
+            None,
+        )
+        if python_change:
+            from amstralift.adapters.docker_updater import DockerfileUpdater
+            DockerfileUpdater.update(repo_path, ecosystem="python", target_version=python_change.to_version)
+
     def run_build_and_tests(self, repo_path: Path) -> GateSummary:
         """Execute build and test gates declared in the Python project."""
         results: list[GateResult] = []

@@ -186,6 +186,16 @@ class DotNetAdapter(BaseAdapter):
                     lock_content = re.sub(pattern, replacement, lock_content, flags=re.IGNORECASE)
             lock_file.write_text(lock_content, encoding="utf-8")
 
+        # ── Docker: update FROM / image: tags in Dockerfiles & docker-compose ──
+        tfm_change = next(
+            (c for c in changes if c.package_name == "Microsoft.NET.TargetFramework"),
+            None,
+        )
+        if tfm_change:
+            # to_version is like "net9.0" — pass the major version number
+            from amstralift.adapters.docker_updater import DockerfileUpdater
+            DockerfileUpdater.update(repo_path, ecosystem="dotnet", target_version=tfm_change.to_version)
+
     def run_build_and_tests(self, repo_path: Path) -> GateSummary:
         """Execute dotnet build and dotnet test gates."""
         results: list[GateResult] = []
