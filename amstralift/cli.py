@@ -226,10 +226,19 @@ def run(
                 reason = (g.stdout or g.stderr or f"completed in {g.duration_seconds:.2f}s").strip().replace("\r", "").split("\n")[0]
                 gate_table.add_row(g.name, g.command, g.status.value, reason[:80])
             console.print(gate_table)
-            console.print(
-                "\n[yellow]💡 Tip: In a live run (without --dry-run), all required gates must pass in the sandbox before a branch/PR can be created.[/yellow]\n"
-                "[dim]To inspect proposed package changes without enforcing gates, run with '--dry-run'.[/dim]"
-            )
+
+            if e.gate_summary.has_required_timeouts and not e.gate_summary.has_required_failures:
+                console.print(
+                    "\n[yellow]⏱ Test gate timed out — the test runner is likely in watch mode or Chrome is unavailable.[/yellow]\n"
+                    "[dim]AMstraLift injected --no-watch --browsers=ChromeHeadless for Karma/ng test, but Chrome must be installed.[/dim]\n"
+                    "[dim]• Install chromium:  sudo apt-get install -y chromium  (Linux) or brew install chromium (macOS)[/dim]\n"
+                    "[dim]• Then re-run to get a verified result, OR use '--allow-failed-gates' to proceed with unverified tests.[/dim]\n"
+                )
+            else:
+                console.print(
+                    "\n[yellow]💡 Tip: In a live run (without --dry-run), all required gates must pass in the sandbox before a branch/PR can be created.[/yellow]\n"
+                    "[dim]To inspect proposed package changes without enforcing gates, run with '--dry-run'.[/dim]"
+                )
         raise typer.Exit(code=1) from e
     except Exception as e:
         console.print(f"[bold red]✖ Upgrade failed:[/bold red] {e}")

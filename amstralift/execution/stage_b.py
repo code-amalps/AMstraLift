@@ -102,13 +102,26 @@ def run_stage_b(
         for r in bundle.gate_summary.results:
             if r.status == GateStatus.REQUIRED_FAILED:
                 msg = (r.stderr or r.stdout or f"exit code {r.exit_code}").strip().replace("\r", "").replace("\n", " ")
-                issues.append(f"'{r.name}' FAILED: {msg[:100]}")
+                issues.append(f"'{r.name}' FAILED: {msg[:120]}")
+            elif r.status == GateStatus.REQUIRED_TIMEOUT:
+                msg = (r.stdout or "runner timed out").strip().replace("\r", "").replace("\n", " ")
+                issues.append(f"'{r.name}' TIMED OUT (uncertain — not confirmed broken): {msg[:120]}")
             elif r.status == GateStatus.REQUIRED_SKIPPED:
                 msg = (r.stdout or "tooling not available in environment").strip().replace("\r", "").replace("\n", " ")
-                issues.append(f"'{r.name}' SKIPPED: {msg[:100]}")
+                issues.append(f"'{r.name}' SKIPPED: {msg[:80]}")
         details = f" ({'; '.join(issues)})" if issues else ""
+
+        if bundle.gate_summary.has_required_timeouts and not bundle.gate_summary.has_required_failures:
+            tip = (
+                " Test runner timed out — this usually means Chrome/Chromium is not installed. "
+                "Install chromium on this host, or re-run with '--allow-failed-gates' to proceed "
+                "with an explicit acknowledgement that tests are unverified."
+            )
+        else:
+            tip = ""
+
         raise StageBPublishError(
-            f"Cannot open PR: Not all required build/test gates passed in Stage A{details}. "
+            f"Cannot open PR: Not all required build/test gates passed in Stage A{details}.{tip} "
             "Per Section 1 and 3, AMstraLift fails closed with an issue, never a PR.",
             gate_summary=bundle.gate_summary,
         )

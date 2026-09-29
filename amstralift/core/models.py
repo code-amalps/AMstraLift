@@ -41,8 +41,9 @@ class GateStatus(str, Enum):
     """Build and test gate result classification (Section 9)."""
 
     REQUIRED_PASSED = "REQUIRED_PASSED"
-    REQUIRED_SKIPPED = "REQUIRED_SKIPPED"
-    REQUIRED_FAILED = "REQUIRED_FAILED"
+    REQUIRED_SKIPPED = "REQUIRED_SKIPPED"      # tooling absent — uncertain
+    REQUIRED_TIMEOUT = "REQUIRED_TIMEOUT"      # runner hung (e.g. watch mode) — uncertain
+    REQUIRED_FAILED = "REQUIRED_FAILED"        # ran and explicitly failed
     OPTIONAL_PASSED = "OPTIONAL_PASSED"
     OPTIONAL_FAILED = "OPTIONAL_FAILED"
 
@@ -69,7 +70,12 @@ class GateSummary(BaseModel):
         required = [
             r
             for r in self.results
-            if r.status in (GateStatus.REQUIRED_PASSED, GateStatus.REQUIRED_FAILED, GateStatus.REQUIRED_SKIPPED)
+            if r.status in (
+                GateStatus.REQUIRED_PASSED,
+                GateStatus.REQUIRED_FAILED,
+                GateStatus.REQUIRED_SKIPPED,
+                GateStatus.REQUIRED_TIMEOUT,
+            )
         ]
         if not required:
             return False
@@ -77,11 +83,17 @@ class GateSummary(BaseModel):
 
     @computed_field
     def has_required_failures(self) -> bool:
+        """True only when tests actually ran and explicitly failed (not timeout/skipped)."""
         return any(r.status == GateStatus.REQUIRED_FAILED for r in self.results)
 
     @computed_field
     def has_required_skips(self) -> bool:
         return any(r.status == GateStatus.REQUIRED_SKIPPED for r in self.results)
+
+    @computed_field
+    def has_required_timeouts(self) -> bool:
+        """True when a required gate timed out — test result is uncertain, not confirmed broken."""
+        return any(r.status == GateStatus.REQUIRED_TIMEOUT for r in self.results)
 
 
 class MigrationClassification(BaseModel):

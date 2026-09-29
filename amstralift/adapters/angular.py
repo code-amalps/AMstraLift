@@ -276,7 +276,14 @@ class AngularAdapter(BaseAdapter):
             DockerfileUpdater.update(repo_path, ecosystem="angular", target_version=target_ver)
 
     def run_build_and_tests(self, repo_path: Path) -> GateSummary:
-        """Execute build and test gates declared in package.json."""
+        """Execute build and test gates declared in package.json.
+
+        Handles Angular-specific test runner quirks:
+        - ng test (Karma) runs in watch mode by default → inject --no-watch --no-progress
+        - Karma requires a browser → inject --browsers=ChromeHeadless in CI/headless environments
+        - Jest runs once and exits → no special flags needed
+        - Timeout is classified as REQUIRED_TIMEOUT (uncertain), NOT REQUIRED_FAILED
+        """
         pkg_file = repo_path / "package.json"
         results: list[GateResult] = []
 
@@ -284,7 +291,7 @@ class AngularAdapter(BaseAdapter):
             return GateSummary(results=results)
 
         data = json.loads(pkg_file.read_text(encoding="utf-8"))
-        scripts = data.get("scripts", {})
+        scripts = data.get("scripts", {})\
 
         gate_env = get_node_execution_env()
         existing_opts = gate_env.get("NODE_OPTIONS", "")
@@ -293,9 +300,15 @@ class AngularAdapter(BaseAdapter):
 
         has_npm = shutil.which("npm", path=gate_env.get("PATH")) is not None
 
+        # ── Resolve test command with watch-mode and headless fixes ──────────
+        raw_test_script = scripts.get("test", "")
+        resolved_test_cmd = self._resolve_angular_test_command(
+            raw_test_script, repo_path, has_npm
+        )
+
         # Define gates in priority order
         gates = [
-            ("test", scripts.get("test"), True),
+            ("test", resolved_test_cmd, True),
             ("build", scripts.get("build"), True),
             ("lint", scripts.get("lint"), False),
         ]
@@ -340,7 +353,11 @@ class AngularAdapter(BaseAdapter):
                 continue
 
             start_t = time.time()
-            cmd = f"npm run {gate_name}" if has_npm else script_cmd
+            # For build/lint, use npm run; for test we already have the full resolved command
+            if gate_name == "test":
+                cmd = script_cmd
+            else:
+                cmd = f"npm run {gate_name}" if has_npm else script_cmd
 
             try:
                 proc = subprocess.run(
@@ -373,6 +390,27 @@ class AngularAdapter(BaseAdapter):
                         duration_seconds=duration,
                     )
                 )
+            except subprocess.TimeoutExpired:
+                duration = time.time() - start_t
+                # Timeout ≠ failure. The test runner may be in watch mode or starting a browser.
+                # Classify as REQUIRED_TIMEOUT so Stage B can report it accurately.
+                timeout_note = (
+                    f"Test runner timed out after {duration:.0f}s. "
+                    "This usually means 'ng test' is running in watch mode or waiting for a browser. "
+                    "AMstraLift injected --no-watch --browsers=ChromeHeadless but the environment may not "
+                    "support Chrome. Test result is UNCERTAIN — not confirmed broken. "
+                    "Run with --skip-tests to proceed, or install chromium/google-chrome on this host."
+                )
+                results.append(
+                    GateResult(
+                        name=gate_name,
+                        command=cmd,
+                        status=GateStatus.REQUIRED_TIMEOUT,
+                        exit_code=124,
+                        stdout=timeout_note,
+                        duration_seconds=duration,
+                    )
+                )
             except Exception as e:
                 duration = time.time() - start_t
                 status = GateStatus.REQUIRED_FAILED if is_required else GateStatus.OPTIONAL_FAILED
@@ -388,6 +426,70 @@ class AngularAdapter(BaseAdapter):
                 )
 
         return GateSummary(results=results)
+
+    def _resolve_angular_test_command(
+        self,
+        raw_test_script: str,
+        repo_path: Path,
+        has_npm: bool,
+    ) -> str | None:
+        """
+        Resolve the test command for Angular, injecting headless/no-watch flags as needed.
+
+        Detection priority:
+        1. Jest (runs once, exits cleanly) — no flags needed
+        2. ng test / karma — inject --no-watch --no-progress --browsers=ChromeHeadless
+        3. Unknown script — run as-is (fallback)
+        """
+        if not raw_test_script:
+            return None
+
+        script_lower = raw_test_script.lower()
+
+        # ── Jest: runs once and exits — no special treatment needed ──────────
+        is_jest = "jest" in script_lower
+        if is_jest:
+            return "npm run test" if has_npm else raw_test_script
+
+        # ── Karma / ng test: watch mode by default — needs explicit flags ─────
+        is_ng_test = "ng test" in script_lower or "ng t " in script_lower
+        is_karma = "karma" in script_lower
+        is_vitest = "vitest" in script_lower
+
+        if is_vitest:
+            # Vitest: add --run to exit after one pass
+            vitest_cmd = "npx vitest run" if has_npm else raw_test_script
+            return vitest_cmd
+
+        if is_ng_test or is_karma:
+            # Build the ng test command with safe headless flags
+            # Check if a custom karma config specifies a headless browser already
+            karma_conf = repo_path / "karma.conf.js"
+            already_headless = False
+            if karma_conf.exists():
+                try:
+                    karma_text = karma_conf.read_text(encoding="utf-8", errors="replace").lower()
+                    already_headless = "chromeheadless" in karma_text or "chromiumheadless" in karma_text
+                except Exception:
+                    pass
+
+            # Build flags
+            flags = ["--no-watch", "--no-progress"]
+            if not already_headless:
+                flags.append("--browsers=ChromeHeadless")
+
+            if is_ng_test:
+                # Inject flags directly into ng test invocation
+                base = "ng test"
+                flag_str = " ".join(flags)
+                return f"npx {base} {flag_str}" if has_npm else f"{base} {flag_str}"
+            else:
+                # karma start — wrap with npx ng test flags
+                flag_str = " ".join(flags)
+                return f"npx ng test {flag_str}" if has_npm else f"ng test {flag_str}"
+
+        # ── Unknown test runner: run as-is ────────────────────────────────────
+        return "npm run test" if has_npm else raw_test_script
 
     def get_declared_dependencies(self, repo_path: Path) -> dict[str, str]:
         pkg_file = repo_path / "package.json"
