@@ -277,37 +277,84 @@ class DockerfileUpdater:
         ecosystem: str,
         target_version: str,
     ) -> str | None:
-        """Resolve the new tag for a given image, ecosystem, and target version."""
+        """
+        Resolve the latest stable tag for a given image, ecosystem, and target version.
+
+        Uses live registry clients (MCR / Docker Hub) to find the actual latest
+        stable patch release matching the target major and current suffix variant.
+        Falls back to simple version substitution if the registry is unreachable.
+        """
+        import re as _re
+
+        from amstralift.adapters.docker_registry_client import (
+            MCR_DOTNET_REPOS,
+            DockerRegistryClient,
+            _extract_suffix,
+        )
+        from amstralift.adapters.node_release_feed import NodeReleaseFeed
+
         ecosystem_lower = ecosystem.lower()
 
         if ecosystem_lower == "dotnet":
+            image_lower = image.lower().rstrip("/")
+            if any(image_lower.startswith(base) for base in MCR_DOTNET_REPOS):
+                target_major_match = _re.search(r"(\d+)", str(target_version))
+                if not target_major_match:
+                    return _resolve_dotnet_tag(image, old_tag, target_version)
+                target_major = int(target_major_match.group(1))
+                suffix = _extract_suffix(old_tag)
+                resolved = DockerRegistryClient.resolve_dotnet(image, target_major, suffix)
+                return resolved.tag
             return _resolve_dotnet_tag(image, old_tag, target_version)
 
         if ecosystem_lower in ("angular", "react"):
-            # Angular and React both run on Node — extract target node major
-            # target_version for Angular could be "18" (Angular v18 needs Node 20)
-            # We use the NODE_LTS_VERSIONS mapping
-            angular_to_node: dict[int, int] = {
-                12: 14, 13: 16, 14: 16, 15: 16, 16: 18,
-                17: 18, 18: 18, 19: 20, 20: 20, 21: 20, 22: 22,
-            }
-            try:
-                angular_major = int(re.search(r"(\d+)", target_version).group(1))  # type: ignore[union-attr]
-                node_major = (
-                    angular_to_node.get(angular_major)
-                    if ecosystem_lower == "angular"
-                    else NODE_LTS_VERSIONS.get(angular_major, angular_major)
-                )
-                if node_major:
-                    return _resolve_node_tag(image, old_tag, node_major)
-            except (AttributeError, ValueError):
+            if image.lower() != "node":
                 return None
+            try:
+                framework_major_match = _re.search(r"(\d+)", str(target_version))
+                if not framework_major_match:
+                    return None
+                framework_major = int(framework_major_match.group(1))
+                if ecosystem_lower == "angular":
+                    node_major = NodeReleaseFeed.node_for_angular(framework_major)
+                else:
+                    node_major = NodeReleaseFeed.recommended_lts_major().recommended_major
+                suffix = _extract_suffix(old_tag)
+                resolved = DockerRegistryClient.resolve_node(node_major, suffix)
+                return resolved.tag
+            except Exception:
+                # Offline fallback for Angular/React → Node mapping
+                _fallback_map: dict[int, int] = {
+                    12: 14, 13: 16, 14: 16, 15: 16, 16: 18,
+                    17: 18, 18: 18, 19: 20, 20: 20, 21: 20, 22: 22,
+                }
+                try:
+                    _fm = int(re.search(r"(\d+)", target_version).group(1))  # type: ignore[union-attr]
+                    _node = _fallback_map.get(_fm, 20)
+                    return _resolve_node_tag(image, old_tag, _node)
+                except (AttributeError, ValueError):
+                    return None
 
         if ecosystem_lower == "python":
-            # target_version like "3.12" or ">=3.12"
-            ver_match = re.search(r"(3\.\d+)", target_version)
-            if ver_match:
-                return _resolve_python_tag(image, old_tag, ver_match.group(1))
+            if image.lower() != "python":
+                return None
+            try:
+                import re as _re
+
+                from amstralift.adapters.docker_registry_client import (
+                    DockerRegistryClient,
+                    _extract_suffix,
+                )
+                ver_match = _re.search(r"(3\.\d+)", str(target_version))
+                if ver_match:
+                    target_minor = ver_match.group(1)
+                    suffix = _extract_suffix(old_tag)
+                    resolved = DockerRegistryClient.resolve_python(target_minor, suffix)
+                    return resolved.tag
+            except Exception:
+                ver_match = re.search(r"(3\.\d+)", target_version)
+                if ver_match:
+                    return _resolve_python_tag(image, old_tag, ver_match.group(1))
 
         return None
 

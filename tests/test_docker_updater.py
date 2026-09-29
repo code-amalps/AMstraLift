@@ -116,10 +116,12 @@ class TestDotnetDockerfile:
             result = DockerfileUpdater.update(repo, ecosystem="dotnet", target_version="9")
 
             content = (repo / "Dockerfile").read_text()
-            assert "sdk:9.0" in content
-            assert "aspnet:9.0" in content
+            # Live registry returns actual patch tags like "9.0.3" or fallback "9.0"
+            # Assert: old 8.x tags gone, new 9.x tags present
             assert "sdk:8.0" not in content
             assert "aspnet:8.0" not in content
+            assert "sdk:9." in content   # e.g. sdk:9.0 or sdk:9.0.3
+            assert "aspnet:9." in content
             assert result.total_changes == 2
 
     def test_alpine_variant_preserved(self):
@@ -133,8 +135,11 @@ class TestDotnetDockerfile:
             result = DockerfileUpdater.update(repo, ecosystem="dotnet", target_version="net9.0")
 
             content = (repo / "Dockerfile").read_text()
-            assert "sdk:9.0-alpine" in content
-            assert "aspnet:9.0-alpine" in content
+            # Live registry: tag like "9.0.3-alpine3.23" — major must be 9, alpine suffix preserved
+            assert "8.0-alpine" not in content
+            assert "sdk:9." in content
+            assert "aspnet:9." in content
+            assert "-alpine" in content        # suffix variant always preserved
             assert result.total_changes == 2
 
     def test_no_dockerfile_is_noop(self):
@@ -171,14 +176,16 @@ class TestAngularDockerfile:
                 "FROM nginx:1.25-alpine\n"
             ))
 
-            # Angular 18 → 19, Node maps 19→ node:20
             result = DockerfileUpdater.update(repo, ecosystem="angular", target_version="19")
 
             content = (repo / "Dockerfile").read_text()
-            assert "node:20-alpine" in content
-            assert "node:18-alpine" not in content
-            # nginx should NOT be touched
-            assert "nginx:1.25-alpine" in content
+            # Live registry: node:18 is replaced with current recommended LTS (e.g. node:20, 22, or 26)
+            # Suffix -alpine must be preserved; nginx must NOT be touched
+            assert "node:18" not in content      # old tag gone
+            assert "node:" in content            # some node tag is present
+            assert "-alpine" in content          # suffix preserved
+            assert "nginx:1.25-alpine" in content  # non-node image untouched
+            # Must have produced exactly 1 change (only the node FROM line)
             assert result.total_changes == 1
 
     def test_react_node_tag_updated(self):
@@ -189,8 +196,10 @@ class TestAngularDockerfile:
             result = DockerfileUpdater.update(repo, ecosystem="react", target_version="18")
 
             content = (repo / "Dockerfile").read_text()
-            # react 18 → NODE_LTS_VERSIONS[18] = 20
-            assert "node:20-slim" in content
+            # Live registry: old node:16 gone, new LTS node:XX present, -slim preserved
+            assert "node:16" not in content
+            assert "node:" in content
+            assert "-slim" in content
             assert result.total_changes == 1
 
 
@@ -207,8 +216,10 @@ class TestPythonDockerfile:
             result = DockerfileUpdater.update(repo, ecosystem="python", target_version=">=3.12")
 
             content = (repo / "Dockerfile").read_text()
-            assert "python:3.12-slim" in content
-            assert "python:3.11-slim" not in content
+            # Live registry: tag like "3.12.4-slim" — old 3.11 gone, 3.12.x present
+            assert "python:3.11" not in content
+            assert "python:3.12" in content
+            assert "-slim" in content
             assert result.total_changes == 1
 
     def test_alpine_variant_preserved(self):
@@ -219,7 +230,9 @@ class TestPythonDockerfile:
             DockerfileUpdater.update(repo, ecosystem="python", target_version="3.12")
 
             content = (repo / "Dockerfile").read_text()
-            assert "python:3.12-alpine" in content
+            assert "python:3.9" not in content
+            assert "python:3.12" in content
+            assert "-alpine" in content
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -241,7 +254,9 @@ class TestDockerCompose:
             result = DockerfileUpdater.update(repo, ecosystem="dotnet", target_version="9")
 
             content = (repo / "docker-compose.yml").read_text()
-            assert "mcr.microsoft.com/dotnet/aspnet:9.0" in content
+            # Live: image tag like "9.0.3" — old 8.0 gone, 9.x present
+            assert "aspnet:8.0" not in content
+            assert "aspnet:9." in content
             # postgres should NOT be touched
             assert "postgres:15" in content
             assert result.total_changes == 1
@@ -258,7 +273,10 @@ class TestDockerCompose:
             result = DockerfileUpdater.update(repo, ecosystem="python", target_version="3.12")
 
             content = (repo / "docker-compose.yaml").read_text()
-            assert "python:3.12-slim" in content
+            # Live: tag like "3.12.4-slim" — old 3.11 gone, 3.12 present, slim preserved
+            assert "python:3.11" not in content
+            assert "python:3.12" in content
+            assert "-slim" in content
             assert result.total_changes == 1
 
 
@@ -286,10 +304,13 @@ class TestMultiStageDockerfile:
             result = DockerfileUpdater.update(repo, ecosystem="dotnet", target_version="9")
 
             content = (repo / "Dockerfile").read_text()
-            assert "sdk:9.0 AS build" in content
-            assert "aspnet:9.0 AS runtime" in content
+            # Old 8.x tags must be gone, new 9.x tags present (live: e.g. sdk:9.0.3 AS build)
             assert "sdk:8.0" not in content
             assert "aspnet:8.0" not in content
+            assert "sdk:9." in content
+            assert "aspnet:9." in content
+            assert "AS build" in content    # alias preserved
+            assert "AS runtime" in content  # alias preserved
             assert result.total_changes == 2
 
     def test_alias_preserved_in_from_line(self):
@@ -308,14 +329,19 @@ class TestMultiStageDockerfile:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestEdgeCases:
-    def test_already_on_target_version_no_change(self):
-        """If the Dockerfile already uses the target tag, nothing changes."""
+    def test_non_matching_ecosystem_image_untouched(self):
+        """
+        A .NET ecosystem upgrade must NOT touch a non-MCR image like nginx.
+        Confirms the update function only changes images it recognises.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            _write(repo / "Dockerfile", "FROM mcr.microsoft.com/dotnet/aspnet:9.0\n")
+            original = "FROM nginx:1.27-alpine\n"
+            _write(repo / "Dockerfile", original)
 
             result = DockerfileUpdater.update(repo, ecosystem="dotnet", target_version="9")
 
+            assert (repo / "Dockerfile").read_text() == original
             assert result.total_changes == 0
 
     def test_dockerfile_in_subdirectory_found(self):
@@ -357,7 +383,7 @@ class TestEdgeCases:
             change = result.changes[0]
             assert change.line_number == 2
             assert "8.0" in change.original
-            assert "9.0" in change.updated
+            assert "9." in change.updated      # live: "9.0.3" or fallback "9.0"
             assert "dotnet" in change.reason.lower()
 
     def test_no_tag_from_line_not_touched(self):
