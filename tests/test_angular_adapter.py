@@ -396,3 +396,41 @@ def test_angular_run_build_and_tests_removes_openssl_legacy_for_v17(tmp_path: Pa
     # Modern Angular >= 17 should NOT have --openssl-legacy-provider in NODE_OPTIONS
     assert "--openssl-legacy-provider" not in captured_env.get("NODE_OPTIONS", "")
 
+
+def test_is_working_tree_clean_ignores_ephemeral_cache(tmp_path: Path, monkeypatch):
+    import subprocess
+    from amstralift.core.workspace import is_working_tree_clean
+
+    # 1. Ephemeral caches like .angular/ or .nx/ should be ignored
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0], returncode=0, stdout="?? .angular/\n?? .nx/\n", stderr=""
+        ),
+    )
+    assert is_working_tree_clean(tmp_path) is True
+
+    # 2. Meaningful uncommitted changes should NOT be ignored
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0], returncode=0, stdout="?? .angular/\nM  src/app/app.component.ts\n", stderr=""
+        ),
+    )
+    assert is_working_tree_clean(tmp_path) is False
+
+
+def test_modernize_angular_gitignore(tmp_path: Path):
+    from amstralift.adapters.angular import _modernize_angular_gitignore
+
+    gitignore = tmp_path / ".gitignore"
+    gitignore.write_text("node_modules/\ndist/\n", encoding="utf-8")
+
+    _modernize_angular_gitignore(tmp_path)
+
+    updated = gitignore.read_text(encoding="utf-8")
+    assert ".angular" in updated
+
+

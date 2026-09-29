@@ -229,10 +229,49 @@ def verify_rediff_integrity(
     return True
 
 
-def is_working_tree_clean(repo_path: Path) -> bool:
-    """Check if the working tree has no uncommitted or untracked changes."""
+EPHEMERAL_CACHE_DIRS = (
+    ".angular",
+    ".nx",
+    ".turbo",
+    ".cache",
+    "__pycache__",
+)
+
+
+def is_working_tree_clean(repo_path: Path, ignore_ephemeral: bool = True) -> bool:
+    """Check if the working tree has no uncommitted or untracked changes.
+
+    Ignores ephemeral build/tool caches like .angular/ or .nx/ when ignore_ephemeral=True.
+    """
     res = run_git(["status", "--porcelain"], cwd=repo_path)
-    return res.returncode == 0 and not (res.stdout or "").strip()
+    if res.returncode != 0:
+        return False
+    stdout = res.stdout or ""
+    if not stdout.strip():
+        return True
+
+    if not ignore_ephemeral:
+        return False
+
+    meaningful_lines = []
+    for line in stdout.splitlines():
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+        parts = line_clean.split(maxsplit=1)
+        if len(parts) == 2:
+            status, path_str = parts
+            path_normalized = path_str.strip('"').strip("'").rstrip("/\\")
+            if any(
+                path_normalized == cache
+                or path_normalized.startswith(f"{cache}/")
+                or path_normalized.startswith(f"{cache}\\")
+                for cache in EPHEMERAL_CACHE_DIRS
+            ):
+                continue
+        meaningful_lines.append(line_clean)
+
+    return len(meaningful_lines) == 0
 
 
 def extract_patch_files(patch: str) -> list[str]:

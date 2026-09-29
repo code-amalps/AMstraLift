@@ -144,6 +144,20 @@ def _remove_legacy_default_project(repo_path: Path) -> None:
     _modernize_angular_workspace_json(repo_path)
 
 
+def _modernize_angular_gitignore(repo_path: Path) -> None:
+    """Ensure modern Angular ephemeral caches (.angular/) are in .gitignore."""
+    gitignore = repo_path / ".gitignore"
+    if not gitignore.exists():
+        return
+    try:
+        content = gitignore.read_text(encoding="utf-8")
+        if ".angular" not in content:
+            updated = content.rstrip() + "\n\n# Angular\n.angular/\n"
+            gitignore.write_text(updated, encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _modernize_angular_tsconfig(repo_path: Path, target_major: int | None = None) -> list[str]:
     """Modernize TypeScript configurations across the Angular workspace.
 
@@ -615,6 +629,7 @@ class AngularAdapter(BaseAdapter):
         _modernize_angular_tsconfig(repo_path, target_major=target_major_int)
         _modernize_angular_stylesheets(repo_path)
         _modernize_angular_source_files(repo_path, target_major=target_major_int)
+        _modernize_angular_gitignore(repo_path)
 
         # Update package-lock.json accurately using npm_lockfile
         from amstralift.adapters.npm_lockfile import install_npm_dependencies, update_npm_lockfile
@@ -657,6 +672,7 @@ class AngularAdapter(BaseAdapter):
         _modernize_angular_tsconfig(repo_path, target_major=major)
         _modernize_angular_stylesheets(repo_path)
         _modernize_angular_source_files(repo_path, target_major=major)
+        _modernize_angular_gitignore(repo_path)
 
         # 1. Control-Flow (*ngIf -> @if, *ngFor -> @for)
         if any(f in ("control-flow", "controlflow", "all") for f in normalized):
