@@ -136,9 +136,19 @@ def run_stage_b(
         )
 
     # 8. Construct Deterministic, Collision-Free Branch Name and Idempotency Key
+    from amstralift.core.grouping import group_dependency_changes
+
     tier = bundle.highest_tier
-    primary_pkg = bundle.changes[0].package_name if bundle.changes else "dependencies"
-    target_ver = bundle.changes[0].to_version if bundle.changes else "update"
+    batches = group_dependency_changes(bundle.changes)
+    if batches:
+        lead_batch = batches[0]
+        primary_pkg = lead_batch.family_id if len(lead_batch.changes) > 1 else lead_batch.changes[0].package_name
+        target_ver = lead_batch.primary_version
+        pr_title = lead_batch.pr_title
+    else:
+        primary_pkg = "dependencies"
+        target_ver = "update"
+        pr_title = f"chore(deps): upgrade dependencies ({tier.value})"
 
     effective_repo_id = repo_id or target_repo_path.name
     idempotency_key = calculate_idempotency_key(
@@ -163,18 +173,25 @@ def run_stage_b(
         labels.append("gates-failed-warning")
     labels.append("amstralift-automated")
 
-    # Format PR Body
+    # Format PR Body with Cohesive Batches
     body_lines = [
         f"## 🚀 AMstraLift Automated Dependency Upgrade ({tier.value})",
         "",
         "### 📦 Proposed Changes:",
     ]
-    for c in bundle.changes:
-        body_lines.append(f"- **`{c.package_name}`**: `{c.from_version}` → `{c.to_version}` ({c.tier.value})")
+    if batches:
+        for batch in batches:
+            if len(batches) > 1 or len(batch.changes) > 1:
+                body_lines.append(f"#### {batch.display_name}")
+            for c in batch.changes:
+                body_lines.append(f"- **`{c.package_name}`**: `{c.from_version}` → `{c.to_version}` ({c.tier.value})")
+            body_lines.append("")
+    else:
+        for c in bundle.changes:
+            body_lines.append(f"- **`{c.package_name}`**: `{c.from_version}` → `{c.to_version}` ({c.tier.value})")
 
     body_lines.extend(
         [
-            "",
             "### 🛡️ Build & Test Evidence (Stage A):",
         ]
     )
@@ -201,7 +218,7 @@ def run_stage_b(
 
     pr_proposal = PullRequestProposal(
         branch_name=branch_name,
-        title=f"chore(deps): upgrade {primary_pkg} to {target_ver} ({tier.value})",
+        title=pr_title,
         body="\n".join(body_lines),
         labels=labels,
         deadline_24h=deadline_24h,
@@ -211,6 +228,7 @@ def run_stage_b(
         idempotency_key=idempotency_key,
         publish_status="LOCAL_ONLY",
     )
+
 
     # 9. Duplicate check: Look up existing open PR before making any local or remote modifications
     if provider and effective_repo_id:
