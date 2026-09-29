@@ -132,7 +132,8 @@ def get_angular_ecosystem_recommendation(
 
     if pkg_name == "@ngx-translate/http-loader":
         if target_angular_major >= 16:
-            return "^17.0.0"
+            # v16 maintains 3-argument constructor (http, prefix, suffix) and Ivy compatibility
+            return "^16.0.0"
 
     if pkg_name == "bootstrap":
         if target_angular_major >= 16:
@@ -362,32 +363,63 @@ def _modernize_angular_tsconfig(repo_path: Path, target_major: int | None = None
     return applied
 
 
-def _modernize_angular_stylesheets(repo_path: Path) -> list[str]:
-    """Modernize Angular stylesheets for modern Dart Sass.
+def _modernize_angular_stylesheets(repo_path: Path, target_major: int | None = None) -> list[str]:
+    """Modernize Angular stylesheets for modern Dart Sass and Angular Material M2/M3 theming.
 
-    Strips obsolete Webpack tilde ('~') prefix from @import, @use, and @forward statements
-    (e.g., '@use \"~@angular/material\"' -> '@use \"@angular/material\"').
+    - Strips obsolete Webpack tilde ('~') prefix from @import, @use, and @forward statements
+      (e.g., '@use \"~@angular/material\"' -> '@use \"@angular/material\"').
+    - Prefixes Angular Material M2 functions and palettes with 'm2-' when target_major >= 18
+      (e.g., 'mat.define-palette' -> 'mat.m2-define-palette', 'mat.$green-palette' -> 'mat.$m2-green-palette').
     """
     applied = []
     excluded_dirs = {"node_modules", ".angular", ".nx", ".git", "dist", "coverage", ".venv"}
     tilde_pattern = re.compile(r"""(@(?:import|use|forward)\s+(?:url\()?['\"])~""")
 
+    m2_funcs = (
+        "define-light-theme",
+        "define-dark-theme",
+        "define-palette",
+        "get-contrast-color-from-palette",
+        "get-color-from-palette",
+        "get-color-config",
+        "get-typography-config",
+        "get-density-config",
+        "define-typography-config",
+        "define-legacy-typography-config",
+        "define-typography-level",
+        "define-rem-typography-config",
+    )
+
     count = 0
+    m2_count = 0
     for ext in ("*.scss", "*.sass", "*.css"):
         for file_path in repo_path.rglob(ext):
             if any(part in excluded_dirs for part in file_path.parts):
                 continue
             try:
                 content = file_path.read_text(encoding="utf-8")
+                orig_content = content
                 new_content, n = tilde_pattern.subn(r"\1", content)
                 if n > 0:
-                    file_path.write_text(new_content, encoding="utf-8")
+                    content = new_content
                     count += 1
+
+                if target_major is not None and target_major >= 18:
+                    for fn in m2_funcs:
+                        content = re.sub(rf"\bmat\.{fn}\b", f"mat.m2-{fn}", content)
+                    content = re.sub(r"\bmat\.\$([a-zA-Z0-9_-]+-palette)\b", r"mat.$m2-\1", content)
+                    if content != orig_content:
+                        m2_count += 1
+
+                if content != orig_content:
+                    file_path.write_text(content, encoding="utf-8")
             except Exception:
                 pass
 
     if count > 0:
         applied.append(f"Modernized {count} stylesheet(s) for Dart Sass (stripped obsolete '~' Webpack prefixes)")
+    if m2_count > 0:
+        applied.append(f"Modernized {m2_count} stylesheet(s) with Angular Material M2 functions and palettes")
     return applied
 
 
@@ -403,6 +435,7 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
 
     ngrx_cleaned_count = 0
     type_import_count = 0
+    reactive_forms_count = 0
 
     for ts_file in repo_path.rglob("*.ts"):
         if any(part in excluded_dirs for part in ts_file.parts):
@@ -475,6 +508,44 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
                         modified = True
                         type_import_count += 1
 
+        # 3. Clean up removed router options (relativeLinkResolution) in Angular 15+
+        if target_major is None or target_major >= 15:
+            if "relativeLinkResolution" in content:
+                new_content = re.sub(r",?\s*relativeLinkResolution:\s*['\"][^'\"]+['\"]", "", content)
+                if new_content != content:
+                    content = new_content
+                    modified = True
+
+        # 4. Modernize legacy reactive forms to UntypedFormBuilder / UntypedFormGroup in Angular 14+
+        if target_major is None or target_major >= 14:
+            if "@angular/forms" in content and any(
+                k in content for k in ("FormBuilder", "FormGroup", "FormControl", "FormArray")
+            ):
+                forms_imp = re.search(r"import\s*\{([^}]+)\}\s*from\s*(['\"]@angular/forms['\"]);?", content)
+                if forms_imp:
+                    raw_symbols = [s.strip() for s in forms_imp.group(1).split(",") if s.strip()]
+                    replacements = {
+                        "FormBuilder": "UntypedFormBuilder",
+                        "FormGroup": "UntypedFormGroup",
+                        "FormControl": "UntypedFormControl",
+                        "FormArray": "UntypedFormArray",
+                    }
+                    new_symbols = []
+                    needed_replacements = {}
+                    for sym in raw_symbols:
+                        if sym in replacements:
+                            new_symbols.append(replacements[sym])
+                            needed_replacements[sym] = replacements[sym]
+                        else:
+                            new_symbols.append(sym)
+                    if needed_replacements:
+                        new_import = f"import {{ {', '.join(new_symbols)} }} from {forms_imp.group(2)};"
+                        content = content[:forms_imp.start()] + new_import + content[forms_imp.end():]
+                        for old_s, new_s in needed_replacements.items():
+                            content = re.sub(rf"\b{old_s}\b", new_s, content)
+                        modified = True
+                        reactive_forms_count += 1
+
         if modified:
             try:
                 ts_file.write_text(content, encoding="utf-8")
@@ -485,6 +556,8 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
         applied.append(f"Modernized {ngrx_cleaned_count} file(s) removing obsolete @ngrx/effects 'Effect' member")
     if type_import_count > 0:
         applied.append(f"Modernized {type_import_count} file(s) converting type-only 'HttpEvent' imports")
+    if reactive_forms_count > 0:
+        applied.append(f"Modernized {reactive_forms_count} file(s) to UntypedFormBuilder/UntypedFormGroup for Angular 14+ compatibility")
 
     return applied
 
@@ -820,9 +893,16 @@ class AngularAdapter(BaseAdapter):
             _modernize_angular_workspace_json(repo_path, target_major=major)
         _align_angular_ecosystem_dependencies(repo_path, target_major=major)
         _modernize_angular_tsconfig(repo_path, target_major=major)
-        _modernize_angular_stylesheets(repo_path)
+        _modernize_angular_stylesheets(repo_path, target_major=major)
         _modernize_angular_source_files(repo_path, target_major=major)
         _modernize_angular_gitignore(repo_path)
+
+        from amstralift.adapters.angular_standalone import (
+            modernize_angular_material_templates,
+            modernize_angular_standalone_components,
+        )
+
+        applied.extend(modernize_angular_material_templates(repo_path))
 
         # 1. Control-Flow (*ngIf -> @if, *ngFor -> @for)
         if any(f in ("control-flow", "controlflow", "all") for f in normalized):
@@ -910,7 +990,11 @@ class AngularAdapter(BaseAdapter):
                             "(convert-to-standalone -> prune-ng-modules -> standalone-bootstrap)"
                         )
                 else:
-                    applied.append("Skipped standalone migration: npx CLI not found in environment")
+                    applied.append("Skipped standalone migration schematic: npx CLI not found in environment")
+
+                # Always apply AST/regex standalone component modernizer to guarantee all components
+                # receive complete imports and schemas (fixes Angular 19+ schematic skipping behavior)
+                applied.extend(modernize_angular_standalone_components(repo_path))
             else:
                 applied.append(f"Skipped standalone migration: requires Angular 15+ (current is v{major or 'unknown'})")
 

@@ -467,7 +467,7 @@ def test_align_angular_ecosystem_dependencies(tmp_path: Path):
     assert deps["@fortawesome/fontawesome-svg-core"] == "^7.3.1"
     assert deps["@fortawesome/free-solid-svg-icons"] == "^7.3.1"
     assert deps["@ngx-translate/core"] == "^17.0.0"
-    assert deps["@ngx-translate/http-loader"] == "^17.0.0"
+    assert deps["@ngx-translate/http-loader"] == "^16.0.0"
     assert deps["bootstrap"] == "^5.3.3"
     assert deps["tslib"] == "^2.8.1"
 
@@ -510,6 +510,143 @@ def test_discover_candidates_ecosystem_alignment(tmp_path: Path, monkeypatch):
     assert cand_dict["@fortawesome/angular-fontawesome"] == "^5.1.0"
     assert cand_dict["@ngx-translate/core"] == "^17.0.0"
     assert cand_dict["bootstrap"] == "^5.3.3"
+
+
+def test_modernize_angular_stylesheets_m2_theming(tmp_path: Path):
+    from amstralift.adapters.angular import _modernize_angular_stylesheets
+
+    scss_path = tmp_path / "styles.scss"
+    scss_path.write_text(
+        """@use '~@angular/material' as mat;
+$my-palette: mat.define-palette(mat.$green-palette, 400);
+$my-theme: mat.define-light-theme((color: (primary: $my-palette)));
+@include mat.all-component-themes($my-theme);
+""",
+        encoding="utf-8",
+    )
+
+    applied = _modernize_angular_stylesheets(tmp_path, target_major=22)
+    assert len(applied) > 0
+
+    content = scss_path.read_text(encoding="utf-8")
+    assert "@use '@angular/material' as mat;" in content
+    assert "mat.m2-define-palette(mat.$m2-green-palette, 400)" in content
+    assert "mat.m2-define-light-theme" in content
+    assert "@include mat.all-component-themes" in content
+
+
+def test_modernize_angular_source_files_forms_and_routing(tmp_path: Path):
+    from amstralift.adapters.angular import _modernize_angular_source_files
+
+    routing_path = tmp_path / "app-routing.module.ts"
+    routing_path.write_text(
+        """RouterModule.forRoot(routes, {
+  scrollPositionRestoration: 'enabled',
+  relativeLinkResolution: 'legacy'
+})""",
+        encoding="utf-8",
+    )
+
+    form_path = tmp_path / "my-form.component.ts"
+    form_path.write_text(
+        """import { Component } from '@angular/core';
+import { FormBuilder, FormGroup, Validators } from '@angular/forms';
+
+@Component({ selector: 'app-form' })
+export class MyFormComponent {
+  form: FormGroup;
+  constructor(private fb: FormBuilder) {
+    this.form = this.fb.group({ name: ['', Validators.required] });
+  }
+}""",
+        encoding="utf-8",
+    )
+
+    applied = _modernize_angular_source_files(tmp_path, target_major=22)
+    assert len(applied) > 0
+
+    routing_content = routing_path.read_text(encoding="utf-8")
+    assert "relativeLinkResolution" not in routing_content
+
+    form_content = form_path.read_text(encoding="utf-8")
+    assert "UntypedFormBuilder" in form_content
+    assert "UntypedFormGroup" in form_content
+    assert "form: UntypedFormGroup;" in form_content
+    assert "private fb: UntypedFormBuilder" in form_content
+
+
+def test_modernize_angular_material_templates(tmp_path: Path):
+    from amstralift.adapters.angular_standalone import modernize_angular_material_templates
+
+    html_path = tmp_path / "my.component.html"
+    html_path.write_text(
+        """<mat-form-field>
+  <mat-placeholder>Username</mat-placeholder>
+  <input matInput>
+</mat-form-field>
+<mat-chip-list>
+  <mat-chip>One</mat-chip>
+</mat-chip-list>""",
+        encoding="utf-8",
+    )
+
+    applied = modernize_angular_material_templates(tmp_path)
+    assert len(applied) > 0
+
+    content = html_path.read_text(encoding="utf-8")
+    assert "<mat-label>Username</mat-label>" in content
+    assert "<mat-placeholder>" not in content
+    assert "<mat-chip-set>" in content
+    assert "</mat-chip-set>" in content
+    assert "<mat-chip-list>" not in content
+
+
+def test_modernize_angular_standalone_components(tmp_path: Path):
+    from amstralift.adapters.angular_standalone import modernize_angular_standalone_components
+
+    # Create a SharedModule
+    shared_dir = tmp_path / "shared"
+    shared_dir.mkdir(parents=True)
+    (shared_dir / "shared.module.ts").write_text("export class SharedModule {}", encoding="utf-8")
+
+    # Create a Shared Component
+    shared_comp = shared_dir / "big-input.component.ts"
+    shared_comp.write_text(
+        """import { Component } from '@angular/core';
+@Component({
+  selector: 'app-big-input',
+  template: '<mat-card [ngClass]="cls"><mat-icon>search</mat-icon></mat-card>'
+})
+export class BigInputComponent {}""",
+        encoding="utf-8",
+    )
+
+    # Create a Feature Component
+    feat_dir = tmp_path / "features" / "home"
+    feat_dir.mkdir(parents=True)
+    feat_comp = feat_dir / "home.component.ts"
+    feat_comp.write_text(
+        """import { Component } from '@angular/core';
+@Component({
+  selector: 'app-home',
+  template: '<h1>Home</h1><router-outlet></router-outlet>'
+})
+export class HomeComponent {}""",
+        encoding="utf-8",
+    )
+
+    applied = modernize_angular_standalone_components(tmp_path)
+    assert len(applied) > 0
+
+    shared_content = shared_comp.read_text(encoding="utf-8")
+    assert "CommonModule" in shared_content
+    assert "MatCardModule" in shared_content
+    assert "MatIconModule" in shared_content
+
+    feat_content = feat_comp.read_text(encoding="utf-8")
+    assert "SharedModule" in feat_content
+    assert "RouterModule" in feat_content
+
 
 
 
