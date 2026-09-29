@@ -259,6 +259,14 @@ def run_stage_b(
         if branch_check.returncode != 0:
             checkout_res = run_git(["checkout", "-b", branch_name, bundle.base_commit_sha], cwd=target_repo_path)
         else:
+            # Check if this existing branch already has this exact commit
+            last_msg = (run_git(["log", "-n", "1", "--format=%s", branch_name], cwd=target_repo_path).stdout or "").strip()
+            if last_msg == pr_proposal.title:
+                logger.info("Branch '%s' already contains this upgrade commit ('%s'). Idempotent skip.", branch_name, last_msg)
+                pr_proposal.publish_status = "ALREADY_COMMITTED"
+                run_git(["checkout", branch_name], cwd=target_repo_path)
+                return pr_proposal
+
             checkout_res = run_git(["checkout", branch_name], cwd=target_repo_path)
 
         if checkout_res.returncode != 0:
@@ -271,6 +279,17 @@ def run_stage_b(
             input_data=bundle.patch,
         )
         if apply_res.returncode != 0:
+            # Check if the patch changes are already applied in the tree
+            reverse_check = run_git(
+                ["apply", "--reverse", "--check", "--binary", "-"],
+                cwd=target_repo_path,
+                input_data=bundle.patch,
+            )
+            if reverse_check.returncode == 0:
+                logger.info("Patch changes already applied to target files. Skipping duplicate apply.")
+                pr_proposal.publish_status = "ALREADY_APPLIED"
+                return pr_proposal
+
             run_git(["checkout", bundle.target_branch], cwd=target_repo_path)
             raise StageBPublishError(f"Failed to apply patch in Stage B: {apply_res.stderr}")
 

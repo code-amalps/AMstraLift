@@ -161,10 +161,18 @@ def run(
 
         console.print("[bold green]✔ Upgrade workflow completed successfully![/bold green]\n")
         if not dry_run:
-            console.print(
-                f"[bold green]✔ Committed upgrade patch to branch:[/bold green] [cyan]{pr_proposal.branch_name}[/cyan]\n"
-                f"[dim]Run 'git checkout {pr_proposal.branch_name}' to inspect the modified files in your editor.[/dim]\n"
-            )
+            if pr_proposal.publish_status in ("ALREADY_COMMITTED", "ALREADY_APPLIED"):
+                console.print(
+                    f"[bold green]✔ Branch [cyan]{pr_proposal.branch_name}[/cyan] is already up to date with this upgrade![/bold green]\n"
+                    f"[yellow]To continue upgrading to the next major version, checkout this branch and run AMstraLift again:[/yellow]\n"
+                    f"  [bold cyan]git checkout {pr_proposal.branch_name}[/bold cyan]\n"
+                    f"  [bold cyan]uv run amstralift run[/bold cyan]\n"
+                )
+            else:
+                console.print(
+                    f"[bold green]✔ Committed upgrade patch to branch:[/bold green] [cyan]{pr_proposal.branch_name}[/cyan]\n"
+                    f"[dim]Run 'git checkout {pr_proposal.branch_name}' to inspect the modified files in your editor.[/dim]\n"
+                )
 
         # Display Changes Table
         table = Table(title="Proposed Package Changes", show_header=True, header_style="bold magenta")
