@@ -340,7 +340,15 @@ class AngularAdapter(BaseAdapter):
         if any(f in ("standalone", "all") for f in normalized):
             if major and major >= 15:
                 if has_npx:
-                    cmd = ["npx", "@angular/cli", "generate", "@angular/core:standalone", "--mode=convert-to-standalone", "--interactive=false"]
+                    cmd = [
+                        "npx",
+                        "@angular/cli",
+                        "generate",
+                        "@angular/core:standalone",
+                        "--mode=convert-to-standalone",
+                        "--interactive=false",
+                        "--defaults",
+                    ]
                     try:
                         res = subprocess.run(
                             cmd,
@@ -354,8 +362,17 @@ class AngularAdapter(BaseAdapter):
                         if res.returncode == 0:
                             applied.append("Converted components and directives to Angular Standalone architecture")
                         else:
-                            err_hint = (res.stderr or res.stdout or "").strip()[:80]
-                            applied.append(f"Standalone migration returned exit code {res.returncode}: {err_hint}")
+                            raw_err = (res.stderr or res.stdout or "").strip()
+                            if "does not support schematics" in raw_err:
+                                applied.append(
+                                    "Skipped standalone migration: local node_modules has older Angular version. "
+                                    "Run 'npm install' on upgraded branch first."
+                                )
+                            elif "TypeScript" in raw_err:
+                                applied.append(f"Standalone migration TypeScript mismatch: {raw_err[:80]}")
+                            else:
+                                err_hint = raw_err[:80]
+                                applied.append(f"Standalone migration returned exit code {res.returncode}: {err_hint}")
                     except Exception as e:
                         applied.append(f"Standalone migration error: {str(e)[:80]}")
                 else:
