@@ -1,9 +1,14 @@
 """Robust package-lock.json updater for npm-based adapters (Angular, React).
 
-Ensures package-lock.json direct, dev, companion, and transitive dependencies
-across all lockfile versions (v1, v2, v3) are updated accurately and deterministically,
-strips stale integrity/resolved hashes, prunes obsolete devkit entries, and
-reconciles lockfile consistency using npm when available.
+Strategy (in priority order):
+1. REGENERATE (preferred): delete the old lockfile and let npm recreate it fresh
+   from the updated package.json.  This is the only 100%-reliable approach for
+   large version jumps (e.g. Angular 12 → 22) because the old lockfile contains
+   deeply-nested, version-pinned transitive entries that cannot all be patched
+   surgically.
+2. SURGICAL PATCH (fallback when npm is unavailable): update the top-level entries,
+   strip stale integrity/resolved hashes, prune obsolete/nested devkit copies, and
+   synchronise companion @angular-devkit packages.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from amstralift.core.models import DependencyChange
 
 logger = logging.getLogger("amstralift.adapters.npm_lockfile")
 
-# Obsolete devkit packages from older Angular versions that do not exist or break modern Angular
+# Obsolete devkit packages from older Angular versions that do not exist in modern Angular
 OBSOLETE_DEVKIT_PACKAGES = {
     "@angular-devkit/build-optimizer",
     "@angular-devkit/build-webpack",
@@ -35,17 +40,89 @@ COMPANION_DEVKIT_PACKAGES = {
 }
 
 
+def _find_npm(env: dict[str, str] | None) -> str | None:
+    """Locate the npm executable using the provided PATH or system PATH."""
+    return (
+        shutil.which("npm", path=env.get("PATH") if env else None)
+        or shutil.which("npm")
+    )
+
+
+def _regenerate_lockfile(
+    repo_path: Path,
+    npm_cmd: str,
+    env: dict[str, str] | None,
+    timeout: int = 120,
+) -> bool:
+    """Delete the old package-lock.json and regenerate it from package.json.
+
+    This is the preferred strategy for large version jumps because it produces
+    a completely clean lockfile with no stale nested entries.
+
+    Returns True on success, False on failure.
+    """
+    lock_file = repo_path / "package-lock.json"
+    backup = repo_path / "package-lock.json.amstralift_bak"
+
+    # Keep a backup so we can restore on failure
+    try:
+        if lock_file.exists():
+            import shutil as _shutil
+            _shutil.copy2(lock_file, backup)
+        lock_file.unlink(missing_ok=True)
+
+        result = subprocess.run(
+            [
+                npm_cmd,
+                "install",
+                "--package-lock-only",
+                "--legacy-peer-deps",
+                "--no-audit",
+                "--no-fund",
+            ],
+            cwd=repo_path,
+            env=env or os.environ.copy(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            shell=sys.platform == "win32",
+        )
+
+        if result.returncode == 0 and lock_file.exists():
+            backup.unlink(missing_ok=True)
+            logger.debug("package-lock.json regenerated cleanly via npm install --package-lock-only")
+            return True
+
+        # Restore backup on failure
+        logger.warning(
+            "npm install --package-lock-only failed (rc=%s): %s",
+            result.returncode,
+            (result.stderr or result.stdout or "")[:200],
+        )
+        if backup.exists() and not lock_file.exists():
+            import shutil as _shutil
+            _shutil.move(str(backup), str(lock_file))
+        return False
+
+    except Exception as exc:
+        logger.warning("lockfile regeneration error: %s", exc)
+        if backup.exists() and not lock_file.exists():
+            import shutil as _shutil
+            _shutil.move(str(backup), str(lock_file))
+        return False
+    finally:
+        backup.unlink(missing_ok=True)
+
+
 def update_npm_lockfile(
     repo_path: Path,
     changes: list[DependencyChange],
     env: dict[str, str] | None = None,
 ) -> bool:
-    """Update package-lock.json safely, accurately, and deterministically.
+    """Update package-lock.json for the given dependency changes.
 
-    Updates direct, dev, companion, and root manifest dependencies across all lockfile
-    versions (v1, v2, v3), strips stale integrity/resolved hashes for modified packages,
-    prunes obsolete devkit entries, and reconciles via 'npm install --package-lock-only'
-    if the npm CLI is available.
+    Tries full lockfile regeneration via npm first (Strategy 1).
+    Falls back to deterministic surgical patching if npm is unavailable (Strategy 2).
 
     Returns:
         True if package-lock.json was updated, False otherwise.
@@ -54,10 +131,37 @@ def update_npm_lockfile(
     if not lock_file.exists():
         return False
 
+    # ── Strategy 1: Full regeneration via npm ────────────────────────────────
+    # Skip in unit tests (PYTEST_CURRENT_TEST is set by pytest automatically).
+    npm_cmd = _find_npm(env)
+    if npm_cmd and not os.environ.get("PYTEST_CURRENT_TEST"):
+        pkg_file = repo_path / "package.json"
+        if pkg_file.exists():
+            if _regenerate_lockfile(repo_path, npm_cmd, env):
+                return True
+
+    # ── Strategy 2: Surgical patch (fallback) ────────────────────────────────
+    return _surgical_patch_lockfile(repo_path, changes, env)
+
+
+def _surgical_patch_lockfile(
+    repo_path: Path,
+    changes: list[DependencyChange],
+    env: dict[str, str] | None = None,
+) -> bool:
+    """Deterministically patch the existing package-lock.json.
+
+    Handles lockfile versions v1/v2/v3, strips stale integrity/resolved fields,
+    prunes obsolete/nested devkit copies, and synchronises companion devkit versions.
+    """
+    lock_file = repo_path / "package-lock.json"
+    if not lock_file.exists():
+        return False
+
     try:
         lock_data = json.loads(lock_file.read_text(encoding="utf-8"))
 
-        # Determine target devkit version if @angular/cli or devkit packages are being upgraded
+        # Determine target devkit version from the upgrade set
         cli_or_devkit_change = next(
             (
                 c
@@ -76,15 +180,14 @@ def update_npm_lockfile(
             clean_ver = change.to_version.lstrip("^~>=<")
             pkg_key = f"node_modules/{change.package_name}"
 
-            # 1. Update packages["node_modules/<package_name>"] (npm v2/v3)
+            # 1. packages["node_modules/<pkg>"] (npm v2/v3)
             if "packages" in lock_data and pkg_key in lock_data["packages"]:
                 entry = lock_data["packages"][pkg_key]
                 entry["version"] = clean_ver
-                # Strip stale integrity & resolved fields so npm re-resolves cleanly without EINTEGRITY
                 entry.pop("integrity", None)
                 entry.pop("resolved", None)
 
-            # 2. Update root package manifest packages[""] (npm v2/v3)
+            # 2. Root manifest packages[""] (npm v2/v3)
             if "packages" in lock_data and "" in lock_data["packages"]:
                 root_pkg = lock_data["packages"][""]
                 if change.change_type == "direct" and "dependencies" in root_pkg:
@@ -94,7 +197,7 @@ def update_npm_lockfile(
                     if change.package_name in root_pkg["devDependencies"]:
                         root_pkg["devDependencies"][change.package_name] = change.to_version
 
-            # 3. Update legacy dependencies section (npm v1/v2)
+            # 3. Legacy flat dependencies (npm v1/v2)
             if "dependencies" in lock_data and change.package_name in lock_data["dependencies"]:
                 dep_entry = lock_data["dependencies"][change.package_name]
                 if isinstance(dep_entry, dict):
@@ -104,7 +207,7 @@ def update_npm_lockfile(
                 else:
                     lock_data["dependencies"][change.package_name] = clean_ver
 
-        # 4. Synchronize companion @angular-devkit packages and prune obsolete/nested entries
+        # 4. Prune nested/obsolete devkit entries and sync companions (v2/v3)
         if target_devkit_ver and "packages" in lock_data:
             packages = lock_data["packages"]
             keys_to_delete = []
@@ -112,40 +215,34 @@ def update_npm_lockfile(
             for key in list(packages.keys()):
                 if not key:
                     continue
-
                 entry = packages[key]
 
-                # Delete obsolete devkit packages (top-level and nested)
+                # Remove obsolete devkit packages wherever they appear
                 if any(f"/{obs}" in key for obs in OBSOLETE_DEVKIT_PACKAGES):
                     keys_to_delete.append(key)
                     continue
 
-                # Delete ANY nested copy of a companion devkit package.
-                # Pattern: "node_modules/<anything>/node_modules/@angular-devkit/<comp>"
-                # This covers:
-                #   node_modules/@angular/cli/node_modules/@angular-devkit/core
-                #   node_modules/@angular-devkit/build-angular/node_modules/@angular-devkit/core
-                #   node_modules/@schematics/angular/node_modules/@angular-devkit/core  etc.
-                is_nested_companion = (
-                    "/node_modules/" in key
-                    and any(f"@angular-devkit/{comp.split('/')[1]}" in key for comp in COMPANION_DEVKIT_PACKAGES)
+                # Remove ALL nested copies of companion devkit packages
+                # (e.g. node_modules/@angular/cli/node_modules/@angular-devkit/core)
+                is_nested_companion = "/node_modules/" in key and any(
+                    f"@angular-devkit/{comp.split('/')[1]}" in key
+                    for comp in COMPANION_DEVKIT_PACKAGES
                 )
                 if is_nested_companion:
                     keys_to_delete.append(key)
                     continue
 
-                # Also prune old webpack / webassembly etc. nested inside build-angular from Angular 12
+                # Remove all entries nested under build-angular (Angular 12 webpack tree)
                 if "node_modules/@angular-devkit/build-angular/node_modules/" in key:
                     keys_to_delete.append(key)
                     continue
 
-                # Synchronize TOP-LEVEL companion devkit packages only
+                # Update top-level companion versions
                 for comp in COMPANION_DEVKIT_PACKAGES:
                     if key == f"node_modules/{comp}":
                         entry["version"] = target_devkit_ver
                         entry.pop("integrity", None)
                         entry.pop("resolved", None)
-                        # Clean obsolete sub-deps
                         if "dependencies" in entry and isinstance(entry["dependencies"], dict):
                             for sub_k in list(entry["dependencies"].keys()):
                                 if sub_k in OBSOLETE_DEVKIT_PACKAGES:
@@ -155,7 +252,7 @@ def update_npm_lockfile(
             for k in keys_to_delete:
                 packages.pop(k, None)
 
-        # 4b. Synchronize legacy dependencies section
+        # 4b. Sync legacy flat section
         if target_devkit_ver and "dependencies" in lock_data:
             deps = lock_data["dependencies"]
             for obs in OBSOLETE_DEVKIT_PACKAGES:
@@ -174,33 +271,8 @@ def update_npm_lockfile(
                         deps[comp] = target_devkit_ver
 
         lock_file.write_text(json.dumps(lock_data, indent=2) + "\n", encoding="utf-8")
-
-        # 5. Optional: Reconcile full lockfile using npm if package.json exists and not in unit tests
-        pkg_file = repo_path / "package.json"
-        if pkg_file.exists() and not os.environ.get("PYTEST_CURRENT_TEST"):
-            npm_cmd = shutil.which("npm", path=env.get("PATH") if env else None) or shutil.which("npm")
-            if npm_cmd:
-                try:
-                    subprocess.run(
-                        [
-                            npm_cmd,
-                            "install",
-                            "--package-lock-only",
-                            "--legacy-peer-deps",
-                            "--no-audit",
-                            "--no-fund",
-                        ],
-                        cwd=repo_path,
-                        env=env or os.environ.copy(),
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                        shell=sys.platform == "win32",
-                    )
-                except Exception as e:
-                    logger.debug(f"npm install --package-lock-only reconciliation skipped: {e}")
-
         return True
-    except Exception as e:
-        logger.warning(f"Failed to update package-lock.json: {e}")
+
+    except Exception as exc:
+        logger.warning("Surgical lockfile patch failed: %s", exc)
         return False
