@@ -56,6 +56,7 @@ class UpgradeApiRequest(BaseModel):
     git_token: str | None = Field(default=None, description="Least-privilege Git provider access token.")
     repo_id: str | None = Field(default=None, description="Repository identifier (e.g. owner/repo).")
     remote_url: str | None = Field(default=None, description="Explicit Git remote URL for push.")
+    output_branch: str | None = Field(default=None, description="Target branch name for the upgrade commits.")
 
 
 class UpgradeApiResponse(BaseModel):

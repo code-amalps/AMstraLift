@@ -72,6 +72,13 @@ def run(
             help="Timeout in seconds for each build/test gate (default: 300).",
         ),
     ] = 300,
+    output_branch: Annotated[
+        str | None,
+        typer.Option(
+            "--output-branch",
+            help="Target branch to commit the upgrade onto (defaults to staying on current amstralift/* branch, or generating an upgrade branch).",
+        ),
+    ] = None,
 ):
     """Run full two-stage upgrade workflow on a target repository."""
     repo_str = str(repo)
@@ -149,6 +156,7 @@ def run(
                 remote_url=remote_url,
                 allow_failed_gates=allow_failed_gates,
                 test_timeout=float(test_timeout),
+                output_branch=output_branch,
             )
 
         console.print("[bold green]✔ Upgrade workflow completed successfully![/bold green]\n")

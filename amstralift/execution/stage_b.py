@@ -50,6 +50,7 @@ def run_stage_b(
     git_token: str | None = None,
     publish: bool = False,
     allow_failed_gates: bool = False,
+    output_branch: str | None = None,
 ) -> PullRequestProposal:
     """Validate signed advisory bundle, handle duplicate checks, and create or open a PR."""
     bundle = signed_bundle.bundle
@@ -157,10 +158,21 @@ def run_stage_b(
         changes=bundle.changes,
         base_commit_sha=bundle.base_commit_sha,
     )
-    # Short hash from idempotency key guarantees collision-free branch naming across branches/commits
-    branch_name = derive_deterministic_branch_name(
-        primary_pkg, target_ver, idempotency_key=idempotency_key
-    )
+    # Branch Name Determination:
+    # 1. Explicit output_branch option if specified by user
+    # 2. Stay on current branch if active branch is already an amstralift/* branch
+    # 3. Derive deterministic branch name
+    from amstralift.core.workspace import get_active_branch
+
+    active_branch = get_active_branch(target_repo_path)
+    if output_branch:
+        branch_name = output_branch
+    elif active_branch and active_branch.startswith("amstralift/"):
+        branch_name = active_branch
+    else:
+        branch_name = derive_deterministic_branch_name(
+            primary_pkg, target_ver, idempotency_key=idempotency_key
+        )
 
     now = datetime.now(timezone.utc)
     deadline_24h = now + timedelta(hours=24)

@@ -369,3 +369,44 @@ def test_remote_branch_diverged_conflict_rejection(test_git_environment):
                 # Force-push was NOT called
                 assert not mock_push.called
 
+
+def test_stage_b_stays_on_active_amstralift_branch(test_git_environment):
+    """When target repo is already checked out on an amstralift/* branch, Stage B stays on that branch."""
+    local_repo = test_git_environment["local_repo"]
+    orchestrator = UpgradeOrchestrator()
+
+    # Create and checkout an initial amstralift migration branch
+    active_migration_branch = "amstralift/my-migration"
+    run_git(["checkout", "-b", active_migration_branch], cwd=local_repo)
+
+    signed_bundle, pr_proposal = orchestrator.run_upgrade(
+        repo_path=local_repo,
+        ecosystem="python",
+        target_branch=active_migration_branch,
+        dry_run=False,
+    )
+
+    # Verified: It stayed on the active amstralift/my-migration branch!
+    assert pr_proposal.branch_name == active_migration_branch
+    # Current git branch remains active_migration_branch
+    curr_branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=local_repo).stdout.strip()
+    assert curr_branch == active_migration_branch
+
+
+def test_stage_b_respects_explicit_output_branch(test_git_environment):
+    """When output_branch is provided, Stage B uses that exact branch name."""
+    local_repo = test_git_environment["local_repo"]
+    orchestrator = UpgradeOrchestrator()
+
+    signed_bundle, pr_proposal = orchestrator.run_upgrade(
+        repo_path=local_repo,
+        ecosystem="python",
+        target_branch="main",
+        dry_run=False,
+        output_branch="amstralift/persistent-upgrade",
+    )
+
+    assert pr_proposal.branch_name == "amstralift/persistent-upgrade"
+    curr_branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=local_repo).stdout.strip()
+    assert curr_branch == "amstralift/persistent-upgrade"
+

@@ -185,6 +185,7 @@ def create_app() -> FastAPI:
                 remote_url=request.remote_url,
                 allow_failed_gates=request.allow_failed_gates,
                 test_timeout=request.test_timeout,
+                output_branch=request.output_branch,
             )
 
             changes_data = [
