@@ -135,9 +135,9 @@ def run(
             run_git(["cat-file", "-e", f"{active}:{m}"], cwd=repo).returncode == 0
             for m in manifest_names
         )
-        if not has_manifest:
-            # Fallback to master or main if they contain manifests
-            for candidate in ("master", "main"):
+        if not has_manifest or (active and active.startswith("amstralift/")):
+            # Fallback to base development branch (Dev, main, master) if current branch lacks manifests or is an amstralift branch
+            for candidate in ("Dev", "main", "master"):
                 if candidate != active and run_git(["rev-parse", "--verify", candidate], cwd=repo).returncode == 0:
                     if any(
                         run_git(["cat-file", "-e", f"{candidate}:{m}"], cwd=repo).returncode == 0

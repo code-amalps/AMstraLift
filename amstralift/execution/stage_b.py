@@ -329,9 +329,7 @@ def run_stage_b(
     if not dry_run:
         # Check if local branch already exists
         branch_check = run_git(["rev-parse", "--verify", branch_name], cwd=target_repo_path)
-        if branch_check.returncode != 0:
-            checkout_res = run_git(["checkout", "-b", branch_name, bundle.base_commit_sha], cwd=target_repo_path)
-        else:
+        if branch_check.returncode == 0:
             # Check if this existing branch already has this exact commit
             last_msg = (run_git(["log", "-n", "1", "--format=%s", branch_name], cwd=target_repo_path).stdout or "").strip()
             if last_msg == pr_proposal.title:
@@ -340,6 +338,10 @@ def run_stage_b(
                 run_git(["checkout", branch_name], cwd=target_repo_path)
                 return pr_proposal
 
+        # Checkout or reset branch cleanly to base commit SHA
+        if branch_name != bundle.target_branch:
+            checkout_res = run_git(["checkout", "-B", branch_name, bundle.base_commit_sha], cwd=target_repo_path)
+        else:
             checkout_res = run_git(["checkout", branch_name], cwd=target_repo_path)
 
         if checkout_res.returncode != 0:

@@ -81,6 +81,7 @@ ANGULAR_TS_RECOMMENDED: dict[int, str] = {
     18: "^5.4.5",
     19: "^5.6.3",
     20: "^5.7.2",
+    21: "^5.8.2",
     22: "^6.0.3",
 }
 
@@ -245,8 +246,8 @@ class AngularAdapter(BaseAdapter):
                 or pkg in ("typescript", "@angular/cli", "eslint")
             ):
                 clean_cur = cur_ver.lstrip("^~>=<")
-                if pkg == "typescript" and target_angular_major in ANGULAR_TS_RECOMMENDED:
-                    rec_ts = ANGULAR_TS_RECOMMENDED[target_angular_major]
+                if pkg == "typescript":
+                    rec_ts = ANGULAR_TS_RECOMMENDED.get(target_angular_major, "^6.0.3")
                     if clean_cur != rec_ts.lstrip("^~>=<"):
                         tier = classify_angular_tier(pkg)
                         candidates.append(
