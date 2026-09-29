@@ -71,6 +71,18 @@ ANGULAR_TS_MATRIX = {
     22: 5,
 }
 
+ANGULAR_TS_RECOMMENDED: dict[int, str] = {
+    12: "^4.2.4",
+    13: "^4.4.4",
+    14: "^4.7.2",
+    15: "^4.9.5",
+    16: "^5.1.3",
+    17: "^5.3.2",
+    18: "^5.4.5",
+    19: "^5.6.3",
+    20: "^5.7.2",
+}
+
 
 def extract_major_version(ver_str: str) -> int | None:
     """Extract integer major version from a version string."""
@@ -211,6 +223,22 @@ class AngularAdapter(BaseAdapter):
                 or pkg in ("typescript", "@angular/cli")
             ):
                 clean_cur = cur_ver.lstrip("^~>=<")
+                if pkg == "typescript" and target_major and target_major in ANGULAR_TS_RECOMMENDED:
+                    rec_ts = ANGULAR_TS_RECOMMENDED[target_major]
+                    if clean_cur != rec_ts.lstrip("^~>=<"):
+                        tier = classify_angular_tier(pkg)
+                        candidates.append(
+                            DependencyChange(
+                                package_name=pkg,
+                                from_version=cur_ver,
+                                to_version=rec_ts,
+                                change_type="dev",
+                                tier=tier,
+                                rationale=f"Align TypeScript to {rec_ts} for Angular {target_major} compatibility. {policy_reason}",
+                            )
+                        )
+                    continue
+
                 major_constraint = get_major_constraint(pkg)
                 latest = self.fetch_latest_version(pkg, target_major=major_constraint)
 
