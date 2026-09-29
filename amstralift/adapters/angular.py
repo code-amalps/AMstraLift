@@ -86,6 +86,97 @@ ANGULAR_TS_RECOMMENDED: dict[int, str] = {
     22: "^6.0.3",
 }
 
+ANGULAR_FONTAWESOME_MAP: dict[int, str] = {
+    12: "^0.7.0",
+    13: "^0.10.0",
+    14: "^0.11.0",
+    15: "^0.12.0",
+    16: "^0.13.0",
+    17: "^0.14.0",
+    18: "^0.15.0",
+    19: "^1.0.0",
+    20: "^3.0.0",
+    21: "^4.0.0",
+    22: "^5.1.0",
+}
+
+
+def get_angular_ecosystem_recommendation(
+    pkg_name: str,
+    cur_ver: str,
+    target_angular_major: int | None,
+) -> str | None:
+    """Return recommended version for ecosystem package aligned to target Angular major."""
+    if target_angular_major is None:
+        return None
+
+    if pkg_name == "@fortawesome/angular-fontawesome":
+        if target_angular_major in ANGULAR_FONTAWESOME_MAP:
+            return ANGULAR_FONTAWESOME_MAP[target_angular_major]
+        if target_angular_major >= 22:
+            return "^5.1.0"
+
+    if pkg_name in (
+        "@fortawesome/fontawesome-svg-core",
+        "@fortawesome/free-solid-svg-icons",
+        "@fortawesome/free-brands-svg-icons",
+        "@fortawesome/fontawesome-free",
+    ):
+        if target_angular_major >= 16:
+            return "^7.3.1"
+
+    if pkg_name == "@ngx-translate/core":
+        if target_angular_major >= 16:
+            # v17 maintains full NgModule (TranslateModule) and Ivy fesm2022 compatibility
+            return "^17.0.0"
+
+    if pkg_name == "@ngx-translate/http-loader":
+        if target_angular_major >= 16:
+            return "^17.0.0"
+
+    if pkg_name == "bootstrap":
+        if target_angular_major >= 16:
+            cur_major = extract_major_version(cur_ver)
+            if cur_major is not None and cur_major <= 5:
+                return "^5.3.3"
+
+    if pkg_name == "tslib":
+        if target_angular_major >= 16:
+            return "^2.8.1"
+
+    return None
+
+
+def _align_angular_ecosystem_dependencies(repo_path: Path, target_major: int | None = None) -> list[str]:
+    """Ensure key ecosystem dependencies in package.json are compatible with target Angular major."""
+    pkg_file = repo_path / "package.json"
+    if not pkg_file.exists():
+        return []
+
+    try:
+        data = json.loads(pkg_file.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    modified = False
+    applied = []
+
+    deps = data.get("dependencies", {})
+    for pkg, cur_ver in list(deps.items()):
+        rec_ver = get_angular_ecosystem_recommendation(pkg, cur_ver, target_major)
+        if rec_ver and cur_ver != rec_ver:
+            deps[pkg] = rec_ver
+            modified = True
+            applied.append(f"Aligned {pkg} to {rec_ver} for Angular {target_major} compatibility")
+
+    if modified:
+        try:
+            pkg_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    return applied
+
 
 def extract_major_version(ver_str: str) -> int | None:
     """Extract integer major version from a version string."""
@@ -496,7 +587,6 @@ class AngularAdapter(BaseAdapter):
                 pkg_name.startswith("@angular/")
                 or pkg_name.startswith("@angular-devkit/")
                 or pkg_name.startswith("@ngrx/")
-                or pkg_name.startswith("@angular-extensions/")
             ):
                 return target_major
             if pkg_name == "typescript":
@@ -507,12 +597,52 @@ class AngularAdapter(BaseAdapter):
                 return 0
             return None
 
-        tracked_direct_prefixes = ("@angular/", "@ngrx/", "@angular-extensions/")
+        tracked_direct_prefixes = (
+            "@angular/",
+            "@angular-devkit/",
+            "@ngrx/",
+            "@angular-extensions/",
+            "@ngx-translate/",
+            "@fortawesome/",
+            "@ng-",
+            "@ngneat/",
+            "@ng-select/",
+            "@swimlane/",
+            "ngx-",
+        )
+        tracked_direct_packages = (
+            "rxjs",
+            "zone.js",
+            "tslib",
+            "bootstrap",
+            "browser-detect",
+            "uuid",
+        )
         for pkg, cur_ver in direct_deps.items():
-            if any(pkg.startswith(p) for p in tracked_direct_prefixes) or pkg in ("rxjs", "zone.js", "tslib"):
+            rec_ver = get_angular_ecosystem_recommendation(pkg, cur_ver, target_angular_major)
+            if rec_ver:
+                clean_rec = rec_ver.lstrip("^~>=<")
+                clean_cur = cur_ver.lstrip("^~>=<")
+                if clean_rec != clean_cur:
+                    tier = classify_angular_tier(pkg)
+                    candidates.append(
+                        DependencyChange(
+                            package_name=pkg,
+                            from_version=cur_ver,
+                            to_version=rec_ver,
+                            change_type="direct",
+                            tier=tier,
+                            rationale=f"Align {pkg} to {rec_ver} for Angular {target_angular_major} compatibility. {policy_reason}",
+                        )
+                    )
+                continue
+
+            if any(pkg.startswith(p) for p in tracked_direct_prefixes) or pkg in tracked_direct_packages:
                 clean_cur = cur_ver.lstrip("^~>=<")
                 major_constraint = get_major_constraint(pkg)
                 latest = self.fetch_latest_version(pkg, target_major=major_constraint)
+                if not latest and major_constraint is not None and not pkg.startswith("@angular/"):
+                    latest = self.fetch_latest_version(pkg, target_major=None)
 
                 if latest and latest != clean_cur:
                     tier = classify_angular_tier(pkg)
@@ -528,50 +658,60 @@ class AngularAdapter(BaseAdapter):
                     )
 
         has_angular_eslint = any(p.startswith("@angular-eslint/") for p in dev_deps)
+        tracked_dev_prefixes = (
+            "@angular-devkit/",
+            "@angular/",
+            "@angular-eslint/",
+            "@typescript-eslint/",
+            "@types/",
+        )
+        tracked_dev_packages = (
+            "typescript",
+            "@angular/cli",
+            "eslint",
+            "jasmine-core",
+            "karma",
+        )
         for pkg, cur_ver in dev_deps.items():
-            if (
-                pkg.startswith("@angular-devkit/")
-                or pkg.startswith("@angular/")
-                or pkg.startswith("@angular-eslint/")
-                or pkg.startswith("@typescript-eslint/")
-                or pkg in ("typescript", "@angular/cli", "eslint")
-            ):
-                clean_cur = cur_ver.lstrip("^~>=<")
-                if pkg == "typescript":
-                    rec_ts = ANGULAR_TS_RECOMMENDED.get(target_angular_major, "^6.0.3")
-                    if clean_cur != rec_ts.lstrip("^~>=<"):
-                        tier = classify_angular_tier(pkg)
-                        candidates.append(
-                            DependencyChange(
-                                package_name=pkg,
-                                from_version=cur_ver,
-                                to_version=rec_ts,
-                                change_type="dev",
-                                tier=tier,
-                                rationale=f"Align TypeScript to {rec_ts} for Angular {target_angular_major} compatibility. {policy_reason}",
-                            )
+            clean_cur = cur_ver.lstrip("^~>=<")
+            if pkg == "typescript":
+                rec_ts = ANGULAR_TS_RECOMMENDED.get(target_angular_major, "^6.0.3")
+                if clean_cur != rec_ts.lstrip("^~>=<"):
+                    tier = classify_angular_tier(pkg)
+                    candidates.append(
+                        DependencyChange(
+                            package_name=pkg,
+                            from_version=cur_ver,
+                            to_version=rec_ts,
+                            change_type="dev",
+                            tier=tier,
+                            rationale=f"Align TypeScript to {rec_ts} for Angular {target_angular_major} compatibility. {policy_reason}",
                         )
-                    continue
+                    )
+                continue
 
-                if pkg == "eslint" and (has_angular_eslint or (target_major and target_major >= 17)):
-                    rec_eslint = "^8.57.1"
-                    cur_major = extract_major_version(cur_ver)
-                    if cur_major and cur_major < 8:
-                        tier = classify_angular_tier(pkg)
-                        candidates.append(
-                            DependencyChange(
-                                package_name=pkg,
-                                from_version=cur_ver,
-                                to_version=rec_eslint,
-                                change_type="dev",
-                                tier=tier,
-                                rationale=f"Align ESLint to {rec_eslint} for @angular-eslint compatibility. {policy_reason}",
-                            )
+            if pkg == "eslint" and (has_angular_eslint or (target_major and target_major >= 17)):
+                rec_eslint = "^8.57.1"
+                cur_major = extract_major_version(cur_ver)
+                if cur_major and cur_major < 8:
+                    tier = classify_angular_tier(pkg)
+                    candidates.append(
+                        DependencyChange(
+                            package_name=pkg,
+                            from_version=cur_ver,
+                            to_version=rec_eslint,
+                            change_type="dev",
+                            tier=tier,
+                            rationale=f"Align ESLint to {rec_eslint} for @angular-eslint compatibility. {policy_reason}",
                         )
-                        continue
+                    )
+                continue
 
+            if any(pkg.startswith(p) for p in tracked_dev_prefixes) or pkg in tracked_dev_packages:
                 major_constraint = get_major_constraint(pkg)
                 latest = self.fetch_latest_version(pkg, target_major=major_constraint)
+                if not latest and major_constraint is not None and not (pkg.startswith("@angular/") or pkg.startswith("@angular-devkit/")):
+                    latest = self.fetch_latest_version(pkg, target_major=None)
 
                 if latest and latest != clean_cur:
                     tier = classify_angular_tier(pkg)
@@ -614,17 +754,26 @@ class AngularAdapter(BaseAdapter):
             (c for c in changes if c.package_name == "@angular/core"),
             None,
         )
-        if angular_core and "version" in data and isinstance(data["version"], str):
-            target_major_str = angular_core.to_version.lstrip("^~>=<").split(".")[0]
+        target_major_int = None
+        if angular_core:
+            try:
+                target_major_int = int(angular_core.to_version.lstrip("^~>=<").split(".")[0])
+            except Exception:
+                pass
+        if target_major_int is None and "dependencies" in data:
+            core_ver = data["dependencies"].get("@angular/core", "")
+            target_major_int = extract_major_version(core_ver)
+
+        if target_major_int is not None and "version" in data and isinstance(data["version"], str):
             cur_app_ver = data["version"].strip()
             cur_app_major = extract_major_version(cur_app_ver)
-            if cur_app_major is not None and cur_app_major < int(target_major_str):
-                data["version"] = f"{target_major_str}.0.0"
+            if cur_app_major is not None and cur_app_major < target_major_int:
+                data["version"] = f"{target_major_int}.0.0"
 
         pkg_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
-        # Modernize angular.json schema (defaultProject, browserTarget -> buildTarget)
-        target_major_int = int(target_major_str) if "target_major_str" in locals() and target_major_str else None
+        # Modernize angular ecosystem dependencies, workspace schema, tsconfig, stylesheets, source files
+        _align_angular_ecosystem_dependencies(repo_path, target_major=target_major_int)
         _modernize_angular_workspace_json(repo_path, target_major=target_major_int)
         _modernize_angular_tsconfig(repo_path, target_major=target_major_int)
         _modernize_angular_stylesheets(repo_path)
@@ -669,6 +818,7 @@ class AngularAdapter(BaseAdapter):
         normalized = [f.strip().lower() for f in modernize_flags]
         if major and major >= 14:
             _modernize_angular_workspace_json(repo_path, target_major=major)
+        _align_angular_ecosystem_dependencies(repo_path, target_major=major)
         _modernize_angular_tsconfig(repo_path, target_major=major)
         _modernize_angular_stylesheets(repo_path)
         _modernize_angular_source_files(repo_path, target_major=major)

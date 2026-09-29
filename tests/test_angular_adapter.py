@@ -434,3 +434,82 @@ def test_modernize_angular_gitignore(tmp_path: Path):
     assert ".angular" in updated
 
 
+def test_align_angular_ecosystem_dependencies(tmp_path: Path):
+    from amstralift.adapters.angular import _align_angular_ecosystem_dependencies
+
+    pkg_path = tmp_path / "package.json"
+    pkg_path.write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "@angular/core": "~12.2.6",
+                    "@fortawesome/angular-fontawesome": "^0.7.0",
+                    "@fortawesome/fontawesome-free": "^5.15.1",
+                    "@fortawesome/fontawesome-svg-core": "^1.2.32",
+                    "@fortawesome/free-solid-svg-icons": "^5.15.1",
+                    "@ngx-translate/core": "^13.0.0",
+                    "@ngx-translate/http-loader": "^6.0.0",
+                    "bootstrap": "^5.0.1",
+                    "tslib": "^2.2.0",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    applied = _align_angular_ecosystem_dependencies(tmp_path, target_major=22)
+    assert len(applied) > 0
+
+    data = json.loads(pkg_path.read_text(encoding="utf-8"))
+    deps = data["dependencies"]
+    assert deps["@fortawesome/angular-fontawesome"] == "^5.1.0"
+    assert deps["@fortawesome/fontawesome-free"] == "^7.3.1"
+    assert deps["@fortawesome/fontawesome-svg-core"] == "^7.3.1"
+    assert deps["@fortawesome/free-solid-svg-icons"] == "^7.3.1"
+    assert deps["@ngx-translate/core"] == "^17.0.0"
+    assert deps["@ngx-translate/http-loader"] == "^17.0.0"
+    assert deps["bootstrap"] == "^5.3.3"
+    assert deps["tslib"] == "^2.8.1"
+
+
+def test_discover_candidates_ecosystem_alignment(tmp_path: Path, monkeypatch):
+    pkg_path = tmp_path / "package.json"
+    pkg_path.write_text(
+        json.dumps(
+            {
+                "dependencies": {
+                    "@angular/core": "~12.2.6",
+                    "@fortawesome/angular-fontawesome": "^0.7.0",
+                    "@ngx-translate/core": "^13.0.0",
+                    "bootstrap": "^5.0.1",
+                },
+                "devDependencies": {
+                    "@angular/cli": "~12.2.6",
+                    "typescript": "~4.2.4",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    adapter = AngularAdapter()
+
+    def fetch_version(package_name: str, target_major: int | None = None) -> str | None:
+        return {
+            "@angular/core": "22.2.0",
+            "@angular/cli": "22.2.0",
+            "typescript": "7.0.2",
+        }.get(package_name)
+
+    monkeypatch.setattr(adapter, "fetch_latest_version", fetch_version)
+
+    candidates = adapter.discover_candidates(tmp_path)
+    cand_dict = {c.package_name: c.to_version for c in candidates}
+
+    assert cand_dict["@angular/core"] == "^22.2.0"
+    assert cand_dict["typescript"] == "^6.0.3"
+    assert cand_dict["@fortawesome/angular-fontawesome"] == "^5.1.0"
+    assert cand_dict["@ngx-translate/core"] == "^17.0.0"
+    assert cand_dict["bootstrap"] == "^5.3.3"
+
+
+
