@@ -8,10 +8,11 @@ AMstraLift is an automated dependency and framework upgrade engine built around 
 
 ## 📌 Implementation Status
 
-> **Core engine implementation, hardened remote publisher, CI templates, live container registry synchronization, REST API service, and the Dependency Security & Safe Upgrade Engine are complete.**  
-> The test suite has **156 passing tests (100% pass rate)**.
+> **Core engine implementation, hardened remote publisher, CI templates, live container registry synchronization, REST API service, Dependency Security & Safe Upgrade Engine, and the Angular Automated Modernization Suite (Standalone & Control Flow) are complete.**  
+> The test suite has **202 passing tests (100% pass rate)**.
 
-### Test Taxonomy (156 Passing Tests)
+### Test Taxonomy (202 Passing Tests)
+- **Angular Modernization & Standalone Architecture (32 tests)**: Global selector-to-class symbol indexing, automated standalone component import inference, custom elements schemas (`CUSTOM_ELEMENTS_SCHEMA`), modern control flow transformations (`@if`, `@for`, `@switch`), Angular Material M2 Sass theming, deprecated template rewrites (`<mat-placeholder>`, `<mat-chip-list>`), reactive forms untyped fallback, and direct/incremental multi-major upgrade orchestration.
 - **REST API & Swagger Service (7 tests)**: FastAPI endpoints (`/api/v1/health`, `/api/v1/policy`, `/api/v1/audit`, `/api/v1/upgrade`), root redirect to `/docs`, error handling, and CORS middleware.
 - **Docker & Container Registry Sync (34 tests)**: Multi-stage Dockerfile parsing, suffix-preserving tags (`-alpine`, `-slim`, `-jammy`), live Microsoft Container Registry (MCR) queries for .NET images, Docker Hub Official API for Node.js and Python, and live Node.js LTS release schedule synchronization.
 - **Dependency Security & Safe Upgrade Engine (26 tests)**:
@@ -24,7 +25,7 @@ AMstraLift is an automated dependency and framework upgrade engine built around 
 - **CI Template & Security Tests (6 tests)**: YAML schema verification, concurrency protection (`cancel-in-progress: false`), least-privilege permissions (`contents: write`, `pull-requests: write`, `issues: write`), timeout validation, and `amstralift init-ci` generator execution.
 - **Adapter Integration Tests (21 tests)**: Real manifest and lockfile generation, version discovery, watch-mode timeout prevention (`REQUIRED_TIMEOUT`), headless browser detection, and build/test gates across Angular, Python (PyPI), .NET (NuGet), and React (npm).
 - **Trust-Boundary & Security Tests (17 tests)**: Path traversal rejection (`..`), symlink blocking (`mode 120000`), pipeline & governance file protection (`.github/workflows/`, `CODEOWNERS`, `SECURITY.md`), git credential scrubbing (`.git/config`, hooks), and re-diff verification.
-- **Remote Publishing & Stage B Hardening Tests (16 tests)**: End-to-end publishing against real bare Git remotes, clean worktree verification, selective patch path staging (no `git add .`), patch apply aborts, duplicate PR detection & idempotency (zero duplicate PRs), push retry recovery (reusing existing pushed branch on API timeout), diverged remote branch conflict rejection (no force push), remote target branch drift detection, stale-base commit rejection, and tampered bundle rejection.
+- **Remote Publishing & Stage B Hardening Tests (29 tests)**: End-to-end publishing against real bare Git remotes, clean worktree verification with ephemeral cache exclusion (`.angular/`, `.nx/`, `.turbo/`), selective patch path staging (no `git add .`), patch apply aborts, duplicate PR detection & idempotency (zero duplicate PRs), push retry recovery (reusing existing pushed branch on API timeout), diverged remote branch conflict rejection (no force push), remote target branch drift detection, stale-base commit rejection, and tampered bundle rejection.
 
 ---
 
@@ -99,6 +100,40 @@ exceptions:
 
 ---
 
+## ⚡ Automated Angular Modernization Suite (v12 ➔ v22+)
+
+AMstraLift features a deterministic Angular modernization pipeline that enables leapfrog upgrades from legacy versions (Angular 12–17) straight to modern Angular (v18–22+) without breaking compilation or requiring manual refactoring.
+
+### Key Capabilities
+
+1. **Deterministic Standalone Component Modernization (`--modernize standalone`)**:
+   - **Global Selector Registry**: Indexes all components and directives across the workspace to map template selectors and custom element tags to their TypeScript class declarations.
+   - **Automated Import Inference**: Bridges the Angular 19+ "standalone by default" schematic gap by deterministically injecting `imports: [SharedModule, ChildComponent, ...]` into `@Component` decorators for all referenced child components, pipes (`translate`, `async`), and module exports.
+   - **Web Components & Custom Elements**: Automatically detects non-Angular custom elements (e.g. `<mwc-button>`) and injects `CUSTOM_ELEMENTS_SCHEMA`.
+   - **Standalone Bootstrap Migration**: Modernizes `main.ts` from legacy `platformBrowserDynamic().bootstrapModule(AppModule)` to `bootstrapApplication(AppComponent, { providers: [...] })` and prunes obsolete root `AppModule` files.
+
+2. **Modern Control Flow Migration (`--modernize control-flow`)**:
+   - Transforms legacy structural directives (`*ngIf`, `*ngFor`, `*ngSwitch`) into native Angular 17+ control flow syntax (`@if`, `@for`, `@switch`).
+
+3. **Angular Material MDC & M2 Theming Modernization**:
+   - **Template Tag Rewrites**: Automatically replaces deprecated Material elements (`<mat-placeholder>` $\rightarrow$ `<mat-label>`, `<mat-chip-list>` $\rightarrow$ `<mat-chip-set>`).
+   - **Sass M2 Palette Namespaces**: Modernizes theming files for Angular Material 18+ by rewriting legacy palette calls to `mat.m2-define-palette` and `mat.$m2-*-palette`.
+
+4. **Reactive Forms Type Safety**:
+   - Automatically migrates form controls and groups to `UntypedFormBuilder` / `UntypedFormGroup` to prevent Angular 14+ strict typed forms compilation failures (`form.value` partial type mismatches) while preserving exact runtime behavior.
+
+5. **Ecosystem Version Pinning**:
+   - Enforces compatible major versions for critical companion libraries (e.g. `@ngx-translate/http-loader@^16.0.0`, `@fortawesome/angular-fontawesome@^5.1.0`).
+
+6. **Ephemeral Cache Resilience**:
+   - Stage B and patch verification automatically identify and ignore transient build/tool caches (`.angular/`, `.nx/`, `.turbo/`, `__pycache__`, `.cache/`), preventing false-positive dirty tree rejections.
+
+7. **Flexible Upgrade Strategies**:
+   - **Direct Mode (`--no-incremental`)**: Directly bumps manifests, aligns ecosystem packages, and applies all modernizations in a single unified run (~5 minutes).
+   - **Incremental Mode (`--incremental`, default)**: Steps major-version by major-version ($12 \rightarrow 13 \rightarrow \dots \rightarrow 22$) running intermediate schematics sequentially.
+
+---
+
 ## 🚀 Running AMstraLift
 
 You can run AMstraLift using `uv`, standard `pip`, or as a **standalone compiled binary (`amstralift.exe`)**.
@@ -126,13 +161,23 @@ uv run amstralift audit --repo "C:\path\to\my-app" --policy .amstralift/security
 
 ### 2. Framework Upgrades (`amstralift run`)
 
-The `run` command executes full two-stage major/minor framework upgrades (e.g. .NET 8 to .NET 9/10, Angular migrations):
+The `run` command executes full two-stage major/minor framework upgrades (e.g. Angular 12 to 22, .NET 8 to .NET 9/10):
 
 ```powershell
-# Run framework upgrade check in dry-run mode
+# 1. Full Angular Leapfrog Upgrade (v12 -> v22 with Standalone + Control Flow)
+uv run amstralift run `
+  --repo "C:\Projects\my-angular-app" `
+  --output-branch amstralift/upgrade `
+  --modernize control-flow,standalone `
+  --allow-failed-gates --no-incremental
+
+# 2. Step-by-Step Incremental Upgrade (Sequentially runs schematics per major version)
+uv run amstralift run --repo "C:\Projects\my-angular-app" --incremental
+
+# 3. Dry-Run Upgrade Inspection
 uv run amstralift run --repo "C:\path\to\my-app" --dry-run
 
-# Run framework upgrade and open GitHub PR
+# 4. Verified Upgrade & Automatic GitHub PR Creation
 uv run amstralift run --repo "C:\path\to\my-app" --publish --token $env:GITHUB_TOKEN
 ```
 
@@ -244,7 +289,7 @@ amstralift --help
 
 ### Running Tests
 ```powershell
-# Run the complete test suite (111 tests)
+# Run the complete test suite (202 tests)
 uv run pytest
 
 # Run with verbose output
