@@ -237,14 +237,24 @@ def _remove_legacy_default_project(repo_path: Path) -> None:
 
 
 def _modernize_angular_gitignore(repo_path: Path) -> None:
-    """Ensure modern Angular ephemeral caches (.angular/) are in .gitignore."""
+    """Ensure modern Angular ephemeral caches and dependencies are in .gitignore."""
     gitignore = repo_path / ".gitignore"
-    if not gitignore.exists():
-        return
+    standard_entries = ["node_modules/", ".angular/", "/dist", "/out-tsc", "/coverage"]
     try:
+        if not gitignore.exists():
+            default_content = (
+                "# Dependencies\nnode_modules/\n\n"
+                "# Output\n/dist\n/out-tsc\n/coverage\n/tmp\n\n"
+                "# Angular\n.angular/\n\n"
+                "# IDEs and OS\n.idea/\n.vscode/\n.DS_Store\nThumbs.db\n"
+            )
+            gitignore.write_text(default_content, encoding="utf-8")
+            return
+
         content = gitignore.read_text(encoding="utf-8")
-        if ".angular" not in content:
-            updated = content.rstrip() + "\n\n# Angular\n.angular/\n"
+        missing = [entry for entry in standard_entries if entry.strip("/") not in content]
+        if missing:
+            updated = content.rstrip() + "\n\n# Angular & Dependencies\n" + "\n".join(missing) + "\n"
             gitignore.write_text(updated, encoding="utf-8")
     except Exception:
         pass

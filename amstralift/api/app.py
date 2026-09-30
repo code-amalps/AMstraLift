@@ -17,6 +17,7 @@ from amstralift.api.models import (
     UpgradeApiRequest,
     UpgradeApiResponse,
 )
+from amstralift.execution.stage_b import StageBPublishError
 from amstralift.governance.vulnerabilities import VulnerabilityManager
 from amstralift.security.orchestrator import SecurityOrchestrator
 from amstralift.service import OrchestrationError, UpgradeOrchestrator

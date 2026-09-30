@@ -22,6 +22,56 @@ class StaleBaseError(Exception):
     pass
 
 
+STANDARD_IGNORED_DIRS: tuple[str, ...] = (
+    # Node / JavaScript / TypeScript
+    "node_modules",
+    ".angular",
+    ".nx",
+    ".turbo",
+    ".next",
+    ".nuxt",
+    ".cache",
+    "dist",
+    "out-tsc",
+    "coverage",
+    # Python
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    # .NET / C#
+    "bin",
+    "obj",
+    "packages",
+    ".vs",
+    "TestResults",
+)
+
+EPHEMERAL_CACHE_DIRS = STANDARD_IGNORED_DIRS
+
+
+def configure_sandbox_git_excludes(workspace_path: Path) -> None:
+    """Ensure Git in the sandbox unconditionally ignores build and dependency artifacts.
+
+    Writes to .git/info/exclude so Git never stages, tracks, or diffs node_modules,
+    .angular, .venv, bin, obj, dist, etc., even if the repository lacks a .gitignore.
+    """
+    exclude_file = workspace_path / ".git" / "info" / "exclude"
+    try:
+        exclude_file.parent.mkdir(parents=True, exist_ok=True)
+        existing = exclude_file.read_text(encoding="utf-8") if exclude_file.exists() else ""
+        existing_lines = set(line.strip() for line in existing.splitlines())
+        needed = [f"{d}/" for d in STANDARD_IGNORED_DIRS if f"{d}/" not in existing_lines and d not in existing_lines]
+        if needed:
+            updated = existing.rstrip() + "\n" + "\n".join(needed) + "\n"
+            exclude_file.write_text(updated, encoding="utf-8")
+    except Exception:
+        pass
+
+
 def run_git(
     args: list[str],
     cwd: Path,
@@ -142,6 +192,7 @@ def prepare_stage_a_workspace(
 
     base_sha = get_head_commit(target_workspace_path)
     scrub_credentials(target_workspace_path)
+    configure_sandbox_git_excludes(target_workspace_path)
 
     # Inject read-only package registry configs if supplied (e.g. .npmrc)
     if read_only_configs:
@@ -150,36 +201,18 @@ def prepare_stage_a_workspace(
                 raise ValueError("Publishing token detected in registry config! Only read-only tokens allowed.")
             (target_workspace_path / filename).write_text(content, encoding="utf-8")
 
-    # Share local dependency cache (node_modules) if present on host for sandbox tool execution
-    source_nm = source_repo_path / "node_modules"
-    target_nm = target_workspace_path / "node_modules"
-    if source_nm.exists() and source_nm.is_dir() and not target_nm.exists():
-        try:
-            if os.name == "nt":
-                subprocess.run(["cmd", "/c", "mklink", "/J", str(target_nm), str(source_nm)], capture_output=True)
-            else:
-                target_nm.symlink_to(source_nm, target_is_directory=True)
-        except Exception:
-            pass
-
     return base_sha
 
 
 def generate_patch(repo_path: Path, base_commit: str) -> str:
     """Generate clean unified git diff against base commit."""
-    # Clean ephemeral build and tool cache directories so binary artifacts never corrupt patches
-    for cache_name in (
-        ".angular",
-        ".nx",
-        ".turbo",
-        ".cache",
-        "dist",
-        "out-tsc",
-        "coverage",
-        "__pycache__",
-        "bin",
-        "obj",
-    ):
+    # 1. Ensure sandbox .git/info/exclude unconditionally ignores standard dependency & build dirs
+    configure_sandbox_git_excludes(repo_path)
+
+    # 2. Clean ephemeral build and tool cache directories so binary artifacts never corrupt patches
+    for cache_name in STANDARD_IGNORED_DIRS:
+        if cache_name == "node_modules":
+            continue  # node_modules is protected by .git/info/exclude and negative pathspecs
         p = repo_path / cache_name
         if p.exists():
             if p.is_dir():
@@ -187,8 +220,20 @@ def generate_patch(repo_path: Path, base_commit: str) -> str:
             else:
                 p.unlink(missing_ok=True)
 
-    run_git(["add", "-N", "."], cwd=repo_path)
-    res = run_git(["diff", "--full-index", "--binary", base_commit], cwd=repo_path)
+    # 3. Unstage any accidental tracking of standard ignored directories
+    for d in STANDARD_IGNORED_DIRS:
+        run_git(["rm", "--cached", "-r", "--ignore-unmatch", d], cwd=repo_path)
+
+    # 4. Build negative pathspecs so git add and git diff explicitly ignore all dependency/build dirs
+    exclude_pathspecs = [f":(exclude){d}" for d in STANDARD_IGNORED_DIRS]
+
+    # 5. Add intent-to-add for untracked files, strictly excluding all standard dependency dirs
+    add_args = ["add", "-N", "--", "."] + exclude_pathspecs
+    run_git(add_args, cwd=repo_path)
+
+    # 6. Generate diff against base commit, strictly excluding all standard dependency dirs
+    diff_args = ["diff", "--full-index", "--binary", base_commit, "--", "."] + exclude_pathspecs
+    res = run_git(diff_args, cwd=repo_path)
     if res.returncode != 0:
         raise GitError(f"Failed to generate diff against {base_commit}: {res.stderr}")
     return res.stdout or ""
@@ -227,15 +272,6 @@ def verify_rediff_integrity(
         raise GitError(f"Patch does not apply cleanly: {check_res.stderr}")
 
     return True
-
-
-EPHEMERAL_CACHE_DIRS = (
-    ".angular",
-    ".nx",
-    ".turbo",
-    ".cache",
-    "__pycache__",
-)
 
 
 def is_working_tree_clean(repo_path: Path, ignore_ephemeral: bool = True) -> bool:

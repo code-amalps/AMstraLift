@@ -85,3 +85,38 @@ def test_classify_source_modified_migration():
     assert classification.application_source_modified
     assert not classification.manifest_or_lockfile_only
     assert "Mandatory human review" in classification.rationale
+
+
+def test_generate_patch_ignores_node_modules_and_build_dirs_without_gitignore(tmp_path: Path):
+    """Verify generate_patch unconditionally excludes node_modules, .angular, and build dirs even without .gitignore."""
+    from amstralift.core.workspace import generate_patch, get_head_commit, run_git
+
+    repo = tmp_path / "repo-no-gitignore"
+    repo.mkdir(parents=True, exist_ok=True)
+    run_git(["init", "-b", "main"], cwd=repo)
+    run_git(["config", "user.name", "Test"], cwd=repo)
+    run_git(["config", "user.email", "test@test.com"], cwd=repo)
+    run_git(["config", "core.autocrlf", "false"], cwd=repo)
+
+    (repo / "package.json").write_text('{"name": "test", "version": "1.0.0"}\n', encoding="utf-8")
+    run_git(["add", "."], cwd=repo)
+    run_git(["commit", "-m", "Initial commit"], cwd=repo)
+    base_commit = get_head_commit(repo)
+
+    # Modify package.json (legitimate change)
+    (repo / "package.json").write_text('{"name": "test", "version": "2.0.0"}\n', encoding="utf-8")
+
+    # Create unignored dependency and cache artifacts that must NEVER be diffed
+    nm_file = repo / "node_modules" / "some-pkg" / "weird.doc"
+    nm_file.parent.mkdir(parents=True, exist_ok=True)
+    nm_file.write_text("binary-or-unsupported-content", encoding="utf-8")
+
+    angular_cache = repo / ".angular" / "cache" / "cache.bin"
+    angular_cache.parent.mkdir(parents=True, exist_ok=True)
+    angular_cache.write_text("angular-cache", encoding="utf-8")
+
+    patch = generate_patch(repo, base_commit)
+    assert "package.json" in patch
+    assert "node_modules" not in patch
+    assert ".angular" not in patch
+
