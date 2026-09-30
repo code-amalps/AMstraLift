@@ -1,8 +1,8 @@
-"""Interactive desktop GUI for AMstraLift using Tkinter.
+"""Interactive desktop GUI for AMstraLift.
 
-Provides a modern, high-contrast desktop interface for selecting repositories,
-configuring upgrade/audit parameters, monitoring real-time progress, switching
-Dark/Light themes, and safely aborting ongoing operations.
+A modern, high-contrast, responsive desktop interface with segmented navigation,
+card-based layout, dark/light theme switching, live progress streaming, and
+one-click cancellation.
 """
 
 from __future__ import annotations
@@ -37,39 +37,55 @@ CONFIG_FILE = CONFIG_DIR / "gui_config.json"
 
 THEMES = {
     "dark": {
-        "bg_main": "#1e1e2e",
-        "bg_card": "#252538",
-        "bg_input": "#181825",
-        "fg_text": "#cdd6f4",
-        "fg_muted": "#9399b2",
-        "border": "#313244",
-        "console_bg": "#11111b",
-        "console_fg": "#cdd6f4",
-        "btn_primary": "#3b82f6",
-        "btn_primary_hover": "#2563eb",
-        "btn_abort": "#ef4444",
+        "bg_main": "#0f172a",          # Deep slate background
+        "bg_card": "#1e293b",          # Card / container background
+        "bg_input": "#090d16",         # Text input background
+        "fg_text": "#f8fafc",          # Primary crisp white text
+        "fg_muted": "#94a3b8",         # Secondary muted text
+        "border": "#334155",           # Border outline
+        "border_focus": "#3b82f6",     # Active focus border
+        "console_bg": "#020617",       # Pure terminal black/slate
+        "console_fg": "#f8fafc",       # Console text
+        "btn_primary": "#2563eb",      # Bright Blue primary button
+        "btn_primary_hover": "#1d4ed8",
+        "btn_primary_disabled": "#334155",
+        "btn_primary_disabled_fg": "#64748b",
+        "btn_abort": "#ef4444",        # Red abort button
         "btn_abort_hover": "#dc2626",
-        "btn_secondary": "#313244",
-        "btn_secondary_fg": "#cdd6f4",
-        "highlight": "#89b4fa",
-        "status_bg": "#181825",
+        "btn_abort_disabled": "#334155",
+        "btn_secondary": "#334155",    # Subtle secondary button
+        "btn_secondary_fg": "#f8fafc",
+        "btn_secondary_hover": "#475569",
+        "tab_active_bg": "#2563eb",
+        "tab_active_fg": "#ffffff",
+        "tab_inactive_bg": "#1e293b",
+        "tab_inactive_fg": "#94a3b8",
+        "status_bg": "#090d16",
     },
     "light": {
-        "bg_main": "#f8fafc",
-        "bg_card": "#ffffff",
-        "bg_input": "#f1f5f9",
-        "fg_text": "#0f172a",
-        "fg_muted": "#64748b",
-        "border": "#cbd5e1",
-        "console_bg": "#0f172a",
+        "bg_main": "#f1f5f9",          # Light cool slate
+        "bg_card": "#ffffff",          # Pure white card
+        "bg_input": "#f8fafc",         # Very light input
+        "fg_text": "#0f172a",          # Deep dark text
+        "fg_muted": "#64748b",         # Secondary gray text
+        "border": "#cbd5e1",           # Border outline
+        "border_focus": "#2563eb",
+        "console_bg": "#0f172a",       # Professional dark navy terminal
         "console_fg": "#f8fafc",
         "btn_primary": "#2563eb",
         "btn_primary_hover": "#1d4ed8",
+        "btn_primary_disabled": "#e2e8f0",
+        "btn_primary_disabled_fg": "#94a3b8",
         "btn_abort": "#dc2626",
         "btn_abort_hover": "#b91c1c",
+        "btn_abort_disabled": "#e2e8f0",
         "btn_secondary": "#e2e8f0",
-        "btn_secondary_fg": "#1e293b",
-        "highlight": "#1d4ed8",
+        "btn_secondary_fg": "#0f172a",
+        "btn_secondary_hover": "#cbd5e1",
+        "tab_active_bg": "#2563eb",
+        "tab_active_fg": "#ffffff",
+        "tab_inactive_bg": "#ffffff",
+        "tab_inactive_fg": "#64748b",
         "status_bg": "#e2e8f0",
     },
 }
@@ -110,7 +126,19 @@ class TextRedirector(io.StringIO):
             try:
                 self.text_widget.configure(state="normal")
                 clean = re.sub(r"\x1b\[[0-9;]*[mK]", "", s)
-                self.text_widget.insert(tk.END, clean, (self.tag,))
+
+                # Determine tag based on content
+                chosen_tag = self.tag
+                if "[error]" in clean.lower() or "failed" in clean.lower() or "exception" in clean.lower():
+                    chosen_tag = "stderr"
+                elif "[1/5]" in clean or "[2/5]" in clean or "[3/5]" in clean or "[4/5]" in clean or "[5/5]" in clean:
+                    chosen_tag = "step"
+                elif "✔" in clean or "success" in clean.lower() or "complete" in clean.lower():
+                    chosen_tag = "success"
+                elif "↳" in clean:
+                    chosen_tag = "info"
+
+                self.text_widget.insert(tk.END, clean, (chosen_tag,))
                 self.text_widget.see(tk.END)
                 self.text_widget.configure(state="disabled")
             except Exception:
@@ -135,33 +163,28 @@ class AMstraLiftGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(f"AMstraLift v{__version__} - Upgrade & Security Engine")
-        self.root.geometry("900x740")
-        self.root.minsize(780, 600)
+        self.root.geometry("920x760")
+        self.root.minsize(800, 620)
 
         self.config = load_gui_config()
         self.current_theme = self.config.get("theme", "dark")
         if self.current_theme not in THEMES:
             self.current_theme = "dark"
 
+        self.active_tab = "upgrade"  # "upgrade" or "audit"
         self.cancellation_token = get_default_cancellation_token()
         self.is_running = False
         self.start_time: float = 0.0
         self.timer_id: Optional[str] = None
         self.last_target_repo: Optional[str] = None
 
-        self.style = ttk.Style()
-        try:
-            self.style.theme_use("clam")
-        except Exception:
-            pass
-
         self._create_widgets()
-        self._apply_theme(self.current_theme)
         self._set_defaults()
+        self._apply_theme(self.current_theme)
 
     def _create_widgets(self):
         # ── Header ──────────────────────────────────────────────────────────
-        self.header_frame = tk.Frame(self.root, padx=14, pady=10)
+        self.header_frame = tk.Frame(self.root, padx=16, pady=12)
         self.header_frame.pack(fill=tk.X)
 
         header_left = tk.Frame(self.header_frame)
@@ -174,58 +197,86 @@ class AMstraLiftGUI:
         )
         self.title_lbl.pack(side=tk.LEFT)
 
-        self.version_lbl = tk.Label(
+        self.version_badge = tk.Label(
             header_left,
-            text=f"v{__version__}",
-            font=("Segoe UI", 10),
+            text=f" v{__version__} ",
+            font=("Segoe UI", 9, "bold"),
+            padx=6,
+            pady=1,
+            relief=tk.FLAT,
         )
-        self.version_lbl.pack(side=tk.LEFT, padx=(8, 0), pady=(3, 0))
+        self.version_badge.pack(side=tk.LEFT, padx=(8, 0))
 
         # Header Right: Theme Switcher
         self.theme_btn = tk.Button(
             self.header_frame,
-            text="🌙 Dark Mode" if self.current_theme == "light" else "☀️ Light Mode",
-            font=("Segoe UI", 9),
+            text="☀️ Light Mode" if self.current_theme == "dark" else "🌙 Dark Mode",
+            font=("Segoe UI", 9, "bold"),
             relief=tk.FLAT,
-            padx=10,
-            pady=3,
+            padx=12,
+            pady=4,
+            cursor="hand2",
             command=self._toggle_theme,
         )
         self.theme_btn.pack(side=tk.RIGHT)
 
-        # ── Main Tabs Notebook ───────────────────────────────────────────────
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=False, padx=14, pady=(0, 6))
+        # ── Segmented Navigation Bar ─────────────────────────────────────────
+        self.nav_frame = tk.Frame(self.root, padx=16, pady=4)
+        self.nav_frame.pack(fill=tk.X, pady=(0, 8))
 
-        # Tab 1: Upgrade
-        self.upgrade_tab = tk.Frame(self.notebook, padx=12, pady=10)
-        self.notebook.add(self.upgrade_tab, text=" 🚀 Framework Upgrade ")
+        self.tab_upgrade_btn = tk.Button(
+            self.nav_frame,
+            text=" 🚀 Framework Upgrade ",
+            font=("Segoe UI", 10, "bold"),
+            relief=tk.FLAT,
+            padx=16,
+            pady=6,
+            cursor="hand2",
+            command=self._show_upgrade_tab,
+        )
+        self.tab_upgrade_btn.pack(side=tk.LEFT, padx=(0, 4))
 
-        # Tab 2: Security Audit
-        self.audit_tab = tk.Frame(self.notebook, padx=12, pady=10)
-        self.notebook.add(self.audit_tab, text=" 🛡️ Security Audit & CVEs ")
+        self.tab_audit_btn = tk.Button(
+            self.nav_frame,
+            text=" 🛡️ Security Audit & CVEs ",
+            font=("Segoe UI", 10, "bold"),
+            relief=tk.FLAT,
+            padx=16,
+            pady=6,
+            cursor="hand2",
+            command=self._show_audit_tab,
+        )
+        self.tab_audit_btn.pack(side=tk.LEFT)
 
-        self._build_upgrade_tab()
-        self._build_audit_tab()
+        # ── Main Content Area ───────────────────────────────────────────────
+        self.content_container = tk.Frame(self.root, padx=16, pady=0)
+        self.content_container.pack(fill=tk.X)
 
-        # ── Quick Actions Toolbar (active after completion) ──────────────────
-        self.quick_actions_frame = tk.Frame(self.root, padx=14, pady=4)
+        self._build_upgrade_card()
+        self._build_audit_card()
+
+        # Show upgrade tab by default
+        self._show_upgrade_tab()
+
+        # ── Quick Actions Toolbar ────────────────────────────────────────────
+        self.quick_actions_frame = tk.Frame(self.root, padx=16, pady=4)
         self.quick_actions_frame.pack(fill=tk.X)
 
-        quick_lbl = tk.Label(
+        self.quick_lbl = tk.Label(
             self.quick_actions_frame,
             text="Quick Actions:",
             font=("Segoe UI", 9, "bold"),
         )
-        quick_lbl.pack(side=tk.LEFT, padx=(0, 8))
+        self.quick_lbl.pack(side=tk.LEFT, padx=(0, 8))
 
         self.open_folder_btn = tk.Button(
             self.quick_actions_frame,
             text="📂 Open Folder",
             font=("Segoe UI", 9),
             relief=tk.FLAT,
-            padx=8,
-            pady=2,
+            padx=10,
+            pady=3,
+            cursor="hand2",
             command=self._open_project_folder,
             state="disabled",
         )
@@ -236,8 +287,9 @@ class AMstraLiftGUI:
             text="💻 Open in VS Code",
             font=("Segoe UI", 9),
             relief=tk.FLAT,
-            padx=8,
-            pady=2,
+            padx=10,
+            pady=3,
+            cursor="hand2",
             command=self._open_in_vscode,
             state="disabled",
         )
@@ -248,8 +300,9 @@ class AMstraLiftGUI:
             text="🔀 Git Status",
             font=("Segoe UI", 9),
             relief=tk.FLAT,
-            padx=8,
-            pady=2,
+            padx=10,
+            pady=3,
+            cursor="hand2",
             command=self._show_git_status,
             state="disabled",
         )
@@ -261,8 +314,9 @@ class AMstraLiftGUI:
             text="📋 Copy Log",
             font=("Segoe UI", 9),
             relief=tk.FLAT,
-            padx=8,
-            pady=2,
+            padx=10,
+            pady=3,
+            cursor="hand2",
             command=self._copy_log,
         )
         self.copy_log_btn.pack(side=tk.RIGHT, padx=(4, 0))
@@ -272,8 +326,9 @@ class AMstraLiftGUI:
             text="💾 Save Log...",
             font=("Segoe UI", 9),
             relief=tk.FLAT,
-            padx=8,
-            pady=2,
+            padx=10,
+            pady=3,
+            cursor="hand2",
             command=self._save_log_to_file,
         )
         self.save_log_btn.pack(side=tk.RIGHT, padx=(4, 0))
@@ -283,36 +338,41 @@ class AMstraLiftGUI:
             text="🧹 Clear",
             font=("Segoe UI", 9),
             relief=tk.FLAT,
-            padx=8,
-            pady=2,
+            padx=10,
+            pady=3,
+            cursor="hand2",
             command=self._clear_log,
         )
         self.clear_log_btn.pack(side=tk.RIGHT)
 
-        # ── Live Execution Log Panel ────────────────────────────────────────
-        self.log_container = tk.Frame(self.root, padx=14, pady=2)
+        # ── Live Execution Terminal Panel ───────────────────────────────────
+        self.log_container = tk.Frame(self.root, padx=16, pady=2)
         self.log_container.pack(fill=tk.BOTH, expand=True)
 
+        self.log_border = tk.Frame(self.log_container, bd=1, relief=tk.SOLID)
+        self.log_border.pack(fill=tk.BOTH, expand=True)
+
         self.log_text = ScrolledText(
-            self.log_container,
+            self.log_border,
             wrap=tk.WORD,
-            font=("Consolas", 9),
+            font=("Consolas", 10),
             height=13,
+            bd=0,
             state="disabled",
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
-        self.log_text.tag_configure("stdout", foreground="#cdd6f4")
-        self.log_text.tag_configure("stderr", foreground="#f87171")
-        self.log_text.tag_configure("success", foreground="#34d399", font=("Consolas", 9, "bold"))
-        self.log_text.tag_configure("info", foreground="#60a5fa")
-        self.log_text.tag_configure("warning", foreground="#fbbf24")
+        self.log_text.tag_configure("stdout", foreground="#f8fafc")
+        self.log_text.tag_configure("stderr", foreground="#f87171", font=("Consolas", 10, "bold"))
+        self.log_text.tag_configure("success", foreground="#4ade80", font=("Consolas", 10, "bold"))
+        self.log_text.tag_configure("step", foreground="#38bdf8", font=("Consolas", 10, "bold"))
+        self.log_text.tag_configure("info", foreground="#818cf8")
+        self.log_text.tag_configure("warning", foreground="#facc15")
 
         # ── Status Bar & Progress ───────────────────────────────────────────
-        self.status_frame = tk.Frame(self.root, padx=14, pady=6)
+        self.status_frame = tk.Frame(self.root, padx=16, pady=8)
         self.status_frame.pack(fill=tk.X, side=tk.BOTTOM)
 
-        # Left: Status badge and message
         status_left = tk.Frame(self.status_frame)
         status_left.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -323,12 +383,11 @@ class AMstraLiftGUI:
         self.status_lbl = tk.Label(
             status_left,
             textvariable=self.status_var,
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 9, "bold"),
             anchor=tk.W,
         )
         self.status_lbl.pack(side=tk.LEFT, fill=tk.X)
 
-        # Right: Timer and Determinate Progress Bar
         status_right = tk.Frame(self.status_frame)
         status_right.pack(side=tk.RIGHT)
 
@@ -344,123 +403,139 @@ class AMstraLiftGUI:
             status_right,
             orient="horizontal",
             mode="determinate",
-            length=160,
+            length=180,
         )
         self.progress_bar.pack(side=tk.RIGHT)
 
-    def _build_upgrade_tab(self):
-        f = self.upgrade_tab
+    def _build_upgrade_card(self):
+        self.upgrade_card = tk.Frame(self.content_container, padx=14, pady=12, bd=1, relief=tk.SOLID)
 
-        # Repository Folder Row
-        repo_frame = tk.Frame(f)
-        repo_frame.pack(fill=tk.X, pady=(0, 6))
+        # Target Repository Row
+        repo_lbl = tk.Label(self.upgrade_card, text="Target Repository:", font=("Segoe UI", 9, "bold"))
+        repo_lbl.pack(anchor=tk.W, pady=(0, 4))
 
-        tk.Label(repo_frame, text="Target Repository:", font=("Segoe UI", 9, "bold")).pack(anchor=tk.W)
-        repo_input_frame = tk.Frame(repo_frame)
-        repo_input_frame.pack(fill=tk.X, pady=(3, 0))
+        repo_row = tk.Frame(self.upgrade_card)
+        repo_row.pack(fill=tk.X, pady=(0, 8))
 
         self.upgrade_repo_var = tk.StringVar()
-        self.upgrade_repo_combo = ttk.Combobox(
-            repo_input_frame,
+        self.upgrade_repo_entry = tk.Entry(
+            repo_row,
             textvariable=self.upgrade_repo_var,
-            values=self.config.get("recent_repos", []),
+            font=("Segoe UI", 9),
+            bd=1,
+            relief=tk.SOLID,
         )
-        self.upgrade_repo_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self.upgrade_repo_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=4)
 
         self.browse_upgrade_btn = tk.Button(
-            repo_input_frame,
+            repo_row,
             text="Browse...",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 9, "bold"),
             relief=tk.FLAT,
-            padx=10,
+            padx=12,
+            pady=3,
+            cursor="hand2",
             command=lambda: self._browse_directory(self.upgrade_repo_var),
         )
         self.browse_upgrade_btn.pack(side=tk.RIGHT)
 
-        # Options Box
-        self.opt_box = tk.LabelFrame(f, text=" Upgrade Configuration ", padx=10, pady=6)
-        self.opt_box.pack(fill=tk.X, pady=(0, 8))
+        # Configuration Grid
+        config_grid = tk.Frame(self.upgrade_card)
+        config_grid.pack(fill=tk.X, pady=(0, 8))
 
-        # Row 0: Ecosystem & Modernization
-        tk.Label(self.opt_box, text="Ecosystem:").grid(row=0, column=0, sticky=tk.W, pady=3)
+        # Row 0: Ecosystem & Modernizations
+        tk.Label(config_grid, text="Ecosystem:", font=("Segoe UI", 9)).grid(row=0, column=0, sticky=tk.W, pady=3)
         self.upgrade_eco_var = tk.StringVar(value="auto")
         eco_combo = ttk.Combobox(
-            self.opt_box,
+            config_grid,
             textvariable=self.upgrade_eco_var,
             values=["auto", "angular", "react", "python", "dotnet"],
             state="readonly",
-            width=14,
+            width=15,
         )
-        eco_combo.grid(row=0, column=1, sticky=tk.W, padx=6, pady=3)
+        eco_combo.grid(row=0, column=1, sticky=tk.W, padx=8, pady=3)
 
-        tk.Label(self.opt_box, text="Modernizations:").grid(row=0, column=2, sticky=tk.W, pady=3, padx=(14, 0))
+        tk.Label(config_grid, text="Modernizations:", font=("Segoe UI", 9)).grid(row=0, column=2, sticky=tk.W, pady=3, padx=(16, 0))
         self.upgrade_mod_var = tk.StringVar(value="all")
         mod_combo = ttk.Combobox(
-            self.opt_box,
+            config_grid,
             textvariable=self.upgrade_mod_var,
             values=["none", "all", "control-flow", "standalone", "style"],
             state="readonly",
-            width=14,
+            width=15,
         )
-        mod_combo.grid(row=0, column=3, sticky=tk.W, padx=6, pady=3)
+        mod_combo.grid(row=0, column=3, sticky=tk.W, padx=8, pady=3)
 
         # Row 1: Branches
-        tk.Label(self.opt_box, text="Base Branch:").grid(row=1, column=0, sticky=tk.W, pady=3)
+        tk.Label(config_grid, text="Base Branch:", font=("Segoe UI", 9)).grid(row=1, column=0, sticky=tk.W, pady=3)
         self.base_branch_var = tk.StringVar(value="")
-        base_entry = ttk.Entry(self.opt_box, textvariable=self.base_branch_var, width=16)
-        base_entry.grid(row=1, column=1, sticky=tk.W, padx=6, pady=3)
+        self.base_entry = tk.Entry(config_grid, textvariable=self.base_branch_var, width=17, font=("Segoe UI", 9), bd=1, relief=tk.SOLID)
+        self.base_entry.grid(row=1, column=1, sticky=tk.W, padx=8, pady=3, ipady=2)
 
-        tk.Label(self.opt_box, text="Output Branch:").grid(row=1, column=2, sticky=tk.W, pady=3, padx=(14, 0))
+        tk.Label(config_grid, text="Output Branch:", font=("Segoe UI", 9)).grid(row=1, column=2, sticky=tk.W, pady=3, padx=(16, 0))
         self.output_branch_var = tk.StringVar(value="")
-        out_branch_entry = ttk.Entry(self.opt_box, textvariable=self.output_branch_var, width=16)
-        out_branch_entry.grid(row=1, column=3, sticky=tk.W, padx=6, pady=3)
+        self.output_entry = tk.Entry(config_grid, textvariable=self.output_branch_var, width=17, font=("Segoe UI", 9), bd=1, relief=tk.SOLID)
+        self.output_entry.grid(row=1, column=3, sticky=tk.W, padx=8, pady=3, ipady=2)
 
-        # Row 2: Checkboxes
-        chk_frame = tk.Frame(self.opt_box)
-        chk_frame.grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=(4, 0))
+        # Checkboxes
+        chk_frame = tk.Frame(self.upgrade_card)
+        chk_frame.pack(fill=tk.X, pady=(2, 8))
 
         self.incremental_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        self.chk_inc = tk.Checkbutton(
             chk_frame,
-            text="Incremental Upgrade (one major version jump at a time)",
+            text="Incremental Upgrade (one major version jump at a time, e.g. 12 → 13)",
             variable=self.incremental_var,
-        ).pack(anchor=tk.W, pady=2)
+            font=("Segoe UI", 9),
+            cursor="hand2",
+        )
+        self.chk_inc.pack(anchor=tk.W, pady=1)
 
         self.remediate_cves_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        self.chk_cve = tk.Checkbutton(
             chk_frame,
             text="Auto-remediate known CVEs (apply safe scoped dependency overrides)",
             variable=self.remediate_cves_var,
-        ).pack(anchor=tk.W, pady=2)
+            font=("Segoe UI", 9),
+            cursor="hand2",
+        )
+        self.chk_cve.pack(anchor=tk.W, pady=1)
 
         chk_sub = tk.Frame(chk_frame)
-        chk_sub.pack(anchor=tk.W)
+        chk_sub.pack(anchor=tk.W, pady=1)
 
         self.dry_run_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        self.chk_dry = tk.Checkbutton(
             chk_sub,
             text="Dry run only",
             variable=self.dry_run_var,
-        ).pack(side=tk.LEFT, padx=(0, 14), pady=2)
+            font=("Segoe UI", 9),
+            cursor="hand2",
+        )
+        self.chk_dry.pack(side=tk.LEFT, padx=(0, 16))
 
         self.allow_failed_gates_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        self.chk_allow_fail = tk.Checkbutton(
             chk_sub,
             text="Allow failed gates (create branch even if test gates time out)",
             variable=self.allow_failed_gates_var,
-        ).pack(side=tk.LEFT, pady=2)
+            font=("Segoe UI", 9),
+            cursor="hand2",
+        )
+        self.chk_allow_fail.pack(side=tk.LEFT)
 
-        # Action Buttons Row
-        action_frame = tk.Frame(f)
-        action_frame.pack(fill=tk.X, pady=(2, 0))
+        # Action Buttons
+        action_frame = tk.Frame(self.upgrade_card)
+        action_frame.pack(fill=tk.X, pady=(4, 0))
 
         self.run_btn = tk.Button(
             action_frame,
             text="▶ Start Framework Upgrade",
             font=("Segoe UI", 10, "bold"),
             relief=tk.FLAT,
-            padx=16,
-            pady=6,
+            padx=18,
+            pady=7,
+            cursor="hand2",
             command=self._execute_upgrade,
         )
         self.run_btn.pack(side=tk.LEFT)
@@ -470,77 +545,96 @@ class AMstraLiftGUI:
             text="⏹ Abort",
             font=("Segoe UI", 10, "bold"),
             relief=tk.FLAT,
-            padx=14,
-            pady=6,
+            padx=16,
+            pady=7,
+            cursor="hand2",
             state="disabled",
             command=self._abort_execution,
         )
-        self.abort_upgrade_btn.pack(side=tk.LEFT, padx=(8, 0))
+        self.abort_upgrade_btn.pack(side=tk.LEFT, padx=(10, 0))
 
-    def _build_audit_tab(self):
-        f = self.audit_tab
+    def _build_audit_card(self):
+        self.audit_card = tk.Frame(self.content_container, padx=14, pady=12, bd=1, relief=tk.SOLID)
 
-        repo_frame = tk.Frame(f)
-        repo_frame.pack(fill=tk.X, pady=(0, 6))
+        # Target Repository Row
+        repo_lbl = tk.Label(self.audit_card, text="Target Repository:", font=("Segoe UI", 9, "bold"))
+        repo_lbl.pack(anchor=tk.W, pady=(0, 4))
 
-        tk.Label(repo_frame, text="Target Repository:", font=("Segoe UI", 9, "bold")).pack(anchor=tk.W)
-        repo_input_frame = tk.Frame(repo_frame)
-        repo_input_frame.pack(fill=tk.X, pady=(3, 0))
+        repo_row = tk.Frame(self.audit_card)
+        repo_row.pack(fill=tk.X, pady=(0, 8))
 
         self.audit_repo_var = tk.StringVar()
-        self.audit_repo_combo = ttk.Combobox(
-            repo_input_frame,
+        self.audit_repo_entry = tk.Entry(
+            repo_row,
             textvariable=self.audit_repo_var,
-            values=self.config.get("recent_repos", []),
+            font=("Segoe UI", 9),
+            bd=1,
+            relief=tk.SOLID,
         )
-        self.audit_repo_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self.audit_repo_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8), ipady=4)
 
         self.browse_audit_btn = tk.Button(
-            repo_input_frame,
+            repo_row,
             text="Browse...",
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 9, "bold"),
             relief=tk.FLAT,
-            padx=10,
+            padx=12,
+            pady=3,
+            cursor="hand2",
             command=lambda: self._browse_directory(self.audit_repo_var),
         )
         self.browse_audit_btn.pack(side=tk.RIGHT)
 
-        self.audit_box = tk.LabelFrame(f, text=" Security Scan & Remediation Mode ", padx=10, pady=8)
-        self.audit_box.pack(fill=tk.X, pady=(0, 8))
+        # Audit Mode Radios
+        mode_box = tk.Frame(self.audit_card)
+        mode_box.pack(fill=tk.X, pady=(0, 10))
+
+        tk.Label(mode_box, text="Audit & Remediation Mode:", font=("Segoe UI", 9, "bold")).pack(anchor=tk.W, pady=(0, 4))
 
         self.audit_mode_var = tk.StringVar(value="audit")
 
-        ttk.Radiobutton(
-            self.audit_box,
+        self.radio_audit = tk.Radiobutton(
+            mode_box,
             text="Audit Only (scan dependencies and display CVE vulnerability table)",
             variable=self.audit_mode_var,
             value="audit",
-        ).pack(anchor=tk.W, pady=3)
+            font=("Segoe UI", 9),
+            cursor="hand2",
+        )
+        self.radio_audit.pack(anchor=tk.W, pady=2)
 
-        ttk.Radiobutton(
-            self.audit_box,
+        self.radio_preview = tk.Radiobutton(
+            mode_box,
             text="Preview Plan (calculate compatible non-breaking fix versions without modifying files)",
             variable=self.audit_mode_var,
             value="preview",
-        ).pack(anchor=tk.W, pady=3)
+            font=("Segoe UI", 9),
+            cursor="hand2",
+        )
+        self.radio_preview.pack(anchor=tk.W, pady=2)
 
-        ttk.Radiobutton(
-            self.audit_box,
+        self.radio_apply = tk.Radiobutton(
+            mode_box,
             text="Apply & Remediate (apply scoped overrides and execute verification gates)",
             variable=self.audit_mode_var,
             value="apply",
-        ).pack(anchor=tk.W, pady=3)
+            font=("Segoe UI", 9),
+            cursor="hand2",
+        )
+        self.radio_apply.pack(anchor=tk.W, pady=2)
 
-        action_frame = tk.Frame(f)
-        action_frame.pack(fill=tk.X, pady=(2, 0))
+        # Action Buttons
+        action_frame = tk.Frame(self.audit_card)
+        action_frame.pack(fill=tk.X, pady=(4, 0))
 
         self.audit_btn = tk.Button(
             action_frame,
             text="🛡️ Run Security Scan",
             font=("Segoe UI", 10, "bold"),
             relief=tk.FLAT,
-            padx=16,
-            pady=6,
+            padx=18,
+            pady=7,
+            cursor="hand2",
             command=self._execute_audit,
         )
         self.audit_btn.pack(side=tk.LEFT)
@@ -550,12 +644,54 @@ class AMstraLiftGUI:
             text="⏹ Abort",
             font=("Segoe UI", 10, "bold"),
             relief=tk.FLAT,
-            padx=14,
-            pady=6,
+            padx=16,
+            pady=7,
+            cursor="hand2",
             state="disabled",
             command=self._abort_execution,
         )
-        self.abort_audit_btn.pack(side=tk.LEFT, padx=(8, 0))
+        self.abort_audit_btn.pack(side=tk.LEFT, padx=(10, 0))
+
+    def _show_upgrade_tab(self):
+        self.active_tab = "upgrade"
+        self.audit_card.pack_forget()
+        self.upgrade_card.pack(fill=tk.X)
+        self._update_tab_buttons()
+
+    def _show_audit_tab(self):
+        self.active_tab = "audit"
+        self.upgrade_card.pack_forget()
+        self.audit_card.pack(fill=tk.X)
+        self._update_tab_buttons()
+
+    def _update_tab_buttons(self):
+        colors = THEMES[self.current_theme]
+        if self.active_tab == "upgrade":
+            self.tab_upgrade_btn.configure(
+                bg=colors["tab_active_bg"],
+                fg=colors["tab_active_fg"],
+                activebackground=colors["btn_primary_hover"],
+                activeforeground=colors["tab_active_fg"],
+            )
+            self.tab_audit_btn.configure(
+                bg=colors["tab_inactive_bg"],
+                fg=colors["tab_inactive_fg"],
+                activebackground=colors["border"],
+                activeforeground=colors["fg_text"],
+            )
+        else:
+            self.tab_upgrade_btn.configure(
+                bg=colors["tab_inactive_bg"],
+                fg=colors["tab_inactive_fg"],
+                activebackground=colors["border"],
+                activeforeground=colors["fg_text"],
+            )
+            self.tab_audit_btn.configure(
+                bg=colors["tab_active_bg"],
+                fg=colors["tab_active_fg"],
+                activebackground=colors["btn_primary_hover"],
+                activeforeground=colors["tab_active_fg"],
+            )
 
     def _set_defaults(self):
         cwd = str(Path.cwd().resolve())
@@ -574,9 +710,6 @@ class AMstraLiftGUI:
         recent.insert(0, norm)
         self.config["recent_repos"] = recent[:8]
         save_gui_config(self.config)
-
-        self.upgrade_repo_combo.configure(values=self.config["recent_repos"])
-        self.audit_repo_combo.configure(values=self.config["recent_repos"])
         self.last_target_repo = norm
 
     def _browse_directory(self, target_var: tk.StringVar):
@@ -601,93 +734,83 @@ class AMstraLiftGUI:
         self.root.configure(bg=colors["bg_main"])
         self.header_frame.configure(bg=colors["bg_main"])
         self.header_frame.winfo_children()[0].configure(bg=colors["bg_main"])
-        self.title_lbl.configure(bg=colors["bg_main"], fg=colors["highlight"])
-        self.version_lbl.configure(bg=colors["bg_main"], fg=colors["fg_muted"])
+        self.title_lbl.configure(bg=colors["bg_main"], fg=colors["fg_text"])
+        self.version_badge.configure(bg=colors["btn_primary"], fg="#ffffff")
 
         self.theme_btn.configure(
             text="☀️ Light Mode" if is_dark else "🌙 Dark Mode",
             bg=colors["btn_secondary"],
             fg=colors["btn_secondary_fg"],
-            activebackground=colors["border"],
-            activeforeground=colors["fg_text"],
+            activebackground=colors["btn_secondary_hover"],
+            activeforeground=colors["btn_secondary_fg"],
         )
 
-        # Tab Frames
-        self.upgrade_tab.configure(bg=colors["bg_card"])
-        self.audit_tab.configure(bg=colors["bg_card"])
-        for parent in (self.upgrade_tab, self.audit_tab):
-            for child in parent.winfo_children():
-                if isinstance(child, tk.Frame):
-                    child.configure(bg=colors["bg_card"])
-                    for grandchild in child.winfo_children():
-                        if isinstance(grandchild, (tk.Frame, tk.Label)):
-                            grandchild.configure(bg=colors["bg_card"])
-                            if isinstance(grandchild, tk.Label):
-                                grandchild.configure(fg=colors["fg_text"])
+        self.nav_frame.configure(bg=colors["bg_main"])
+        self.content_container.configure(bg=colors["bg_main"])
+        self._update_tab_buttons()
 
-        # LabelFrames
-        self.opt_box.configure(bg=colors["bg_card"], fg=colors["fg_text"])
-        self.audit_box.configure(bg=colors["bg_card"], fg=colors["fg_text"])
-        for box in (self.opt_box, self.audit_box):
-            for child in box.winfo_children():
-                if isinstance(child, tk.Label):
-                    child.configure(bg=colors["bg_card"], fg=colors["fg_text"])
-                elif isinstance(child, tk.Frame):
-                    child.configure(bg=colors["bg_card"])
-                    for gc in child.winfo_children():
-                        if isinstance(gc, tk.Frame):
-                            gc.configure(bg=colors["bg_card"])
+        # Cards
+        for card in (self.upgrade_card, self.audit_card):
+            card.configure(bg=colors["bg_card"], highlightbackground=colors["border"])
+            for child in card.winfo_children():
+                self._recursively_style_widget(child, colors)
 
-        # Buttons
-        self.run_btn.configure(
-            bg=colors["btn_primary"],
-            fg="#ffffff",
-            activebackground=colors["btn_primary_hover"],
-            activeforeground="#ffffff",
-        )
-        self.abort_upgrade_btn.configure(
-            bg=colors["btn_abort"],
-            fg="#ffffff",
-            activebackground=colors["btn_abort_hover"],
-            activeforeground="#ffffff",
-        )
-        self.audit_btn.configure(
-            bg="#059669",
-            fg="#ffffff",
-            activebackground="#047857",
-            activeforeground="#ffffff",
-        )
-        self.abort_audit_btn.configure(
-            bg=colors["btn_abort"],
-            fg="#ffffff",
-            activebackground=colors["btn_abort_hover"],
-            activeforeground="#ffffff",
-        )
-        self.browse_upgrade_btn.configure(
-            bg=colors["btn_secondary"],
-            fg=colors["btn_secondary_fg"],
-            activebackground=colors["border"],
-        )
-        self.browse_audit_btn.configure(
-            bg=colors["btn_secondary"],
-            fg=colors["btn_secondary_fg"],
-            activebackground=colors["border"],
-        )
+        # Checkboxes and Radios (No white boxes!)
+        for chk in (self.chk_inc, self.chk_cve, self.chk_dry, self.chk_allow_fail):
+            chk.configure(
+                bg=colors["bg_card"],
+                fg=colors["fg_text"],
+                selectcolor=colors["bg_input"],
+                activebackground=colors["bg_card"],
+                activeforeground=colors["fg_text"],
+                highlightthickness=0,
+                bd=0,
+            )
+
+        for radio in (self.radio_audit, self.radio_preview, self.radio_apply):
+            radio.configure(
+                bg=colors["bg_card"],
+                fg=colors["fg_text"],
+                selectcolor=colors["bg_input"],
+                activebackground=colors["bg_card"],
+                activeforeground=colors["fg_text"],
+                highlightthickness=0,
+                bd=0,
+            )
+
+        # Entry fields
+        for entry in (self.upgrade_repo_entry, self.audit_repo_entry, self.base_entry, self.output_entry):
+            entry.configure(
+                bg=colors["bg_input"],
+                fg=colors["fg_text"],
+                insertbackground=colors["fg_text"],
+                highlightbackground=colors["border"],
+                highlightcolor=colors["border_focus"],
+            )
+
+        # Primary Buttons
+        self._update_button_visuals(colors)
 
         # Quick Actions Toolbar
         self.quick_actions_frame.configure(bg=colors["bg_main"])
-        for child in self.quick_actions_frame.winfo_children():
-            if isinstance(child, tk.Label):
-                child.configure(bg=colors["bg_main"], fg=colors["fg_text"])
-            elif isinstance(child, tk.Button):
-                child.configure(
-                    bg=colors["btn_secondary"],
-                    fg=colors["btn_secondary_fg"],
-                    activebackground=colors["border"],
-                )
+        self.quick_lbl.configure(bg=colors["bg_main"], fg=colors["fg_text"])
+        for btn in (
+            self.open_folder_btn,
+            self.open_code_btn,
+            self.git_status_btn,
+            self.copy_log_btn,
+            self.save_log_btn,
+            self.clear_log_btn,
+        ):
+            btn.configure(
+                bg=colors["btn_secondary"],
+                fg=colors["btn_secondary_fg"],
+                activebackground=colors["btn_secondary_hover"],
+            )
 
         # Log Panel
         self.log_container.configure(bg=colors["bg_main"])
+        self.log_border.configure(bg=colors["border"])
         self.log_text.configure(
             bg=colors["console_bg"],
             fg=colors["console_fg"],
@@ -702,6 +825,70 @@ class AMstraLiftGUI:
                 for gc in child.winfo_children():
                     if isinstance(gc, tk.Label):
                         gc.configure(bg=colors["status_bg"], fg=colors["fg_text"])
+
+    def _recursively_style_widget(self, widget: tk.Widget, colors: dict[str, str]):
+        if isinstance(widget, tk.Frame):
+            widget.configure(bg=colors["bg_card"])
+            for child in widget.winfo_children():
+                self._recursively_style_widget(child, colors)
+        elif isinstance(widget, tk.Label):
+            widget.configure(bg=colors["bg_card"], fg=colors["fg_text"])
+        elif isinstance(widget, tk.Button):
+            if widget in (self.browse_upgrade_btn, self.browse_audit_btn):
+                widget.configure(
+                    bg=colors["btn_secondary"],
+                    fg=colors["btn_secondary_fg"],
+                    activebackground=colors["btn_secondary_hover"],
+                )
+
+    def _update_button_visuals(self, colors: Optional[dict[str, str]] = None):
+        c = colors or THEMES[self.current_theme]
+        if self.is_running:
+            self.run_btn.configure(
+                bg=c["btn_primary_disabled"],
+                fg=c["btn_primary_disabled_fg"],
+                state="disabled",
+            )
+            self.audit_btn.configure(
+                bg=c["btn_primary_disabled"],
+                fg=c["btn_primary_disabled_fg"],
+                state="disabled",
+            )
+            self.abort_upgrade_btn.configure(
+                bg=c["btn_abort"],
+                fg="#ffffff",
+                state="normal",
+                activebackground=c["btn_abort_hover"],
+            )
+            self.abort_audit_btn.configure(
+                bg=c["btn_abort"],
+                fg="#ffffff",
+                state="normal",
+                activebackground=c["btn_abort_hover"],
+            )
+        else:
+            self.run_btn.configure(
+                bg=c["btn_primary"],
+                fg="#ffffff",
+                state="normal",
+                activebackground=c["btn_primary_hover"],
+            )
+            self.audit_btn.configure(
+                bg="#059669",
+                fg="#ffffff",
+                state="normal",
+                activebackground="#047857",
+            )
+            self.abort_upgrade_btn.configure(
+                bg=c["btn_abort_disabled"],
+                fg=c["btn_primary_disabled_fg"],
+                state="disabled",
+            )
+            self.abort_audit_btn.configure(
+                bg=c["btn_abort_disabled"],
+                fg=c["btn_primary_disabled_fg"],
+                state="disabled",
+            )
 
     def _clear_log(self):
         self.log_text.configure(state="normal")
@@ -753,7 +940,7 @@ class AMstraLiftGUI:
             else:
                 messagebox.showinfo(
                     "VS Code Not Found",
-                    "The 'code' executable was not found in your system PATH.",
+                    "The 'code' command was not found in your system PATH.",
                 )
 
     def _show_git_status(self):
@@ -781,15 +968,12 @@ class AMstraLiftGUI:
     def _set_running_state(self, is_running: bool, status_msg: str, progress_pct: int = 0):
         self.is_running = is_running
         self.status_var.set(status_msg)
+        self._update_button_visuals()
 
         if is_running:
             self.cancellation_token.reset()
             self.status_badge.configure(text="🟡")
             self.progress_bar["value"] = progress_pct or 5
-            self.run_btn.configure(state="disabled")
-            self.audit_btn.configure(state="disabled")
-            self.abort_upgrade_btn.configure(state="normal")
-            self.abort_audit_btn.configure(state="normal")
             self.open_folder_btn.configure(state="disabled")
             self.open_code_btn.configure(state="disabled")
             self.git_status_btn.configure(state="disabled")
@@ -814,10 +998,6 @@ class AMstraLiftGUI:
             else:
                 self.status_badge.configure(text="🟢")
 
-            self.run_btn.configure(state="normal")
-            self.audit_btn.configure(state="normal")
-            self.abort_upgrade_btn.configure(state="disabled")
-            self.abort_audit_btn.configure(state="disabled")
             self.open_folder_btn.configure(state="normal")
             self.open_code_btn.configure(state="normal")
             self.git_status_btn.configure(state="normal")

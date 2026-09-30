@@ -928,7 +928,19 @@ class AngularAdapter(BaseAdapter):
                 continue
 
             if pkg == "eslint" and (has_angular_eslint or (target_major and target_major >= 17)):
-                rec_eslint = "^9.21.0" if (target_angular_major and target_angular_major >= 19) else "^8.57.1"
+                has_legacy_eslintrc = any(
+                    (repo_path / name).exists()
+                    for name in (".eslintrc", ".eslintrc.js", ".eslintrc.json", ".eslintrc.yaml", ".eslintrc.yml")
+                )
+                has_flat_config = any(
+                    (repo_path / name).exists()
+                    for name in ("eslint.config.js", "eslint.config.mjs", "eslint.config.cjs")
+                )
+                if has_legacy_eslintrc and not has_flat_config:
+                    rec_eslint = "^8.57.1"
+                else:
+                    rec_eslint = "^9.21.0" if (target_angular_major and target_angular_major >= 19) else "^8.57.1"
+
                 cur_major = extract_major_version(cur_ver)
                 target_eslint_major = extract_major_version(rec_eslint)
                 if cur_major and target_eslint_major and cur_major < target_eslint_major:
@@ -1238,6 +1250,18 @@ class AngularAdapter(BaseAdapter):
             if "--openssl-legacy-provider" not in existing_opts:
                 gate_env["NODE_OPTIONS"] = (existing_opts + " --openssl-legacy-provider").strip()
 
+        # Support legacy .eslintrc in ESLint 8/9 by disabling mandatory Flat Config
+        has_legacy_eslintrc = any(
+            (repo_path / name).exists()
+            for name in (".eslintrc", ".eslintrc.js", ".eslintrc.json", ".eslintrc.yaml", ".eslintrc.yml")
+        )
+        has_flat_config = any(
+            (repo_path / name).exists()
+            for name in ("eslint.config.js", "eslint.config.mjs", "eslint.config.cjs")
+        )
+        if has_legacy_eslintrc and not has_flat_config:
+            gate_env["ESLINT_USE_FLAT_CONFIG"] = "false"
+
         has_npm = shutil.which("npm", path=gate_env.get("PATH")) is not None
 
         # ── Resolve test command with watch-mode and headless fixes ──────────
@@ -1390,9 +1414,22 @@ class AngularAdapter(BaseAdapter):
         if not raw_test_script:
             return None
 
-        script_lower = raw_test_script.lower()
+        # If test script chains commands (e.g. "npm run lint && ng test --configuration=test"),
+        # isolate the actual unit test command so linting errors (which have their own gate)
+        # do not block the test runner from executing.
+        effective_script = raw_test_script
+        is_chained = "&&" in raw_test_script
+        if is_chained:
+            parts = [p.strip() for p in raw_test_script.split("&&")]
+            test_subcmd = next(
+                (p for p in parts if any(k in p.lower() for k in ("ng test", "ng t", "karma", "jest", "vitest"))),
+                None,
+            )
+            if test_subcmd:
+                effective_script = test_subcmd
 
-        # ── Jest: runs once and exits — no special treatment needed ──────────
+        script_lower = effective_script.lower()
+
         if "jest" in script_lower:
             return "npm run test" if has_npm else raw_test_script
 
