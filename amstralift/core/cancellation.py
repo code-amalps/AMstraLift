@@ -36,7 +36,8 @@ class CancellationToken:
             proc = self._active_proc
 
         if proc is not None:
-            self._terminate_proc_tree(proc)
+            # Terminate asynchronously so GUI thread / caller is never blocked or frozen
+            threading.Thread(target=self._terminate_proc_tree, args=(proc,), daemon=True).start()
 
     def reset(self) -> None:
         """Reset the token back to normal uncancelled state."""
@@ -59,7 +60,10 @@ class CancellationToken:
         """Register an active subprocess for immediate termination upon cancellation."""
         with self._lock:
             if self._cancelled:
-                self._terminate_proc_tree(proc)
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
                 raise OperationCancelledError("Operation was cancelled by user.")
             self._active_proc = proc
 
@@ -72,13 +76,19 @@ class CancellationToken:
     @staticmethod
     def _terminate_proc_tree(proc: subprocess.Popen[Any]) -> None:
         """Recursively terminate the process tree across Windows and POSIX."""
+        if proc is None or proc.poll() is not None:
+            return
         try:
             if os.name == "nt":
                 # On Windows, taskkill /F /T kills the entire process tree (node, karma, chrome, etc.)
+                flags = 0
+                if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    flags = subprocess.CREATE_NO_WINDOW
                 subprocess.run(
                     ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                     capture_output=True,
                     timeout=5,
+                    creationflags=flags,
                 )
             else:
                 proc.kill()
@@ -167,6 +177,12 @@ class CancellableScope:
 
         def _hooked_popen_init(self_proc: subprocess.Popen[Any], *args: Any, **kwargs: Any) -> None:
             orig_init(self_proc, *args, **kwargs)
+            # Never register internal cleanup commands like taskkill
+            cmd = args[0] if args else kwargs.get("args")
+            if cmd:
+                first = cmd[0] if isinstance(cmd, (list, tuple)) else str(cmd)
+                if "taskkill" in str(first).lower():
+                    return
             tok.register_process(self_proc)
 
         subprocess.Popen.__init__ = _hooked_popen_init  # type: ignore[assignment]

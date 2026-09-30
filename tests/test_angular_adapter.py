@@ -192,10 +192,13 @@ def test_angular_run_build_and_tests_timeout_handling(tmp_path: Path, monkeypatc
         encoding="utf-8",
     )
 
-    def mock_subprocess_run(*args, **kwargs):
+    def mock_run_cancellable(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout", 30))
 
-    monkeypatch.setattr(subprocess, "run", mock_subprocess_run)
+    monkeypatch.setattr(
+        "amstralift.adapters.angular.run_cancellable_subprocess",
+        mock_run_cancellable,
+    )
 
     summary = adapter.run_build_and_tests(tmp_path, timeout_seconds=10.0)
     test_result = next((r for r in summary.results if r.name == "test"), None)
@@ -382,11 +385,14 @@ def test_angular_run_build_and_tests_removes_openssl_legacy_for_v17(tmp_path: Pa
 
     captured_env = {}
 
-    def mock_subprocess_run(cmd, **kwargs):
+    def mock_run_cancellable(cmd, **kwargs):
         captured_env.update(kwargs.get("env", {}))
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Build ok", stderr="")
 
-    monkeypatch.setattr(subprocess, "run", mock_subprocess_run)
+    monkeypatch.setattr(
+        "amstralift.adapters.angular.run_cancellable_subprocess",
+        mock_run_cancellable,
+    )
     monkeypatch.setattr("shutil.which", lambda *args, **kwargs: "npm")
 
     summary = adapter.run_build_and_tests(tmp_path)

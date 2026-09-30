@@ -1059,9 +1059,13 @@ class AMstraLiftGUI:
     def _abort_execution(self):
         if not self.is_running:
             return
-        self.status_var.set("⏹ Aborting operation...")
+        self.abort_upgrade_btn.configure(state="disabled")
+        self.abort_audit_btn.configure(state="disabled")
+        self.status_var.set("⏹ Aborting... Please wait")
+        self.status_badge.configure(text="🟡")
         self.cancellation_token.cancel()
         print("\n[ABORTED] Operation was aborted by user. Terminating active tasks...\n", file=sys.stderr)
+        self.root.update_idletasks()
 
     def _execute_upgrade(self):
         repo_path_str = self.upgrade_repo_var.get().strip()
