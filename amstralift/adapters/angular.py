@@ -1292,13 +1292,18 @@ class AngularAdapter(BaseAdapter):
                 )
                 continue
 
+            from amstralift.core.cancellation import check_cancelled
+
             start_t = time.time()
             if gate_name == "test":
                 cmd = script_cmd
             else:
                 cmd = f"npm run {gate_name}" if has_npm else script_cmd
 
+            print(f"   ↳ Executing verification gate: '{gate_name}' ({cmd})...", flush=True)
+
             try:
+                check_cancelled()
                 proc = subprocess.run(
                     cmd,
                     shell=True,
@@ -1310,13 +1315,16 @@ class AngularAdapter(BaseAdapter):
                     timeout=timeout_seconds,
                     env=gate_env,
                 )
+                check_cancelled()
                 duration = time.time() - start_t
                 stdout = proc.stdout or ""
                 stderr = proc.stderr or ""
                 if proc.returncode == 0:
                     status = GateStatus.REQUIRED_PASSED if is_required else GateStatus.OPTIONAL_PASSED
+                    print(f"   ✔ Gate '{gate_name}' passed ({duration:.1f}s)", flush=True)
                 else:
                     status = GateStatus.REQUIRED_FAILED if is_required else GateStatus.OPTIONAL_FAILED
+                    print(f"   ✖ Gate '{gate_name}' finished with exit code {proc.returncode} ({duration:.1f}s)", flush=True)
 
                 results.append(
                     GateResult(

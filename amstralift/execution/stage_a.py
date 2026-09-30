@@ -49,6 +49,10 @@ def _capture_lockfile_hashes(repo_path: Path) -> dict[str, str]:
     return hashes
 
 
+from typing import Callable, Optional
+from amstralift.core.cancellation import CancellationToken, check_cancelled
+
+
 def run_stage_a(
     workspace_path: Path,
     adapter: BaseAdapter,
@@ -59,17 +63,31 @@ def run_stage_a(
     test_timeout: float = 300.0,
     modernize: list[str] | None = None,
     remediate_cves: bool = True,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+    cancellation_token: Optional[CancellationToken] = None,
 ) -> UnsignedAdvisoryBundle:
     """Execute Stage A inside the sanitized workspace."""
     run_id = run_id or f"run_{uuid4().hex[:12]}"
     base_commit_sha = get_head_commit(workspace_path)
     lockfiles_before = _capture_lockfile_hashes(workspace_path)
 
+    def _notify(step: int, total: int, pct: int, msg: str):
+        if cancellation_token:
+            cancellation_token.check_cancelled()
+        print(f"[{step}/{total}] {msg}", flush=True)
+        if progress_callback:
+            try:
+                progress_callback(pct, msg)
+            except Exception:
+                pass
+
     # 1. Discover upgrade candidates or use explicit changes
+    _notify(1, 5, 10, "🔍 Analyzing repository and discovering dependencies...")
     candidates = explicit_changes if explicit_changes is not None else adapter.discover_candidates(workspace_path)
 
     # 1b. Auto-discover direct and transitive dependencies with CVEs and add safe non-breaking remediation
     if remediate_cves and explicit_changes is None:
+        _notify(2, 5, 25, "🛡️ Running pre-upgrade CVE security scan & remediation planning...")
         try:
             from amstralift.core.models import DependencyTier
             from amstralift.security.dependency_graph import DependencyGraphAnalyzer
@@ -115,12 +133,11 @@ def run_stage_a(
         raise NoUpgradesAvailableError("Repository is already up to date. No upgradable dependencies discovered.")
 
     # 2. Apply upgrades to manifests/lockfiles
+    _notify(3, 5, 45, "📦 Applying version updates to manifests and regenerating lockfiles...")
     adapter.apply_upgrade(workspace_path, candidates)
 
     # 2a. Post-upgrade transitive CVE remediation pass
-    # After the framework upgrade is applied and the modern lockfile is generated,
-    # re-scan the resulting dependency tree to remediate any newly exposed or remaining
-    # transitive CVEs (e.g. from legacy third-party dev tools) via safe overrides or pins.
+    _notify(4, 5, 65, "🛡️ Running post-upgrade CVE checks and framework modernizations...")
     if remediate_cves and explicit_changes is None:
         try:
             from amstralift.security.dependency_graph import DependencyGraphAnalyzer
@@ -168,9 +185,16 @@ def run_stage_a(
         applied_modernizations = adapter.apply_modernizations(workspace_path, modernize)
 
     # 3. Run declared build and test gates
+    _notify(5, 5, 80, "⚡ Executing build and test verification gates...")
     gate_summary = adapter.run_build_and_tests(workspace_path, timeout_seconds=test_timeout)
 
     # 4. Generate unified git patch
+    if progress_callback:
+        try:
+            progress_callback(95, "🔒 Generating cryptographic patch & classifying migration safety...")
+        except Exception:
+            pass
+    print("🔒 Generating cryptographic patch & classifying migration safety...", flush=True)
     patch = generate_patch(workspace_path, base_commit_sha)
     if not (patch and patch.strip()):
         raise StageAExecutionError("Upgrade resulted in an empty patch.")

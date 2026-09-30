@@ -14,6 +14,7 @@ from amstralift.adapters.base import BaseAdapter
 from amstralift.adapters.dotnet import DotNetAdapter
 from amstralift.adapters.python import PythonAdapter
 from amstralift.adapters.react import ReactAdapter
+from amstralift.core.cancellation import CancellableScope, CancellationToken, check_cancelled
 from amstralift.core.crypto import sign_bundle
 from amstralift.core.models import DependencyChange, PullRequestProposal, SignedAdvisoryBundle
 from amstralift.core.workspace import prepare_stage_a_workspace, run_git
@@ -84,9 +85,14 @@ class UpgradeOrchestrator:
         modernize: list[str] | None = None,
         remediate_cves: bool = True,
         incremental: bool | None = None,
+        progress_callback: Any | None = None,
+        cancellation_token: Any | None = None,
     ) -> tuple[SignedAdvisoryBundle, PullRequestProposal]:
         """Execute complete upgrade workflow for a repository."""
         repo_path = repo_path.resolve()
+
+        if cancellation_token:
+            cancellation_token.check_cancelled()
 
         ecosystem_name = ecosystem or self.auto_detect_ecosystem(repo_path)
         adapter = self.get_adapter(ecosystem_name)
@@ -125,49 +131,61 @@ class UpgradeOrchestrator:
         sandbox_dir = Path(tempfile.mkdtemp(prefix="amstralift_stage_a_"))
 
         try:
-            # 1. Trusted Bootstrap: Prepare and scrub workspace
-            prepare_stage_a_workspace(
-                source_repo_path=repo_path,
-                target_workspace_path=sandbox_dir,
-                target_branch=target_branch,
-            )
+            with CancellableScope(cancellation_token):
+                # 1. Trusted Bootstrap: Prepare and scrub workspace
+                prepare_stage_a_workspace(
+                    source_repo_path=repo_path,
+                    target_workspace_path=sandbox_dir,
+                    target_branch=target_branch,
+                )
 
-            # 2. Stage A Execution (Untrusted sandbox: no credentials, no HMAC key)
-            unsigned_bundle = run_stage_a(
-                workspace_path=sandbox_dir,
-                adapter=adapter,
-                repo_url=str(repo_path),
-                target_branch=target_branch,
-                explicit_changes=explicit_changes,
-                test_timeout=test_timeout,
-                modernize=modernize,
-                remediate_cves=remediate_cves,
-            )
+                # 2. Stage A Execution (Untrusted sandbox: no credentials, no HMAC key)
+                unsigned_bundle = run_stage_a(
+                    workspace_path=sandbox_dir,
+                    adapter=adapter,
+                    repo_url=str(repo_path),
+                    target_branch=target_branch,
+                    explicit_changes=explicit_changes,
+                    test_timeout=test_timeout,
+                    modernize=modernize,
+                    remediate_cves=remediate_cves,
+                    progress_callback=progress_callback,
+                    cancellation_token=cancellation_token,
+                )
 
-            # 3. Trusted Host: Sign the bundle with HMAC-SHA256
-            signed_bundle = sign_bundle(
-                bundle=unsigned_bundle,
-                secret_key=self.secret_key,
-                ttl_seconds=7200,
-            )
+                if cancellation_token:
+                    cancellation_token.check_cancelled()
 
-            # 4. Stage B Execution (Trusted publisher: verifies signature and publishes PR)
-            pr_proposal = run_stage_b(
-                signed_bundle=signed_bundle,
-                target_repo_path=repo_path,
-                secret_key=self.secret_key,
-                dry_run=dry_run,
-                provider=effective_provider,
-                repo_id=effective_repo_id,
-                remote_url=effective_remote_url,
-                git_token=effective_token,
-                publish=publish,
-                allow_failed_gates=allow_failed_gates,
-                output_branch=output_branch,
-                draft_on_fail=draft_on_fail,
-            )
+                # 3. Trusted Host: Sign the bundle with HMAC-SHA256
+                signed_bundle = sign_bundle(
+                    bundle=unsigned_bundle,
+                    secret_key=self.secret_key,
+                    ttl_seconds=7200,
+                )
 
-            return signed_bundle, pr_proposal
+                # 4. Stage B Execution (Trusted publisher: verifies signature and publishes PR)
+                pr_proposal = run_stage_b(
+                    signed_bundle=signed_bundle,
+                    target_repo_path=repo_path,
+                    secret_key=self.secret_key,
+                    dry_run=dry_run,
+                    provider=effective_provider,
+                    repo_id=effective_repo_id,
+                    remote_url=effective_remote_url,
+                    git_token=effective_token,
+                    publish=publish,
+                    allow_failed_gates=allow_failed_gates,
+                    output_branch=output_branch,
+                    draft_on_fail=draft_on_fail,
+                )
+
+                if progress_callback:
+                    try:
+                        progress_callback(100, f"Upgrade completed: {pr_proposal.branch_name}")
+                    except Exception:
+                        pass
+
+                return signed_bundle, pr_proposal
 
         finally:
             # Always destroy the untrusted sandbox workspace

@@ -94,7 +94,13 @@ def install_npm_dependencies(
     if not npm_cmd:
         raise RuntimeError("npm CLI not found; cannot install updated package versions.")
 
+    from amstralift.core.cancellation import check_cancelled
+    import time
+
     _remove_node_modules(repo_path)
+    print("   ↳ Running 'npm install' to resolve upgraded dependencies (this may take a minute)...", flush=True)
+    start_t = time.time()
+    check_cancelled()
     result = subprocess.run(
         [npm_cmd, "install", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund"],
         cwd=repo_path,
@@ -104,11 +110,14 @@ def install_npm_dependencies(
         timeout=timeout,
         shell=sys.platform == "win32",
     )
+    check_cancelled()
+    duration = time.time() - start_t
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(
             f"npm install failed (exit {result.returncode}): {detail[-3000:]}"
         )
+    print(f"   ✔ npm dependencies installed successfully ({duration:.1f}s)", flush=True)
 
 
 def _regenerate_lockfile(
@@ -124,6 +133,9 @@ def _regenerate_lockfile(
 
     Returns True on success, False on failure.
     """
+    from amstralift.core.cancellation import check_cancelled
+    import time
+
     lock_file = repo_path / "package-lock.json"
     backup = repo_path / "package-lock.json.amstralift_bak"
 
@@ -134,6 +146,9 @@ def _regenerate_lockfile(
             _shutil.copy2(lock_file, backup)
         lock_file.unlink(missing_ok=True)
 
+        print("   ↳ Running 'npm install --package-lock-only' to generate clean lockfile...", flush=True)
+        start_t = time.time()
+        check_cancelled()
         result = subprocess.run(
             [
                 npm_cmd,
@@ -150,9 +165,12 @@ def _regenerate_lockfile(
             timeout=timeout,
             shell=sys.platform == "win32",
         )
+        check_cancelled()
+        duration = time.time() - start_t
 
         if result.returncode == 0 and lock_file.exists():
             backup.unlink(missing_ok=True)
+            print(f"   ✔ package-lock.json regenerated cleanly ({duration:.1f}s)", flush=True)
             logger.debug("package-lock.json regenerated cleanly via npm install --package-lock-only")
             return True
 
@@ -200,6 +218,7 @@ def update_npm_lockfile(
     if npm_cmd and not os.environ.get("PYTEST_CURRENT_TEST"):
         pkg_file = repo_path / "package.json"
         if pkg_file.exists():
+            _remove_node_modules(repo_path)
             if _regenerate_lockfile(repo_path, npm_cmd, env):
                 return True
 
