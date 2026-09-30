@@ -68,7 +68,7 @@ def run_stage_a(
     # 1. Discover upgrade candidates or use explicit changes
     candidates = explicit_changes if explicit_changes is not None else adapter.discover_candidates(workspace_path)
 
-    # 1b. Auto-discover direct dependencies with CVEs and add safe non-breaking remediation
+    # 1b. Auto-discover direct and transitive dependencies with CVEs and add safe non-breaking remediation
     if remediate_cves and explicit_changes is None:
         try:
             from amstralift.core.models import DependencyTier
@@ -76,12 +76,11 @@ def run_stage_a(
             from amstralift.security.osv_client import OSVClient
             from amstralift.security.plan_generator import RemediationPlanGenerator
 
-            direct_deps = DependencyGraphAnalyzer.analyze(workspace_path, adapter.name)
-            direct_only = [d for d in direct_deps if d.is_direct]
-            if direct_only:
+            all_deps = DependencyGraphAnalyzer.analyze(workspace_path, adapter.name)
+            if all_deps:
                 scanner = OSVClient()
                 audit_report = scanner.scan_discovered_dependencies(
-                    direct_only,
+                    all_deps,
                     ecosystem=adapter.name,
                     repo_path=str(workspace_path),
                 )
@@ -94,7 +93,7 @@ def run_stage_a(
                             candidates.append(change)
                             existing_names.add(change.package_name)
         except Exception as e:
-            logger.warning("Optional direct dependency CVE remediation skipped: %s", e)
+            logger.warning("Optional dependency CVE remediation skipped: %s", e)
 
     if not candidates:
         raise NoUpgradesAvailableError("Repository is already up to date. No upgradable dependencies discovered.")

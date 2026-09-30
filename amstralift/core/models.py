@@ -35,6 +35,7 @@ class DependencyChange(BaseModel):
     change_type: Literal["direct", "transitive", "dev"] = "direct"
     tier: DependencyTier = DependencyTier.TIER_1_SAFE
     rationale: str | None = None
+    parent_package: str | None = None
 
 
 class GateStatus(str, Enum):

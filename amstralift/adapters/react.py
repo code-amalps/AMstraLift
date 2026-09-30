@@ -149,7 +149,14 @@ class ReactAdapter(BaseAdapter):
         data = json.loads(pkg_file.read_text(encoding="utf-8"))
 
         for change in changes:
-            if "dependencies" in data and change.package_name in data["dependencies"]:
+            if change.change_type == "transitive":
+                clean_target = change.to_version if change.to_version.startswith(("^", "~")) else f"^{change.to_version}"
+                direct_pkgs = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+                if change.package_name in direct_pkgs and change.parent_package and change.parent_package in direct_pkgs:
+                    data.setdefault("overrides", {}).setdefault(change.parent_package, {})[change.package_name] = clean_target
+                else:
+                    data.setdefault("overrides", {})[change.package_name] = clean_target
+            elif "dependencies" in data and change.package_name in data["dependencies"]:
                 data["dependencies"][change.package_name] = change.to_version
             elif "devDependencies" in data and change.package_name in data["devDependencies"]:
                 data["devDependencies"][change.package_name] = change.to_version

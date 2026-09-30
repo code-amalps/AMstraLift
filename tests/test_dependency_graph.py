@@ -118,3 +118,49 @@ urllib3~=1.26.5
     assert dep_map["requests"].is_direct
     assert "flask" in dep_map
     assert "urllib3" in dep_map
+
+
+def test_npm_multiversion_transitive_graph(tmp_path: Path):
+    """Verify that multiple versions of the same package in lockfile are all discovered."""
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(
+        json.dumps({
+            "name": "sample-app",
+            "dependencies": {},
+            "devDependencies": {"@commitlint/cli": "^11.0.0"},
+        }),
+        encoding="utf-8",
+    )
+
+    lock_json = tmp_path / "package-lock.json"
+    lock_json.write_text(
+        json.dumps({
+            "name": "sample-app",
+            "lockfileVersion": 3,
+            "packages": {
+                "": {
+                    "devDependencies": {"@commitlint/cli": "^11.0.0"},
+                },
+                "node_modules/@commitlint/cli": {
+                    "version": "11.0.0",
+                    "dependencies": {"semver": "7.3.2"},
+                },
+                "node_modules/semver": {
+                    "version": "5.7.2",
+                },
+                "node_modules/@commitlint/cli/node_modules/semver": {
+                    "version": "7.3.2",
+                },
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    deps = DependencyGraphAnalyzer.analyze_npm(tmp_path)
+    semver_deps = [d for d in deps if d.package_name == "semver"]
+    assert len(semver_deps) == 2
+    versions = {d.version for d in semver_deps}
+    assert versions == {"5.7.2", "7.3.2"}
+    nested_semver = next(d for d in semver_deps if d.version == "7.3.2")
+    assert not nested_semver.is_direct
+    assert "@commitlint/cli" in nested_semver.introduced_by

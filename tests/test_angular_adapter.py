@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from amstralift.adapters.angular import AngularAdapter, classify_angular_tier
-from amstralift.core.models import DependencyTier
+from amstralift.core.models import DependencyChange, DependencyTier
 
 
 def test_classify_angular_tier():
@@ -773,6 +773,66 @@ def test_modernize_angular_builder_19_plus(tmp_path: Path):
 
     updated_pkg = json.loads(pkg_json.read_text(encoding="utf-8"))
     assert "@angular/build" in updated_pkg["devDependencies"]
+
+
+def test_angular_apply_upgrade_transitive_overrides(tmp_path: Path):
+    """Verify apply_upgrade writes transitive changes to package.json overrides."""
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(json.dumps({
+        "name": "my-app",
+        "dependencies": {
+            "@angular/core": "^18.0.0",
+            "semver": "^5.0.0"
+        },
+        "devDependencies": {
+            "@commitlint/cli": "^11.0.0"
+        }
+    }), encoding="utf-8")
+
+    adapter = AngularAdapter()
+    changes = [
+        DependencyChange(
+            package_name="adm-zip",
+            from_version="0.5.0",
+            to_version="0.6.1",
+            change_type="transitive",
+        ),
+        DependencyChange(
+            package_name="semver",
+            from_version="7.3.2",
+            to_version="7.5.4",
+            change_type="transitive",
+            parent_package="@commitlint/cli",
+        ),
+    ]
+
+    adapter.apply_upgrade(tmp_path, changes)
+
+    data = json.loads(pkg_json.read_text(encoding="utf-8"))
+    assert "overrides" in data
+    assert data["overrides"]["adm-zip"] == "^0.6.1"
+    assert data["overrides"]["@commitlint/cli"]["semver"] == "^7.5.4"
+
+
+def test_align_angular_ecosystem_prunes_codelyzer(tmp_path: Path):
+    """Verify _align_angular_ecosystem_dependencies removes codelyzer for Angular 14+ when eslint is present."""
+    from amstralift.adapters.angular import _align_angular_ecosystem_dependencies
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(json.dumps({
+        "name": "my-app",
+        "devDependencies": {
+            "eslint": "^8.57.1",
+            "codelyzer": "^6.0.0"
+        }
+    }), encoding="utf-8")
+
+    _align_angular_ecosystem_dependencies(tmp_path, target_major=18)
+
+    data = json.loads(pkg_json.read_text(encoding="utf-8"))
+    assert "codelyzer" not in data.get("devDependencies", {})
+    assert "eslint" in data["devDependencies"]
+
 
 
 

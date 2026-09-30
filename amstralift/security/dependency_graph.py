@@ -40,11 +40,11 @@ class DependencyGraphAnalyzer:
         except Exception:
             pass
 
-        results: dict[str, DiscoveredDependency] = {}
+        results: dict[tuple[str, str], DiscoveredDependency] = {}
 
         # 1. Register direct dependencies
         for name, ver in direct_deps.items():
-            results[name] = DiscoveredDependency(
+            results[(name, ver)] = DiscoveredDependency(
                 package_name=name,
                 version=ver,
                 is_direct=True,
@@ -61,9 +61,9 @@ class DependencyGraphAnalyzer:
                 # v2/v3 lockfile format
                 packages = lock_data.get("packages", {})
                 if packages:
-                    # Map of package -> list of packages that depend on it
+                    # Map of (pkg_name, ver) -> list of path_keys
+                    pkg_instances: dict[tuple[str, str], list[str]] = {}
                     dependents: dict[str, list[str]] = {}
-                    pkg_versions: dict[str, str] = {}
 
                     for path_key, meta in packages.items():
                         if not path_key:  # root
@@ -73,13 +73,16 @@ class DependencyGraphAnalyzer:
                         pkg_name = parts[-1]
                         ver = meta.get("version", "")
                         if pkg_name and ver:
-                            pkg_versions[pkg_name] = ver
+                            pkg_instances.setdefault((pkg_name, ver), []).append(path_key)
                             # Track dependencies declared by this package
                             for dep_name in meta.get("dependencies", {}).keys():
                                 dependents.setdefault(dep_name, []).append(pkg_name)
 
-                    for pkg_name, ver in pkg_versions.items():
-                        is_direct = pkg_name in direct_deps
+                    for (pkg_name, ver), path_keys in pkg_instances.items():
+                        is_top_level = any(pk == f"node_modules/{pkg_name}" for pk in path_keys)
+                        is_direct = (pkg_name in direct_deps) and is_top_level
+                        effective_ver = direct_deps[pkg_name] if is_direct else ver
+
                         intro_by = []
                         if not is_direct:
                             # Trace up to direct ancestors
@@ -87,15 +90,16 @@ class DependencyGraphAnalyzer:
                             direct_parents = [p for p in raw_parents if p in direct_deps]
                             intro_by = direct_parents if direct_parents else raw_parents[:2]
 
-                        effective_ver = direct_deps[pkg_name] if is_direct else ver
-                        results[pkg_name] = DiscoveredDependency(
-                            package_name=pkg_name,
-                            version=effective_ver,
-                            is_direct=is_direct,
-                            introduced_by=intro_by,
-                            manifest_file="package-lock.json" if not is_direct else "package.json",
-                            ecosystem=ecosystem,
-                        )
+                        res_key = (pkg_name, effective_ver)
+                        if res_key not in results or not results[res_key].is_direct:
+                            results[res_key] = DiscoveredDependency(
+                                package_name=pkg_name,
+                                version=effective_ver,
+                                is_direct=is_direct,
+                                introduced_by=intro_by,
+                                manifest_file="package-lock.json" if not is_direct else "package.json",
+                                ecosystem=ecosystem,
+                            )
 
                 # v1 lockfile format fallback
                 elif "dependencies" in lock_data:
@@ -104,8 +108,9 @@ class DependencyGraphAnalyzer:
                             ver = meta.get("version", "")
                             is_direct = name in direct_deps and not chain
                             effective_ver = direct_deps[name] if is_direct else ver
-                            if name not in results or not results[name].is_direct:
-                                results[name] = DiscoveredDependency(
+                            res_key = (name, effective_ver)
+                            if res_key not in results or not results[res_key].is_direct:
+                                results[res_key] = DiscoveredDependency(
                                     package_name=name,
                                     version=effective_ver,
                                     is_direct=is_direct,

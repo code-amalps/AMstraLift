@@ -66,9 +66,13 @@ class RemediationPlanGenerator:
                         f_fixes.add(f.fixed_version)
                     if not f_fixes:
                         continue
-                    # Candidate resolves finding f if cand_tuple >= min fixed version for f
-                    min_f = min((_parse_semver_tuple(fx) for fx in f_fixes), default=(0, 0, 0))
-                    if cand_tuple < min_f:
+                    # Candidate resolves finding f if cand_tuple >= min fixed version for f in the same major branch
+                    same_major_fixes = [fx for fx in f_fixes if _parse_semver_tuple(fx)[0] == cand_tuple[0]]
+                    if same_major_fixes:
+                        req_f = min((_parse_semver_tuple(fx) for fx in same_major_fixes))
+                    else:
+                        req_f = min((_parse_semver_tuple(fx) for fx in f_fixes), default=(0, 0, 0))
+                    if cand_tuple < req_f:
                         cand_resolves_all = False
                         break
                 if cand_resolves_all:
@@ -152,6 +156,7 @@ class RemediationPlanGenerator:
                 if item.is_major_bump
                 else DependencyTier.TIER_1_SAFE
             )
+            parent = item.introduced_by[0] if item.introduced_by else None
             changes.append(
                 DependencyChange(
                     package_name=item.package_name,
@@ -160,6 +165,7 @@ class RemediationPlanGenerator:
                     change_type="direct" if item.is_direct else "transitive",
                     tier=tier,
                     rationale=f"Security remediation for {item.cve_id} via {item.remediation_mechanism}. {item.compatibility_notes}",
+                    parent_package=parent,
                 )
             )
         return changes

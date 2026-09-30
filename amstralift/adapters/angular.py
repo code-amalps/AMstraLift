@@ -179,6 +179,16 @@ def _align_angular_ecosystem_dependencies(repo_path: Path, target_major: int | N
             modified = True
             applied.append(f"Added @angular/build ({target_v}) for modern Angular build system")
 
+    # For Angular 14+, remove retired TSLint ecosystem tooling if modern ESLint is present
+    if target_major is None or target_major >= 14:
+        dev_deps = data.get("devDependencies", {})
+        if "eslint" in dev_deps or any(p.startswith("@angular-eslint/") for p in dev_deps):
+            for retired_pkg in ("codelyzer",):
+                if retired_pkg in dev_deps:
+                    del dev_deps[retired_pkg]
+                    modified = True
+                    applied.append(f"Removed retired tooling {retired_pkg} for Angular {target_major} compatibility")
+
     if modified:
         try:
             pkg_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -838,9 +848,10 @@ class AngularAdapter(BaseAdapter):
                 continue
 
             if pkg == "eslint" and (has_angular_eslint or (target_major and target_major >= 17)):
-                rec_eslint = "^8.57.1"
+                rec_eslint = "^9.21.0" if (target_angular_major and target_angular_major >= 19) else "^8.57.1"
                 cur_major = extract_major_version(cur_ver)
-                if cur_major and cur_major < 8:
+                target_eslint_major = extract_major_version(rec_eslint)
+                if cur_major and target_eslint_major and cur_major < target_eslint_major:
                     tier = classify_angular_tier(pkg)
                     candidates.append(
                         DependencyChange(
@@ -881,7 +892,14 @@ class AngularAdapter(BaseAdapter):
         data = json.loads(pkg_file.read_text(encoding="utf-8"))
 
         for change in changes:
-            if "dependencies" in data and change.package_name in data["dependencies"]:
+            if change.change_type == "transitive":
+                clean_target = change.to_version if change.to_version.startswith(("^", "~")) else f"^{change.to_version}"
+                direct_pkgs = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+                if change.package_name in direct_pkgs and change.parent_package and change.parent_package in direct_pkgs:
+                    data.setdefault("overrides", {}).setdefault(change.parent_package, {})[change.package_name] = clean_target
+                else:
+                    data.setdefault("overrides", {})[change.package_name] = clean_target
+            elif "dependencies" in data and change.package_name in data["dependencies"]:
                 data["dependencies"][change.package_name] = change.to_version
             elif "devDependencies" in data and change.package_name in data["devDependencies"]:
                 data["devDependencies"][change.package_name] = change.to_version
