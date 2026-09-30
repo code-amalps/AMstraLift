@@ -225,6 +225,26 @@ def _modernize_angular_workspace_json(repo_path: Path, target_major: int | None 
             if _replace_browser_target(workspace):
                 changed = True
 
+        # Ensure referenced asset directories exist so Angular CLI doesn't error on missing asset folders
+        projects = workspace.get("projects", {})
+        for proj_info in projects.values():
+            if not isinstance(proj_info, dict):
+                continue
+            architect = proj_info.get("architect", {})
+            build_opts = architect.get("build", {}).get("options", {})
+            assets = build_opts.get("assets", [])
+            if isinstance(assets, list):
+                for asset in assets:
+                    if isinstance(asset, str):
+                        asset_dir = repo_path / asset
+                        if not asset_dir.exists() and not asset.endswith(
+                            (".ico", ".svg", ".png", ".jpg", ".jpeg", ".json", ".webmanifest")
+                        ):
+                            try:
+                                asset_dir.mkdir(parents=True, exist_ok=True)
+                            except Exception:
+                                pass
+
         if changed:
             workspace_file.write_text(json.dumps(workspace, indent=2) + "\n", encoding="utf-8")
     except Exception:
@@ -973,7 +993,8 @@ class AngularAdapter(BaseAdapter):
                                 env=gate_env,
                                 capture_output=True,
                                 text=True,
-                                timeout=300,
+                                timeout=180,
+                                stdin=subprocess.DEVNULL,
                                 shell=sys.platform == "win32",
                             )
                             if res.returncode != 0:
@@ -1003,7 +1024,7 @@ class AngularAdapter(BaseAdapter):
                     applied.append("Skipped standalone migration schematic: npx CLI not found in environment")
 
                 # Always apply AST/regex standalone component modernizer to guarantee all components
-                # receive complete imports and schemas (fixes Angular 19+ schematic skipping behavior)
+                # receive complete imports, schemas, standalone: true, and module declarations updated
                 applied.extend(modernize_angular_standalone_components(repo_path))
             else:
                 applied.append(f"Skipped standalone migration: requires Angular 15+ (current is v{major or 'unknown'})")

@@ -648,5 +648,73 @@ export class HomeComponent {}""",
     assert "RouterModule" in feat_content
 
 
+def test_modernize_angular_standalone_arbitrary_filenames_and_ngmodules(tmp_path: Path):
+    from amstralift.adapters.angular_standalone import modernize_angular_standalone_components
+
+    # Component not ending in .component.ts
+    admin_comp = tmp_path / "admin-shell.ts"
+    admin_comp.write_text(
+        """import { Component } from '@angular/core';
+@Component({
+  selector: 'lab-admin',
+  template: '<section><router-outlet></router-outlet></section>'
+})
+export class AdminShell {}""",
+        encoding="utf-8",
+    )
+
+    settings_comp = tmp_path / "project-settings.ts"
+    settings_comp.write_text(
+        """import { Component } from '@angular/core';
+import { UntypedFormBuilder, Validators } from '@angular/forms';
+@Component({
+  selector: 'lab-project-settings',
+  template: '<form [formGroup]="form"><input formControlName="name"></form>'
+})
+export class ProjectSettings {
+  constructor(private fb: UntypedFormBuilder) {}
+}""",
+        encoding="utf-8",
+    )
+
+    mod_file = tmp_path / "admin.module.ts"
+    mod_file.write_text(
+        """import { NgModule } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { AdminShell } from './admin-shell';
+import { ProjectSettings } from './project-settings';
+
+@NgModule({
+  declarations: [AdminShell, ProjectSettings],
+  imports: [CommonModule]
+})
+export class AdminModule {}""",
+        encoding="utf-8",
+    )
+
+    applied = modernize_angular_standalone_components(tmp_path)
+    assert len(applied) >= 2
+
+    # Check admin shell
+    admin_txt = admin_comp.read_text(encoding="utf-8")
+    assert "standalone: true" in admin_txt
+    assert "RouterModule" in admin_txt
+    assert "@angular/router" in admin_txt
+
+    # Check settings
+    settings_txt = settings_comp.read_text(encoding="utf-8")
+    assert "standalone: true" in settings_txt
+    assert "ReactiveFormsModule" in settings_txt
+    assert "@angular/forms" in settings_txt
+
+    # Check NgModule declarations moved to imports
+    mod_txt = mod_file.read_text(encoding="utf-8")
+    assert "declarations:" not in mod_txt or "declarations: []" in mod_txt
+    assert "AdminShell" in mod_txt
+    assert "ProjectSettings" in mod_txt
+    assert "imports: [" in mod_txt
+
+
+
 
 
