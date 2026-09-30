@@ -13,8 +13,11 @@ from amstralift.service import UpgradeOrchestrator
 
 
 @pytest.fixture
-def test_git_environment(tmp_path: Path):
+def test_git_environment(tmp_path: Path, monkeypatch):
     """Creates a local working git repository connected to a real bare git remote."""
+    from amstralift.adapters.python import PythonAdapter
+    monkeypatch.setattr(PythonAdapter, "fetch_latest_version", lambda self, pkg: "2.32.3" if pkg == "requests" else None)
+
     bare_remote = tmp_path / "remote.git"
     bare_remote.mkdir()
     run_git(["init", "--bare"], cwd=bare_remote)

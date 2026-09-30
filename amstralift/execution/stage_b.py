@@ -377,13 +377,15 @@ def run_stage_b(
         for file_path in patch_files:
             add_res = run_git(["add", file_path], cwd=target_repo_path)
             if add_res.returncode != 0:
+                run_git(["reset", "--hard", "HEAD"], cwd=target_repo_path)
                 run_git(["checkout", bundle.target_branch], cwd=target_repo_path)
                 raise StageBPublishError(f"Failed to stage verified patch file '{file_path}': {add_res.stderr}")
 
-        # Commit with checked error
-        commit_res = run_git(["commit", "-m", pr_proposal.title], cwd=target_repo_path)
+        # Commit with checked error (bypass client hooks: Stage B never executes repository-controlled scripts)
+        commit_res = run_git(["commit", "--no-verify", "-m", pr_proposal.title], cwd=target_repo_path)
         if commit_res.returncode != 0:
             if "nothing to commit" not in commit_res.stdout:
+                run_git(["reset", "--hard", "HEAD"], cwd=target_repo_path)
                 run_git(["checkout", bundle.target_branch], cwd=target_repo_path)
                 raise StageBPublishError(f"Failed to commit upgrade patch: {commit_res.stderr}")
 

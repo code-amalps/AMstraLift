@@ -183,7 +183,7 @@ def prepare_stage_a_workspace(
                 run_git(["init"], cwd=target_workspace_path)
                 run_git(["config", "core.autocrlf", "false"], cwd=target_workspace_path)
                 run_git(["add", "."], cwd=target_workspace_path)
-                run_git(["commit", "-m", "Initial commit"], cwd=target_workspace_path)
+                run_git(["commit", "--no-verify", "-m", "Initial commit"], cwd=target_workspace_path)
 
     # Ensure the sandbox is pristine: reset to HEAD and remove any untracked/dirty artifacts from parent
     run_git(["config", "core.autocrlf", "false"], cwd=target_workspace_path)
