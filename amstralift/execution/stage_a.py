@@ -89,9 +89,25 @@ def run_stage_a(
                     cve_changes = RemediationPlanGenerator.plan_to_dependency_changes(plan)
                     existing_names = {c.package_name for c in candidates}
                     for change in cve_changes:
-                        if change.package_name not in existing_names and change.tier != DependencyTier.TIER_3_CRITICAL:
-                            candidates.append(change)
-                            existing_names.add(change.package_name)
+                        if change.package_name in existing_names:
+                            continue
+                        if change.tier == DependencyTier.TIER_3_CRITICAL:
+                            continue
+                        # If a transitive CVE was introduced by any parent package that is already
+                        # being upgraded to a new version, skip it: the upgraded parent brings its
+                        # own modern, secure dependency tree and stale overrides will cause conflicts.
+                        if change.change_type == "transitive":
+                            parents = set(change.introduced_by)
+                            if change.parent_package:
+                                parents.add(change.parent_package)
+                            if parents and any(p in existing_names for p in parents):
+                                continue
+                        # Native binary packages have strict platform-binary equality checks
+                        # and are managed by the build toolchain; overriding them breaks install scripts.
+                        if change.package_name == "esbuild" or change.package_name.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                            continue
+                        candidates.append(change)
+                        existing_names.add(change.package_name)
         except Exception as e:
             logger.warning("Optional dependency CVE remediation skipped: %s", e)
 

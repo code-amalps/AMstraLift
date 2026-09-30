@@ -36,6 +36,7 @@ class DependencyChange(BaseModel):
     tier: DependencyTier = DependencyTier.TIER_1_SAFE
     rationale: str | None = None
     parent_package: str | None = None
+    introduced_by: list[str] = Field(default_factory=list)
 
 
 class GateStatus(str, Enum):

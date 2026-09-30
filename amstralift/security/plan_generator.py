@@ -166,6 +166,7 @@ class RemediationPlanGenerator:
                     tier=tier,
                     rationale=f"Security remediation for {item.cve_id} via {item.remediation_mechanism}. {item.compatibility_notes}",
                     parent_package=parent,
+                    introduced_by=list(item.introduced_by),
                 )
             )
         return changes

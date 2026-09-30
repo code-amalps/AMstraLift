@@ -892,6 +892,73 @@ def test_angular_apply_upgrade_protects_higher_major_transitives(tmp_path: Path)
     assert data["overrides"]["protractor"]["ajv"] == "^6.14.0"
 
 
+def test_angular_apply_upgrade_excludes_native_binary_overrides(tmp_path: Path):
+    """Verify that native binary wrapper packages (esbuild, @esbuild/*, @swc/*) are excluded from overrides."""
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(
+        json.dumps(
+            {
+                "name": "sample-app",
+                "version": "1.0.0",
+                "dependencies": {
+                    "@angular/core": "^12.0.0",
+                },
+                "devDependencies": {
+                    "@angular/cli": "^12.0.0",
+                },
+                "overrides": {
+                    "esbuild": "^0.25.0",
+                    "some-dep": {
+                        "@swc/core": "^1.3.0",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    adapter = AngularAdapter()
+    changes = [
+        DependencyChange(
+            package_name="@angular/core",
+            from_version="12.0.0",
+            to_version="^22.0.0",
+            change_type="direct",
+        ),
+        DependencyChange(
+            package_name="esbuild",
+            from_version="0.12.24",
+            to_version="0.25.0",
+            change_type="transitive",
+            parent_package="@angular-devkit/build-angular",
+        ),
+        DependencyChange(
+            package_name="@esbuild/win32-x64",
+            from_version="0.12.24",
+            to_version="0.25.0",
+            change_type="transitive",
+        ),
+        DependencyChange(
+            package_name="semver",
+            from_version="7.0.0",
+            to_version="7.5.4",
+            change_type="transitive",
+        ),
+    ]
+
+    adapter.apply_upgrade(tmp_path, changes)
+
+    data = json.loads(pkg_json.read_text(encoding="utf-8"))
+    assert "overrides" in data
+    # semver is retained
+    assert data["overrides"]["semver"] == "^7.5.4"
+    # esbuild and @esbuild/* must NOT be in overrides (and stale esbuild override cleaned up)
+    assert "esbuild" not in data["overrides"]
+    assert "@esbuild/win32-x64" not in data["overrides"]
+    assert "some-dep" not in data["overrides"]
+
+
+
 
 
 

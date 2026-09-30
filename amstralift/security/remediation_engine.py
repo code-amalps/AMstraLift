@@ -60,6 +60,10 @@ class RemediationEngine:
                     has_changes = True
             else:
                 # Transitive remediation via npm overrides
+                # Native binary packages (like esbuild) have strict platform-binary equality checks
+                # and are managed by the framework/build toolchain; overriding them breaks install scripts.
+                if pkg == "esbuild" or pkg.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                    continue
                 pkg_data.setdefault("overrides", {})[pkg] = target_v
                 has_changes = True
 
