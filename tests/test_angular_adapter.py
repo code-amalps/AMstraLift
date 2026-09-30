@@ -575,6 +575,34 @@ export class MyFormComponent {
     assert "private fb: UntypedFormBuilder" in form_content
 
 
+def test_modernize_angular_source_files_raw_loader(tmp_path: Path):
+    """Verify legacy Webpack raw-loader require calls are inlined for esbuild compatibility."""
+    from amstralift.adapters.angular import _modernize_angular_source_files
+
+    theme_scss = tmp_path / "my-theme.scss"
+    theme_scss.write_text(".my-class { color: red; }", encoding="utf-8")
+
+    comp_ts = tmp_path / "my.component.ts"
+    comp_ts.write_text(
+        """import { Component } from '@angular/core';
+
+@Component({ selector: 'my-comp' })
+export class MyComponent {
+  themeSrc: string = require('!raw-loader!./my-theme.scss')
+    .default;
+}""",
+        encoding="utf-8",
+    )
+
+    applied = _modernize_angular_source_files(tmp_path, target_major=22)
+    assert len(applied) > 0
+    assert any("raw-loader" in a for a in applied)
+
+    content = comp_ts.read_text(encoding="utf-8")
+    assert "raw-loader" not in content
+    assert ".my-class { color: red; }" in content
+
+
 def test_modernize_angular_material_templates(tmp_path: Path):
     from amstralift.adapters.angular_standalone import modernize_angular_material_templates
 

@@ -323,6 +323,20 @@ def _modernize_angular_workspace_json(repo_path: Path, target_major: int | None 
                         extract_target["builder"] = "@angular/build:extract-i18n"
                         changed = True
 
+            # For Angular 17+, adjust legacy restrictive initial bundle budgets for modern esbuild bundles
+            if target_major is None or target_major >= 17:
+                build_target = architect.get("build", {})
+                if isinstance(build_target, dict):
+                    configurations = build_target.get("configurations", {})
+                    for conf in configurations.values():
+                        if isinstance(conf, dict) and "budgets" in conf and isinstance(conf["budgets"], list):
+                            for budget in conf["budgets"]:
+                                if isinstance(budget, dict) and budget.get("type") == "initial":
+                                    cur_max = budget.get("maximumError", "")
+                                    if cur_max in ("500kb", "1mb", "1.5mb"):
+                                        budget["maximumError"] = "3mb"
+                                        changed = True
+
             build_opts = architect.get("build", {}).get("options", {})
             assets = build_opts.get("assets", [])
             if isinstance(assets, list):
@@ -558,6 +572,7 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
     ngrx_cleaned_count = 0
     type_import_count = 0
     reactive_forms_count = 0
+    raw_loader_count = 0
 
     for ts_file in repo_path.rglob("*.ts"):
         if any(part in excluded_dirs for part in ts_file.parts):
@@ -668,6 +683,31 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
                         modified = True
                         reactive_forms_count += 1
 
+        # 5. Modernize obsolete Webpack raw-loader syntax for Angular 17+ (esbuild/Vite)
+        if target_major is None or target_major >= 17:
+            if "raw-loader!" in content:
+                def _replace_raw_loader(m: re.Match) -> str:
+                    rel_target = m.group(1).strip()
+                    target_file = (ts_file.parent / rel_target).resolve()
+                    if target_file.exists() and target_file.is_file():
+                        try:
+                            file_text = target_file.read_text(encoding="utf-8")
+                            escaped = file_text.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
+                            return f"`{escaped}`"
+                        except Exception:
+                            pass
+                    return "''"
+
+                new_content = re.sub(
+                    r"require\(\s*['\"]!?raw-loader!([^'\"]+)['\"]\)\s*(?:\.\s*default)?",
+                    _replace_raw_loader,
+                    content,
+                )
+                if new_content != content:
+                    content = new_content
+                    modified = True
+                    raw_loader_count += 1
+
         if modified:
             try:
                 ts_file.write_text(content, encoding="utf-8")
@@ -680,6 +720,8 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
         applied.append(f"Modernized {type_import_count} file(s) converting type-only 'HttpEvent' imports")
     if reactive_forms_count > 0:
         applied.append(f"Modernized {reactive_forms_count} file(s) to UntypedFormBuilder/UntypedFormGroup for Angular 14+ compatibility")
+    if raw_loader_count > 0:
+        applied.append(f"Modernized {raw_loader_count} file(s) inlining legacy Webpack raw-loader imports for esbuild compatibility")
 
     return applied
 
