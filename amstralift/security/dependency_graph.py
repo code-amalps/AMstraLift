@@ -85,10 +85,35 @@ class DependencyGraphAnalyzer:
 
                         intro_by = []
                         if not is_direct:
-                            # Trace up to direct ancestors
+                            # 1. Trace immediate enclosing parents from nested path_keys (e.g. node_modules/req/node_modules/uuid -> req)
+                            enclosing_parents = []
+                            for pk in path_keys:
+                                parts = [p.rstrip("/") for p in pk.split("node_modules/") if p.strip("/")]
+                                if len(parts) >= 2:
+                                    enclosing_parents.append(parts[-2])
+
+                            ancestors: list[str] = []
+                            for ep in enclosing_parents:
+                                ancestors.append(ep)
+                                # trace ep up to direct deps
+                                curr = ep
+                                visited = {curr}
+                                while curr not in direct_deps:
+                                    up = [p for p in dependents.get(curr, []) if p not in visited]
+                                    if not up:
+                                        break
+                                    direct_up = next((p for p in up if p in direct_deps), None)
+                                    curr = direct_up if direct_up else up[0]
+                                    visited.add(curr)
+                                    if curr in direct_deps:
+                                        ancestors.append(curr)
+                                        break
+
                             raw_parents = dependents.get(pkg_name, [])
                             direct_parents = [p for p in raw_parents if p in direct_deps]
-                            intro_by = direct_parents if direct_parents else raw_parents[:2]
+                            fallback = direct_parents if direct_parents else raw_parents[:2]
+
+                            intro_by = list(dict.fromkeys(ancestors + fallback))
 
                         res_key = (pkg_name, effective_ver)
                         if res_key not in results or not results[res_key].is_direct:

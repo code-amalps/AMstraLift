@@ -49,6 +49,14 @@ def _find_npm(env: dict[str, str] | None) -> str | None:
     )
 
 
+def _handle_remove_readonly(func, path, exc_info):
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    except Exception:
+        pass
+
+
 def _remove_node_modules(repo_path: Path) -> None:
     """Remove stale sandbox dependencies without following symlinks or junctions."""
     node_modules = repo_path / "node_modules"
@@ -59,15 +67,18 @@ def _remove_node_modules(repo_path: Path) -> None:
 
     attributes = getattr(node_stat, "st_file_attributes", 0)
     is_reparse_point = bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
-    if node_modules.is_symlink() or (os.name == "nt" and is_reparse_point):
-        if os.name == "nt":
-            os.rmdir(node_modules)
+    try:
+        if node_modules.is_symlink() or (os.name == "nt" and is_reparse_point):
+            if os.name == "nt":
+                os.rmdir(node_modules)
+            else:
+                node_modules.unlink()
+        elif node_modules.is_dir():
+            shutil.rmtree(node_modules, onexc=_handle_remove_readonly)
         else:
             node_modules.unlink()
-    elif node_modules.is_dir():
-        shutil.rmtree(node_modules)
-    else:
-        node_modules.unlink()
+    except Exception as exc:
+        logger.warning("Could not fully remove node_modules (may be locked by running process): %s", exc)
 
 
 def install_npm_dependencies(
@@ -187,7 +198,6 @@ def update_npm_lockfile(
     # Skip in unit tests (PYTEST_CURRENT_TEST is set by pytest automatically).
     npm_cmd = _find_npm(env)
     if npm_cmd and not os.environ.get("PYTEST_CURRENT_TEST"):
-        _remove_node_modules(repo_path)
         pkg_file = repo_path / "package.json"
         if pkg_file.exists():
             if _regenerate_lockfile(repo_path, npm_cmd, env):

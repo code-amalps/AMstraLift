@@ -38,7 +38,7 @@ class RemediationPlanGenerator:
         for pkg, findings in grouped.items():
             current_ver = findings[0].current_version
             is_direct = any(f.is_direct for f in findings)
-            introduced_by = findings[0].introduced_by
+            introduced_by = next((f.introduced_by for f in findings if f.introduced_by), findings[0].introduced_by)
             all_cves = sorted({f.cve_id for f in findings})
 
             # Collect all fixed versions across all CVEs for this package
@@ -151,11 +151,12 @@ class RemediationPlanGenerator:
         """Convert a remediation plan into Stage A DependencyChange proposals."""
         changes: list[DependencyChange] = []
         for item in plan.items:
-            tier = (
-                DependencyTier.TIER_3_CRITICAL
-                if item.is_major_bump
-                else DependencyTier.TIER_1_SAFE
-            )
+            if item.is_direct and item.is_major_bump:
+                tier = DependencyTier.TIER_3_CRITICAL
+            elif item.is_major_bump:
+                tier = DependencyTier.TIER_2_VERIFY_BEHAVIOR
+            else:
+                tier = DependencyTier.TIER_1_SAFE
             parent = item.introduced_by[0] if item.introduced_by else None
             changes.append(
                 DependencyChange(

@@ -999,11 +999,12 @@ class AngularAdapter(BaseAdapter):
                 max_m = get_max_existing_major(repo_path, change.package_name, direct_pkgs)
 
                 # Never allow an older major patch to globally downgrade a higher major used elsewhere in the project
+                parent_scope = change.parent_package or (change.introduced_by[0] if change.introduced_by else None)
                 if max_m is not None and target_m is not None and target_m < max_m:
-                    if change.parent_package:
-                        data.setdefault("overrides", {}).setdefault(change.parent_package, {})[change.package_name] = clean_target
-                elif change.package_name in direct_pkgs and change.parent_package and change.parent_package in direct_pkgs:
-                    data.setdefault("overrides", {}).setdefault(change.parent_package, {})[change.package_name] = clean_target
+                    if parent_scope:
+                        data.setdefault("overrides", {}).setdefault(parent_scope, {})[change.package_name] = clean_target
+                elif change.package_name in direct_pkgs and parent_scope:
+                    data.setdefault("overrides", {}).setdefault(parent_scope, {})[change.package_name] = clean_target
                 else:
                     data.setdefault("overrides", {})[change.package_name] = clean_target
             elif "dependencies" in data and change.package_name in data["dependencies"]:

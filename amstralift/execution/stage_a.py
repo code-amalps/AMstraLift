@@ -117,6 +117,51 @@ def run_stage_a(
     # 2. Apply upgrades to manifests/lockfiles
     adapter.apply_upgrade(workspace_path, candidates)
 
+    # 2a. Post-upgrade transitive CVE remediation pass
+    # After the framework upgrade is applied and the modern lockfile is generated,
+    # re-scan the resulting dependency tree to remediate any newly exposed or remaining
+    # transitive CVEs (e.g. from legacy third-party dev tools) via safe overrides or pins.
+    if remediate_cves and explicit_changes is None:
+        try:
+            from amstralift.security.dependency_graph import DependencyGraphAnalyzer
+            from amstralift.security.osv_client import OSVClient
+            from amstralift.security.plan_generator import RemediationPlanGenerator
+
+            post_deps = DependencyGraphAnalyzer.analyze(workspace_path, adapter.name)
+            if post_deps:
+                scanner = OSVClient()
+                post_report = scanner.scan_discovered_dependencies(
+                    post_deps,
+                    ecosystem=adapter.name,
+                    repo_path=str(workspace_path),
+                )
+                if post_report.findings:
+                    post_plan = RemediationPlanGenerator.generate_plan(post_report)
+                    post_cve_changes = RemediationPlanGenerator.plan_to_dependency_changes(post_plan)
+                    existing_names = {c.package_name for c in candidates}
+                    clean_post_changes = []
+                    for change in post_cve_changes:
+                        if change.package_name in existing_names:
+                            continue
+                        if change.tier == DependencyTier.TIER_3_CRITICAL:
+                            continue
+                        if change.change_type == "transitive":
+                            parents = set(change.introduced_by)
+                            if change.parent_package:
+                                parents.add(change.parent_package)
+                            if parents and any(p in existing_names for p in parents):
+                                continue
+                        if change.package_name == "esbuild" or change.package_name.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                            continue
+                        clean_post_changes.append(change)
+                        existing_names.add(change.package_name)
+
+                    if clean_post_changes:
+                        adapter.apply_upgrade(workspace_path, clean_post_changes)
+                        candidates.extend(clean_post_changes)
+        except Exception as e:
+            logger.warning("Post-upgrade CVE remediation pass skipped: %s", e)
+
     # 2b. Apply optional ecosystem modernizations (e.g. control-flow, standalone)
     applied_modernizations: list[str] = []
     if modernize:

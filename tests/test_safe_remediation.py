@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from amstralift.core.models import DependencyChange, GateResult, GateStatus
+from amstralift.core.models import DependencyChange, GateResult, GateStatus, GateSummary
 from amstralift.governance.vulnerabilities import VulnerabilitySeverity
 from amstralift.security.models import (
     AuditReport,
@@ -408,5 +408,88 @@ def test_stage_a_cve_remediation_skips_transitives_of_upgraded_parents(tmp_path:
                 assert "esbuild" not in change_pkgs
                 # adm-zip must be in changes (parent protractor was not upgraded)
                 assert "adm-zip" in change_pkgs
+
+
+def test_stage_a_post_upgrade_transitive_cve_remediation(tmp_path: Path):
+    """Verify Stage A runs a post-upgrade remediation pass to catch transitive CVEs in the modern tree."""
+    from amstralift.adapters.angular import AngularAdapter
+    from amstralift.execution.stage_a import run_stage_a
+    from amstralift.core.workspace import run_git
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(
+        json.dumps({
+            "name": "sample-app",
+            "dependencies": {
+                "@angular/core": "12.0.0",
+            },
+            "devDependencies": {
+                "@commitlint/cli": "11.0.0",
+            }
+        }, indent=2),
+        encoding="utf-8"
+    )
+    (tmp_path / "angular.json").write_text(json.dumps({"version": 1, "projects": {}}), encoding="utf-8")
+    run_git(["init"], cwd=tmp_path)
+    run_git(["config", "user.name", "Test"], cwd=tmp_path)
+    run_git(["config", "user.email", "test@test.local"], cwd=tmp_path)
+    run_git(["add", "."], cwd=tmp_path)
+    run_git(["commit", "-m", "initial"], cwd=tmp_path)
+
+    adapter = AngularAdapter()
+    with patch.object(adapter, "run_build_and_tests") as mock_run_tests:
+        mock_run_tests.return_value = GateSummary()
+        with patch.object(
+            adapter,
+            "discover_candidates",
+            return_value=[
+                DependencyChange(
+                    package_name="@angular/core",
+                    from_version="12.0.0",
+                    to_version="^22.0.0",
+                    change_type="direct",
+                )
+            ],
+        ):
+            pre_report = AuditReport(
+                repo_path=str(tmp_path),
+                ecosystem="angular",
+                findings=[]
+            )
+            post_report = AuditReport(
+                repo_path=str(tmp_path),
+                ecosystem="angular",
+                findings=[
+                    VulnerabilityFinding(
+                        cve_id="GHSA-c2qf-rxjj-qqgw",
+                        package_name="semver",
+                        ecosystem="npm",
+                        current_version="7.3.2",
+                        severity=VulnerabilitySeverity.HIGH,
+                        fixed_version="7.5.4",
+                        is_direct=False,
+                        introduced_by=["@commitlint/cli"],
+                    )
+                ]
+            )
+
+            with patch("amstralift.security.osv_client.OSVClient.scan_discovered_dependencies", side_effect=[pre_report, post_report]):
+                bundle = run_stage_a(
+                    workspace_path=tmp_path,
+                    adapter=adapter,
+                    repo_url=str(tmp_path),
+                    remediate_cves=True,
+                )
+
+                change_pkgs = {c.package_name: c for c in bundle.changes}
+                assert "@angular/core" in change_pkgs
+                assert "semver" in change_pkgs
+                assert change_pkgs["semver"].to_version == "7.5.4"
+
+                data = json.loads((tmp_path / "package.json").read_text(encoding="utf-8"))
+                assert "overrides" in data
+                assert "semver" in data["overrides"]
+                assert data["overrides"]["semver"] == "^7.5.4"
+
 
 
