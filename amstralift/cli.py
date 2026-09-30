@@ -32,6 +32,24 @@ app = typer.Typer(
 console = Console(safe_box=True)
 
 
+@app.callback(invoke_without_command=True)
+def main(
+    ctx: typer.Context,
+    gui_flag: Annotated[bool, typer.Option("--gui", help="Launch interactive graphical user interface.")] = False,
+):
+    """AMstraLift: Automated Dependency & Framework Upgrade Engine."""
+    if ctx.invoked_subcommand is None:
+        from amstralift.gui import launch_gui
+        launch_gui()
+
+
+@app.command()
+def gui():
+    """Launch interactive desktop GUI."""
+    from amstralift.gui import launch_gui
+    launch_gui()
+
+
 @app.command()
 def run(
     repo: Annotated[Path, typer.Option("--repo", "-r", help="Path to target repository.")] = Path("."),
