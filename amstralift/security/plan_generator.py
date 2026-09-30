@@ -4,6 +4,7 @@ from typing import Any
 
 from amstralift.core.models import DependencyChange, DependencyTier
 from amstralift.security.compatibility_selector import CompatibilityAwareVersionSelector
+from amstralift.security.osv_client import _parse_semver_tuple
 from amstralift.security.models import (
     AuditReport,
     RemediationPlan,
@@ -54,10 +55,31 @@ class RemediationPlanGenerator:
                 )
                 continue
 
+            # When multiple vulnerabilities affect a package, filter to candidate versions that resolve ALL of them
+            resolving_all: list[str] = []
+            for cand in all_fixed:
+                cand_tuple = _parse_semver_tuple(cand)
+                cand_resolves_all = True
+                for f in findings:
+                    f_fixes = set(f.all_fixed_versions)
+                    if f.fixed_version:
+                        f_fixes.add(f.fixed_version)
+                    if not f_fixes:
+                        continue
+                    # Candidate resolves finding f if cand_tuple >= min fixed version for f
+                    min_f = min((_parse_semver_tuple(fx) for fx in f_fixes), default=(0, 0, 0))
+                    if cand_tuple < min_f:
+                        cand_resolves_all = False
+                        break
+                if cand_resolves_all:
+                    resolving_all.append(cand)
+
+            effective_fixed = resolving_all if resolving_all else list(all_fixed)
+
             selection = CompatibilityAwareVersionSelector.select_version(
                 package_name=pkg,
                 current_version=current_ver,
-                fixed_versions=list(all_fixed),
+                fixed_versions=effective_fixed,
                 ecosystem=report.ecosystem,
                 project_context=ctx,
             )

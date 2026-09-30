@@ -82,6 +82,7 @@ class UpgradeOrchestrator:
         output_branch: str | None = None,
         draft_on_fail: bool = False,
         modernize: list[str] | None = None,
+        remediate_cves: bool = True,
     ) -> tuple[SignedAdvisoryBundle, PullRequestProposal]:
         """Execute complete upgrade workflow for a repository."""
         repo_path = repo_path.resolve()
@@ -135,6 +136,7 @@ class UpgradeOrchestrator:
                 explicit_changes=explicit_changes,
                 test_timeout=test_timeout,
                 modernize=modernize,
+                remediate_cves=remediate_cves,
             )
 
             # 3. Trusted Host: Sign the bundle with HMAC-SHA256

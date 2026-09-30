@@ -715,6 +715,67 @@ export class AdminModule {}""",
     assert "imports: [" in mod_txt
 
 
+def test_modernize_angular_builder_19_plus(tmp_path: Path):
+    """Verify Angular 19+ upgrades modernize builders to @angular/build and dev-server."""
+    from amstralift.adapters.angular import _modernize_angular_workspace_json, _align_angular_ecosystem_dependencies
+
+    angular_json = tmp_path / "angular.json"
+    angular_json.write_text(json.dumps({
+        "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+        "version": 1,
+        "projects": {
+            "my-app": {
+                "projectType": "application",
+                "architect": {
+                    "build": {
+                        "builder": "@angular-devkit/build-angular:browser",
+                        "options": {
+                            "main": "src/main.ts",
+                            "polyfills": "src/polyfills.ts",
+                        }
+                    },
+                    "serve": {
+                        "builder": "@angular-devkit/build-angular:dev-server",
+                        "options": {
+                            "browserTarget": "my-app:build"
+                        }
+                    }
+                }
+            }
+        }
+    }), encoding="utf-8")
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(json.dumps({
+        "name": "my-app",
+        "dependencies": {},
+        "devDependencies": {
+            "@angular/cli": "^19.0.0"
+        }
+    }), encoding="utf-8")
+
+    _modernize_angular_workspace_json(tmp_path, target_major=19)
+    _align_angular_ecosystem_dependencies(tmp_path, target_major=19)
+
+    updated_ws = json.loads(angular_json.read_text(encoding="utf-8"))
+    build_arch = updated_ws["projects"]["my-app"]["architect"]["build"]
+    serve_arch = updated_ws["projects"]["my-app"]["architect"]["serve"]
+
+    assert build_arch["builder"] == "@angular/build:application"
+    assert "browser" in build_arch["options"]
+    assert build_arch["options"]["browser"] == "src/main.ts"
+    assert "main" not in build_arch["options"]
+    assert isinstance(build_arch["options"]["polyfills"], list)
+
+    assert serve_arch["builder"] == "@angular/build:dev-server"
+    assert serve_arch["options"]["buildTarget"] == "my-app:build"
+    assert "browserTarget" not in serve_arch["options"]
+
+    updated_pkg = json.loads(pkg_json.read_text(encoding="utf-8"))
+    assert "@angular/build" in updated_pkg["devDependencies"]
+
+
+
 
 
 

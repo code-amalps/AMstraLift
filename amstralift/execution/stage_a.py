@@ -7,10 +7,13 @@ and returns an UnsignedAdvisoryBundle.
 CRITICAL: Stage A never possesses the HMAC signing key.
 """
 
+import logging
 from pathlib import Path
 from uuid import uuid4
 
 from amstralift.adapters.base import BaseAdapter
+
+logger = logging.getLogger(__name__)
 from amstralift.core.crypto import compute_file_sha256, compute_sha256
 from amstralift.core.models import DependencyChange, UnsignedAdvisoryBundle
 from amstralift.core.security import classify_migration_diff, validate_patch_security
@@ -55,6 +58,7 @@ def run_stage_a(
     explicit_changes: list[DependencyChange] | None = None,
     test_timeout: float = 300.0,
     modernize: list[str] | None = None,
+    remediate_cves: bool = True,
 ) -> UnsignedAdvisoryBundle:
     """Execute Stage A inside the sanitized workspace."""
     run_id = run_id or f"run_{uuid4().hex[:12]}"
@@ -63,6 +67,35 @@ def run_stage_a(
 
     # 1. Discover upgrade candidates or use explicit changes
     candidates = explicit_changes if explicit_changes is not None else adapter.discover_candidates(workspace_path)
+
+    # 1b. Auto-discover direct dependencies with CVEs and add safe non-breaking remediation
+    if remediate_cves and explicit_changes is None:
+        try:
+            from amstralift.core.models import DependencyTier
+            from amstralift.security.dependency_graph import DependencyGraphAnalyzer
+            from amstralift.security.osv_client import OSVClient
+            from amstralift.security.plan_generator import RemediationPlanGenerator
+
+            direct_deps = DependencyGraphAnalyzer.analyze(workspace_path, adapter.name)
+            direct_only = [d for d in direct_deps if d.is_direct]
+            if direct_only:
+                scanner = OSVClient()
+                audit_report = scanner.scan_discovered_dependencies(
+                    direct_only,
+                    ecosystem=adapter.name,
+                    repo_path=str(workspace_path),
+                )
+                if audit_report.findings:
+                    plan = RemediationPlanGenerator.generate_plan(audit_report)
+                    cve_changes = RemediationPlanGenerator.plan_to_dependency_changes(plan)
+                    existing_names = {c.package_name for c in candidates}
+                    for change in cve_changes:
+                        if change.package_name not in existing_names and change.tier != DependencyTier.TIER_3_CRITICAL:
+                            candidates.append(change)
+                            existing_names.add(change.package_name)
+        except Exception as e:
+            logger.warning("Optional direct dependency CVE remediation skipped: %s", e)
+
     if not candidates:
         raise NoUpgradesAvailableError("Repository is already up to date. No upgradable dependencies discovered.")
 

@@ -234,3 +234,66 @@ def test_verification_matrix_situations():
         assert eligible
         assert status == VerificationStatus.VERIFIED_SAFE
         assert warn is None
+
+
+def test_stage_a_auto_remediates_direct_dependency_cves(tmp_path: Path):
+    """Verify Stage A discovers and remediates direct dependencies with safe CVE patches."""
+    from amstralift.adapters.angular import AngularAdapter
+    from amstralift.core.models import GateSummary
+    from amstralift.core.workspace import run_git
+    from amstralift.execution.stage_a import run_stage_a
+
+    # Initialize a mock git repo in tmp_path
+    run_git(["init"], cwd=tmp_path)
+    run_git(["config", "user.name", "Test"], cwd=tmp_path)
+    run_git(["config", "user.email", "test@test.local"], cwd=tmp_path)
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(
+        json.dumps({
+            "name": "test-cve-auto",
+            "version": "1.0.0",
+            "dependencies": {
+                "@angular/core": "17.0.0",
+                "lodash": "4.17.20",
+            }
+        }, indent=2),
+        encoding="utf-8"
+    )
+    (tmp_path / "angular.json").write_text(json.dumps({"version": 1, "projects": {}}), encoding="utf-8")
+    run_git(["add", "."], cwd=tmp_path)
+    run_git(["commit", "-m", "initial"], cwd=tmp_path)
+
+    adapter = AngularAdapter()
+    with patch.object(adapter, "run_build_and_tests") as mock_run_tests:
+        mock_run_tests.return_value = GateSummary()
+        with patch("amstralift.security.osv_client.OSVClient.scan_discovered_dependencies") as mock_scan:
+            mock_scan.return_value = AuditReport(
+                repo_path=str(tmp_path),
+                ecosystem="angular",
+                findings=[
+                    VulnerabilityFinding(
+                        cve_id="CVE-2025-13465",
+                        package_name="lodash",
+                        ecosystem="npm",
+                        current_version="4.17.20",
+                        severity=VulnerabilitySeverity.HIGH,
+                        fixed_version="4.18.0",
+                        all_fixed_versions=["4.18.0"],
+                        is_direct=True,
+                        introduced_by=[],
+                    )
+                ]
+            )
+            bundle = run_stage_a(
+                workspace_path=tmp_path,
+                adapter=adapter,
+                repo_url=str(tmp_path),
+                remediate_cves=True,
+            )
+
+            change_pkgs = {c.package_name: c for c in bundle.changes}
+            assert "@angular/core" in change_pkgs
+            assert "lodash" in change_pkgs
+            assert change_pkgs["lodash"].to_version in ("^4.18.0", "4.18.0")
+

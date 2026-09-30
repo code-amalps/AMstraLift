@@ -94,6 +94,13 @@ def run(
             help="Comma-separated list of post-upgrade modernizations (e.g. 'control-flow', 'standalone', 'style', 'all').",
         ),
     ] = None,
+    remediate_cves: Annotated[
+        bool,
+        typer.Option(
+            "--remediate-cves",
+            help="Automatically discover and safely remediate known direct dependency CVEs during migration.",
+        ),
+    ] = True,
 ):
     """Run full two-stage upgrade workflow on a target repository."""
     repo_str = str(repo)
@@ -176,6 +183,7 @@ def run(
                 output_branch=output_branch,
                 draft_on_fail=draft_on_fail,
                 modernize=modernize_list,
+                remediate_cves=remediate_cves,
             )
 
         console.print("[bold green]✔ Upgrade workflow completed successfully![/bold green]\n")

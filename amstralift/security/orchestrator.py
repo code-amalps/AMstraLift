@@ -164,7 +164,7 @@ class SecurityOrchestrator:
                     rescan_report=rescan_report,
                     uncertainty_warning=uncertainty_warning,
                     remediation_successful=False,
-                    error_message="Remediation halted: Verification gates failed. Working tree preserved untouched.",
+                    error_message=f"Remediation halted: Verification gates failed ({uncertainty_warning}). Working tree preserved untouched." if uncertainty_warning else "Remediation halted: Verification gates failed. Working tree preserved untouched.",
                 )
 
             # 8. Convert plan into DependencyChanges for Stage B publishing

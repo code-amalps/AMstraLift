@@ -170,6 +170,15 @@ def _align_angular_ecosystem_dependencies(repo_path: Path, target_major: int | N
             modified = True
             applied.append(f"Aligned {pkg} to {rec_ver} for Angular {target_major} compatibility")
 
+    # For Angular 19+, ensure @angular/build is in devDependencies
+    if target_major is None or target_major >= 19:
+        dev_deps = data.setdefault("devDependencies", {})
+        if "@angular/build" not in dev_deps:
+            target_v = dev_deps.get("@angular/cli") or dev_deps.get("@angular-devkit/build-angular") or (f"^{target_major}.0.0" if target_major else "^19.0.0")
+            dev_deps["@angular/build"] = target_v
+            modified = True
+            applied.append(f"Added @angular/build ({target_v}) for modern Angular build system")
+
     if modified:
         try:
             pkg_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -231,6 +240,41 @@ def _modernize_angular_workspace_json(repo_path: Path, target_major: int | None 
             if not isinstance(proj_info, dict):
                 continue
             architect = proj_info.get("architect", {})
+
+            # For Angular 19+, migrate builders from deprecated devkit Webpack to modern @angular/build
+            if target_major is None or target_major >= 19:
+                build_target = architect.get("build", {})
+                if isinstance(build_target, dict):
+                    cur_b = build_target.get("builder", "")
+                    if cur_b in ("@angular-devkit/build-angular:browser", "@angular-devkit/build-angular:application"):
+                        build_target["builder"] = "@angular/build:application"
+                        changed = True
+                        opts = build_target.get("options", {})
+                        if "main" in opts:
+                            opts["browser"] = opts.pop("main")
+                            changed = True
+                        if isinstance(opts.get("polyfills"), str):
+                            opts["polyfills"] = [opts["polyfills"]]
+                            changed = True
+
+                serve_target = architect.get("serve", {})
+                if isinstance(serve_target, dict):
+                    cur_sb = serve_target.get("builder", "")
+                    if cur_sb in ("@angular-devkit/build-angular:dev-server", "@angular-devkit/build-angular:application"):
+                        serve_target["builder"] = "@angular/build:dev-server"
+                        changed = True
+                    s_opts = serve_target.get("options", {})
+                    if isinstance(s_opts, dict) and "browserTarget" in s_opts:
+                        s_opts["buildTarget"] = s_opts.pop("browserTarget")
+                        changed = True
+
+                extract_target = architect.get("extract-i18n", {})
+                if isinstance(extract_target, dict):
+                    cur_eb = extract_target.get("builder", "")
+                    if cur_eb == "@angular-devkit/build-angular:extract-i18n":
+                        extract_target["builder"] = "@angular/build:extract-i18n"
+                        changed = True
+
             build_opts = architect.get("build", {}).get("options", {})
             assets = build_opts.get("assets", [])
             if isinstance(assets, list):
@@ -837,12 +881,10 @@ class AngularAdapter(BaseAdapter):
         data = json.loads(pkg_file.read_text(encoding="utf-8"))
 
         for change in changes:
-            if change.change_type == "direct" and "dependencies" in data:
-                if change.package_name in data["dependencies"]:
-                    data["dependencies"][change.package_name] = change.to_version
-            elif change.change_type == "dev" and "devDependencies" in data:
-                if change.package_name in data["devDependencies"]:
-                    data["devDependencies"][change.package_name] = change.to_version
+            if "dependencies" in data and change.package_name in data["dependencies"]:
+                data["dependencies"][change.package_name] = change.to_version
+            elif "devDependencies" in data and change.package_name in data["devDependencies"]:
+                data["devDependencies"][change.package_name] = change.to_version
 
         # Clean up obsolete legacy Node/OpenSSL workarounds in scripts (e.g. node --openssl-legacy-provider .../ng)
         if "scripts" in data and isinstance(data["scripts"], dict):

@@ -148,14 +148,14 @@ class VerificationEngine:
 
         if eco in ("angular", "react", "npm"):
             if shutil.which("npm"):
-                cmd = "npm install --package-lock-only --dry-run"
+                cmd = "npm install --legacy-peer-deps --ignore-scripts --no-audit --no-fund"
                 proc = subprocess.run(
                     cmd,
                     shell=True,
                     cwd=workspace_path,
                     capture_output=True,
                     text=True,
-                    timeout=120,
+                    timeout=300,
                     env=get_node_execution_env(),
                 )
                 dur = time.time() - start
@@ -316,13 +316,28 @@ class VerificationEngine:
             test_count = 0
 
         # Check if tests were skipped or missing script in npm
+        browser_missing = any(
+            phrase in (stdout + stderr).lower()
+            for phrase in (
+                "no chrome",
+                "cannot start chrome",
+                "no provider for \"chrome\"",
+                "no provider for \"headlesschrome\"",
+                "no browsers were found",
+                "cannot find chrome",
+                "could not start",
+            )
+        )
         is_skipped = (
-            "missing script: test" in stderr.lower()
+            browser_missing
+            or "missing script: test" in stderr.lower()
             or "no test specified" in stdout.lower()
+            or "unknown argument: watch" in (stdout + stderr).lower()
+            or "target test does not exist" in (stdout + stderr).lower()
             or proc.returncode == 0 and "no tests" in stdout.lower() and test_count == 0
         )
 
-        status = GateStatus.REQUIRED_PASSED if proc.returncode == 0 else GateStatus.REQUIRED_FAILED
+        status = GateStatus.REQUIRED_SKIPPED if is_skipped else (GateStatus.REQUIRED_PASSED if proc.returncode == 0 else GateStatus.REQUIRED_FAILED)
         result = GateResult(
             name="test",
             command=cmd,

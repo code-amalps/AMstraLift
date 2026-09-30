@@ -149,12 +149,10 @@ class ReactAdapter(BaseAdapter):
         data = json.loads(pkg_file.read_text(encoding="utf-8"))
 
         for change in changes:
-            if change.change_type == "direct" and "dependencies" in data:
-                if change.package_name in data["dependencies"]:
-                    data["dependencies"][change.package_name] = change.to_version
-            elif change.change_type == "dev" and "devDependencies" in data:
-                if change.package_name in data["devDependencies"]:
-                    data["devDependencies"][change.package_name] = change.to_version
+            if "dependencies" in data and change.package_name in data["dependencies"]:
+                data["dependencies"][change.package_name] = change.to_version
+            elif "devDependencies" in data and change.package_name in data["devDependencies"]:
+                data["devDependencies"][change.package_name] = change.to_version
 
         pkg_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
