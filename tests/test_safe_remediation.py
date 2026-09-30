@@ -492,4 +492,151 @@ def test_stage_a_post_upgrade_transitive_cve_remediation(tmp_path: Path):
                 assert data["overrides"]["semver"] == "^7.5.4"
 
 
+def test_orchestrator_safe_only_skips_major_bumps(tmp_path: Path):
+    """Verify that under default safe_only=True, breaking major bumps are skipped and safe fixes applied."""
+    from amstralift.security.models import RemediationPlanItem, VerificationStatus
+    from amstralift.security.orchestrator import SecurityOrchestrator
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(json.dumps({"name": "test-app", "dependencies": {}}), encoding="utf-8")
+
+    report = AuditReport(
+        repo_path=str(tmp_path),
+        ecosystem="npm",
+        findings=[
+            VulnerabilityFinding(
+                cve_id="GHSA-safe-cve",
+                package_name="semver",
+                ecosystem="npm",
+                current_version="7.3.2",
+                severity=VulnerabilitySeverity.HIGH,
+                fixed_version="7.5.4",
+                all_fixed_versions=["7.5.4"],
+                is_direct=False,
+            ),
+            VulnerabilityFinding(
+                cve_id="GHSA-major-cve",
+                package_name="uuid",
+                ecosystem="npm",
+                current_version="3.4.0",
+                severity=VulnerabilitySeverity.HIGH,
+                fixed_version="11.1.1",
+                all_fixed_versions=["11.1.1"],
+                is_direct=False,
+            ),
+        ],
+    )
+
+    orchestrator = SecurityOrchestrator()
+    proposal = MagicMock(branch_name="amstralift/security-patch", publish_status="COMMITTED_LOCAL_BRANCH", labels=[], title="PR")
+
+    with patch.object(orchestrator.scanner, "scan_discovered_dependencies", return_value=report), \
+         patch("amstralift.security.orchestrator.DependencyGraphAnalyzer.analyze", return_value=[]), \
+         patch("amstralift.security.orchestrator.prepare_stage_a_workspace"), \
+         patch("amstralift.security.orchestrator.RemediationEngine.apply_plan", return_value=["package.json"]), \
+         patch("amstralift.security.orchestrator.VerificationEngine.execute_gates", return_value=(True, VerificationStatus.VERIFIED_SAFE, GateSummary(), None, None)), \
+         patch.object(orchestrator.upgrade_orchestrator, "run_upgrade", return_value=(MagicMock(), proposal)):
+
+        # Run with safe_only=True (default), allow_major=False
+        result = orchestrator.run_remediation(
+            repo_path=tmp_path,
+            ecosystem="npm",
+            mode="apply",
+            target_branch="main",
+            safe_only=True,
+            allow_major=False,
+        )
+
+        assert result.remediation_successful is True
+        assert len(result.plan.items) == 1
+        assert result.plan.items[0].package_name == "semver"
+        assert any("uuid" in adv for adv in result.plan.advisories)
+        assert result.branch_name == "amstralift/security-patch"
+
+
+def test_orchestrator_strict_halt_when_safe_only_false(tmp_path: Path):
+    """Verify that when safe_only=False and allow_major=False, presence of major leap halts with policy error."""
+    from amstralift.security.orchestrator import SecurityOrchestrator
+
+    report = AuditReport(
+        repo_path=str(tmp_path),
+        ecosystem="npm",
+        findings=[
+            VulnerabilityFinding(
+                cve_id="GHSA-major-cve",
+                package_name="uuid",
+                ecosystem="npm",
+                current_version="3.4.0",
+                severity=VulnerabilitySeverity.HIGH,
+                fixed_version="11.1.1",
+                all_fixed_versions=["11.1.1"],
+                is_direct=False,
+            ),
+        ],
+    )
+
+    orchestrator = SecurityOrchestrator()
+    with patch.object(orchestrator.scanner, "scan_discovered_dependencies", return_value=report), \
+         patch("amstralift.security.orchestrator.DependencyGraphAnalyzer.analyze", return_value=[]):
+
+        result = orchestrator.run_remediation(
+            repo_path=tmp_path,
+            ecosystem="npm",
+            mode="apply",
+            target_branch="main",
+            safe_only=False,
+            allow_major=False,
+        )
+
+        assert result.remediation_successful is False
+        assert "Governance policy restriction" in result.error_message
+
+
+def test_orchestrator_allow_major_permits_major_bumps(tmp_path: Path):
+    """Verify that when allow_major=True, major version bumps are included in the applied plan."""
+    from amstralift.security.models import VerificationStatus
+    from amstralift.security.orchestrator import SecurityOrchestrator
+
+    report = AuditReport(
+        repo_path=str(tmp_path),
+        ecosystem="npm",
+        findings=[
+            VulnerabilityFinding(
+                cve_id="GHSA-major-cve",
+                package_name="uuid",
+                ecosystem="npm",
+                current_version="3.4.0",
+                severity=VulnerabilitySeverity.HIGH,
+                fixed_version="11.1.1",
+                all_fixed_versions=["11.1.1"],
+                is_direct=False,
+            ),
+        ],
+    )
+
+    orchestrator = SecurityOrchestrator()
+    proposal = MagicMock(branch_name="amstralift/security-major", publish_status="COMMITTED_LOCAL_BRANCH", labels=[], title="PR")
+
+    with patch.object(orchestrator.scanner, "scan_discovered_dependencies", return_value=report), \
+         patch("amstralift.security.orchestrator.DependencyGraphAnalyzer.analyze", return_value=[]), \
+         patch("amstralift.security.orchestrator.prepare_stage_a_workspace"), \
+         patch("amstralift.security.orchestrator.RemediationEngine.apply_plan", return_value=["package.json"]), \
+         patch("amstralift.security.orchestrator.VerificationEngine.execute_gates", return_value=(True, VerificationStatus.VERIFIED_SAFE, GateSummary(), None, None)), \
+         patch.object(orchestrator.upgrade_orchestrator, "run_upgrade", return_value=(MagicMock(), proposal)):
+
+        result = orchestrator.run_remediation(
+            repo_path=tmp_path,
+            ecosystem="npm",
+            mode="apply",
+            target_branch="main",
+            allow_major=True,
+        )
+
+        assert result.remediation_successful is True
+        assert len(result.plan.items) == 1
+        assert result.plan.items[0].package_name == "uuid"
+        assert result.plan.items[0].is_major_bump is True
+
+
+
 

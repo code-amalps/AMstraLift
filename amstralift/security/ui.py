@@ -238,3 +238,14 @@ class SecurityUI:
             if result.pr_proposal and result.pr_proposal.remote_pr_url:
                 pr_info.append(f"[bold]Remote PR URL:[/bold] [cyan]{result.pr_proposal.remote_pr_url}[/cyan]")
             console.print(Panel("\n".join(pr_info), title="Stage B Publisher Output", border_style="cyan"))
+
+        # Advisories and Skipped Items Notice
+        if result.plan and result.plan.advisories:
+            adv_lines = [f"• {adv}" for adv in result.plan.advisories]
+            console.print(
+                Panel(
+                    "\n".join(adv_lines),
+                    title="ℹ️ Security Governance Advisories & Skipped Items",
+                    border_style="yellow",
+                )
+            )

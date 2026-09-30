@@ -119,3 +119,33 @@ def test_cli_passes_skip_tests_and_timeout(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     assert captured_kwargs.get("allow_failed_gates") is True
     assert captured_kwargs.get("test_timeout") == 45.0
+
+
+def test_cli_audit_options_forwarding(tmp_path: Path, monkeypatch):
+    """Verify that CLI flags --allow-major and --safe-only are forwarded to SecurityOrchestrator."""
+    from amstralift.security.models import AuditReport, RemediationResult
+    from amstralift.security.orchestrator import SecurityOrchestrator
+
+    captured_kwargs = {}
+
+    def mock_run_remediation(self, **kwargs):
+        captured_kwargs.update(kwargs)
+        return RemediationResult(
+            mode="apply",
+            report=AuditReport(repo_path=str(tmp_path), ecosystem="npm"),
+            remediation_successful=True,
+        )
+
+    monkeypatch.setattr(SecurityOrchestrator, "run_remediation", mock_run_remediation)
+
+    repo_path = tmp_path / "audit-repo"
+    repo_path.mkdir()
+
+    result = runner.invoke(
+        app,
+        ["audit", "--repo", str(repo_path), "--mode", "apply", "--allow-major"],
+    )
+    assert result.exit_code == 0
+    assert captured_kwargs.get("allow_major") is True
+    assert captured_kwargs.get("safe_only") is True
+

@@ -371,6 +371,8 @@ def audit(
     ecosystem: Annotated[str | None, typer.Option("--ecosystem", "-e", help="Ecosystem override: 'angular', 'react', 'dotnet', 'python'.")] = None,
     mode: Annotated[str, typer.Option("--mode", "-m", help="Remediation mode: 'audit' (scan only), 'preview' (plan only), or 'apply' (sandbox remediation).")] = "audit",
     fix: Annotated[bool, typer.Option("--fix", help="Alias for --mode apply.")] = False,
+    allow_major: Annotated[bool, typer.Option("--allow-major", help="Allow applying breaking major version upgrades during remediation.")] = False,
+    safe_only: Annotated[bool, typer.Option("--safe-only/--all-upgrades", help="Apply only safe backward-compatible fixes and skip breaking major leaps.")] = True,
     policy: Annotated[Path | None, typer.Option("--policy", "-p", help="Path to organizational security policy YAML.")] = None,
     branch: Annotated[str | None, typer.Option("--branch", "-b", help="Target git branch to branch from.")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Simulate fixes without modifying the repository.")] = False,
@@ -402,6 +404,8 @@ def audit(
                 dry_run=dry_run,
                 publish=publish,
                 git_token=token,
+                allow_major=allow_major,
+                safe_only=safe_only,
             )
         except Exception as e:
             console.print(f"[bold red]✖ Security audit failed:[/bold red] {e}")

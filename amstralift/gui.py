@@ -623,13 +623,60 @@ class AMstraLiftGUI:
         )
         self.radio_apply.pack(anchor=tk.W, pady=2)
 
+        # Remediation Policy Options
+        self.audit_policy_frame = tk.Frame(self.audit_card)
+        self.audit_policy_frame.pack(fill=tk.X, pady=(0, 10))
+
+        self.audit_safe_only_var = tk.BooleanVar(value=True)
+        self.chk_audit_safe_only = tk.Checkbutton(
+            self.audit_policy_frame,
+            text="Apply safe in-major fixes only (skip breaking major leaps like uuid)",
+            variable=self.audit_safe_only_var,
+            font=("Segoe UI", 9),
+            cursor="hand2",
+        )
+        self.chk_audit_safe_only.pack(anchor=tk.W, pady=1)
+
+        self.audit_allow_major_var = tk.BooleanVar(value=False)
+        self.chk_audit_allow_major = tk.Checkbutton(
+            self.audit_policy_frame,
+            text="Allow major version upgrades (accept breaking change risks)",
+            variable=self.audit_allow_major_var,
+            font=("Segoe UI", 9),
+            cursor="hand2",
+        )
+        self.chk_audit_allow_major.pack(anchor=tk.W, pady=1)
+
+        def _on_allow_major_toggle(*_):
+            if self.audit_allow_major_var.get():
+                self.audit_safe_only_var.set(False)
+
+        def _on_safe_only_toggle(*_):
+            if self.audit_safe_only_var.get():
+                self.audit_allow_major_var.set(False)
+
+        self.audit_allow_major_var.trace_add("write", _on_allow_major_toggle)
+        self.audit_safe_only_var.trace_add("write", _on_safe_only_toggle)
+
+        # Dynamic button label based on selected mode
+        def _on_audit_mode_change(*_):
+            m = self.audit_mode_var.get()
+            if m == "apply":
+                self.audit_btn.configure(text="🛡️ Apply & Verify Remediation")
+            elif m == "preview":
+                self.audit_btn.configure(text="📋 Preview Remediation Plan")
+            else:
+                self.audit_btn.configure(text="🔍 Run Security Audit")
+
+        self.audit_mode_var.trace_add("write", _on_audit_mode_change)
+
         # Action Buttons
         action_frame = tk.Frame(self.audit_card)
         action_frame.pack(fill=tk.X, pady=(4, 0))
 
         self.audit_btn = tk.Button(
             action_frame,
-            text="🛡️ Run Security Scan",
+            text="🔍 Run Security Audit",
             font=("Segoe UI", 10, "bold"),
             relief=tk.FLAT,
             padx=18,
@@ -756,7 +803,14 @@ class AMstraLiftGUI:
                 self._recursively_style_widget(child, colors)
 
         # Checkboxes and Radios (No white boxes!)
-        for chk in (self.chk_inc, self.chk_cve, self.chk_dry, self.chk_allow_fail):
+        for chk in (
+            self.chk_inc,
+            self.chk_cve,
+            self.chk_dry,
+            self.chk_allow_fail,
+            self.chk_audit_safe_only,
+            self.chk_audit_allow_major,
+        ):
             chk.configure(
                 bg=colors["bg_card"],
                 fg=colors["fg_text"],
@@ -1114,6 +1168,9 @@ class AMstraLiftGUI:
         self._record_recent_repo(repo_path_str)
 
         mode = self.audit_mode_var.get()
+        safe_only = self.audit_safe_only_var.get()
+        allow_major = self.audit_allow_major_var.get()
+
         self._clear_log()
         self._set_running_state(True, f"Running security {mode}...", 10)
 
@@ -1135,11 +1192,16 @@ class AMstraLiftGUI:
 
                 check_cancelled(self.cancellation_token)
                 print(f"Scanning dependencies in: {repo_path_str} (Mode: {mode})...\n")
+                if mode == "apply":
+                    print(f"Policy: Safe-only fixes: {safe_only} | Allow major upgrades: {allow_major}\n")
                 self.root.after(0, lambda: self.progress_bar.configure(value=30))
 
                 result = orchestrator.run_remediation(
                     repo_path=Path(repo_path_str),
                     mode=mode,
+                    allow_major=allow_major,
+                    safe_only=safe_only,
+                    cancellation_token=self.cancellation_token,
                 )
                 check_cancelled(self.cancellation_token)
 
@@ -1149,8 +1211,20 @@ class AMstraLiftGUI:
                     SecurityUI.render_preview(result.plan, console)
                 if mode == "apply":
                     SecurityUI.render_result(result, console)
+                    if result.remediation_successful:
+                        msg = (
+                            f"Remediation successfully applied and verified!\n\n"
+                            f"Branch: {result.branch_name}\n"
+                            f"Targeted fixes: {len(result.plan.items if result.plan else [])}"
+                        )
+                        if result.plan and result.plan.advisories:
+                            msg += f"\n\nAdvisories ({len(result.plan.advisories)}):\n" + "\n".join(f"• {a}" for a in result.plan.advisories[:3])
+                        self.root.after(0, lambda: messagebox.showinfo("Remediation Complete", msg))
+                    else:
+                        self.root.after(0, lambda: messagebox.showwarning("Remediation Halted", f"Security remediation halted:\n\n{result.error_message}"))
 
-                self.root.after(0, lambda: self._set_running_state(False, f"✔ Audit complete: {len(result.report.findings)} CVE(s) found.", 100))
+                status_msg = f"✔ Remediation complete: {result.branch_name}" if (mode == "apply" and result.remediation_successful) else f"✔ Audit complete: {len(result.report.findings)} CVE(s) found."
+                self.root.after(0, lambda: self._set_running_state(False, status_msg, 100))
             except OperationCancelledError:
                 print("\n[ABORTED] Security scan stopped by user.", file=sys.stderr)
                 self.root.after(0, lambda: self._set_running_state(False, "⏹ Aborted by user.", 0))
