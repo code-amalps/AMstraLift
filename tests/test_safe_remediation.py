@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from amstralift.core.models import GateResult, GateStatus
+from amstralift.core.models import DependencyChange, GateResult, GateStatus
 from amstralift.governance.vulnerabilities import VulnerabilitySeverity
 from amstralift.security.models import (
     AuditReport,
@@ -267,45 +267,57 @@ def test_stage_a_auto_remediates_direct_dependency_cves(tmp_path: Path):
     adapter = AngularAdapter()
     with patch.object(adapter, "run_build_and_tests") as mock_run_tests:
         mock_run_tests.return_value = GateSummary()
-        with patch("amstralift.security.osv_client.OSVClient.scan_discovered_dependencies") as mock_scan:
-            mock_scan.return_value = AuditReport(
-                repo_path=str(tmp_path),
-                ecosystem="angular",
-                findings=[
-                    VulnerabilityFinding(
-                        cve_id="CVE-2025-13465",
-                        package_name="lodash",
-                        ecosystem="npm",
-                        current_version="4.17.20",
-                        severity=VulnerabilitySeverity.HIGH,
-                        fixed_version="4.18.0",
-                        all_fixed_versions=["4.18.0"],
-                        is_direct=True,
-                        introduced_by=[],
-                    )
-                ]
-            )
-            bundle = run_stage_a(
-                workspace_path=tmp_path,
-                adapter=adapter,
-                repo_url=str(tmp_path),
-                remediate_cves=True,
-            )
+        with patch.object(
+            adapter,
+            "discover_candidates",
+            return_value=[
+                DependencyChange(
+                    package_name="@angular/core",
+                    from_version="17.0.0",
+                    to_version="^19.0.0",
+                    change_type="direct",
+                )
+            ],
+        ):
+            with patch("amstralift.security.osv_client.OSVClient.scan_discovered_dependencies") as mock_scan:
+                mock_scan.return_value = AuditReport(
+                    repo_path=str(tmp_path),
+                    ecosystem="angular",
+                    findings=[
+                        VulnerabilityFinding(
+                            cve_id="CVE-2025-13465",
+                            package_name="lodash",
+                            ecosystem="npm",
+                            current_version="4.17.20",
+                            severity=VulnerabilitySeverity.HIGH,
+                            fixed_version="4.18.0",
+                            all_fixed_versions=["4.18.0"],
+                            is_direct=True,
+                            introduced_by=[],
+                        )
+                    ]
+                )
+                bundle = run_stage_a(
+                    workspace_path=tmp_path,
+                    adapter=adapter,
+                    repo_url=str(tmp_path),
+                    remediate_cves=True,
+                )
 
-            change_pkgs = {c.package_name: c for c in bundle.changes}
-            assert "@angular/core" in change_pkgs
-            assert "lodash" in change_pkgs
-            assert change_pkgs["lodash"].to_version in ("^4.18.0", "4.18.0")
+                change_pkgs = {c.package_name: c for c in bundle.changes}
+                assert "@angular/core" in change_pkgs
+                assert "lodash" in change_pkgs
+                assert change_pkgs["lodash"].to_version in ("^4.18.0", "4.18.0")
 
 
 def test_stage_a_cve_remediation_skips_transitives_of_upgraded_parents(tmp_path: Path):
     """Verify Stage A CVE remediation skips transitives of parents being upgraded and native binary packages."""
     from amstralift.adapters.angular import AngularAdapter
     from amstralift.core.models import GateSummary
+    from amstralift.core.workspace import run_git
     from amstralift.execution.stage_a import run_stage_a
     from amstralift.governance.vulnerabilities import VulnerabilitySeverity
     from amstralift.security.models import AuditReport, VulnerabilityFinding
-    from tests.test_security import run_git
 
     pkg_json = tmp_path / "package.json"
     pkg_json.write_text(
@@ -320,66 +332,81 @@ def test_stage_a_cve_remediation_skips_transitives_of_upgraded_parents(tmp_path:
         encoding="utf-8"
     )
     (tmp_path / "angular.json").write_text(json.dumps({"version": 1, "projects": {}}), encoding="utf-8")
+    run_git(["init"], cwd=tmp_path)
+    run_git(["config", "user.name", "Test"], cwd=tmp_path)
+    run_git(["config", "user.email", "test@test.local"], cwd=tmp_path)
     run_git(["add", "."], cwd=tmp_path)
     run_git(["commit", "-m", "initial"], cwd=tmp_path)
 
     adapter = AngularAdapter()
     with patch.object(adapter, "run_build_and_tests") as mock_run_tests:
         mock_run_tests.return_value = GateSummary()
-        with patch("amstralift.security.osv_client.OSVClient.scan_discovered_dependencies") as mock_scan:
-            mock_scan.return_value = AuditReport(
-                repo_path=str(tmp_path),
-                ecosystem="angular",
-                findings=[
-                    # Transitive CVE whose parent @angular/core IS being upgraded -> should be skipped!
-                    VulnerabilityFinding(
-                        cve_id="CVE-2022-0001",
-                        package_name="stale-angular-transitive",
-                        ecosystem="npm",
-                        current_version="1.0.0",
-                        severity=VulnerabilitySeverity.HIGH,
-                        fixed_version="1.1.0",
-                        is_direct=False,
-                        introduced_by=["@angular/core"],
-                    ),
-                    # Native binary package -> should be skipped!
-                    VulnerabilityFinding(
-                        cve_id="GHSA-67mh-4wv8-2f99",
-                        package_name="esbuild",
-                        ecosystem="npm",
-                        current_version="0.12.24",
-                        severity=VulnerabilitySeverity.HIGH,
-                        fixed_version="0.25.0",
-                        is_direct=False,
-                        introduced_by=["other-tool"],
-                    ),
-                    # Transitive CVE whose parent protractor is NOT being upgraded -> should be kept!
-                    VulnerabilityFinding(
-                        cve_id="CVE-2023-0002",
-                        package_name="adm-zip",
-                        ecosystem="npm",
-                        current_version="0.5.0",
-                        severity=VulnerabilitySeverity.HIGH,
-                        fixed_version="0.5.10",
-                        is_direct=False,
-                        introduced_by=["protractor"],
-                    ),
-                ]
-            )
-            bundle = run_stage_a(
-                workspace_path=tmp_path,
-                adapter=adapter,
-                repo_url=str(tmp_path),
-                remediate_cves=True,
-            )
+        with patch.object(
+            adapter,
+            "discover_candidates",
+            return_value=[
+                DependencyChange(
+                    package_name="@angular/core",
+                    from_version="12.0.0",
+                    to_version="^22.0.0",
+                    change_type="direct",
+                )
+            ],
+        ):
+            with patch("amstralift.security.osv_client.OSVClient.scan_discovered_dependencies") as mock_scan:
+                mock_scan.return_value = AuditReport(
+                    repo_path=str(tmp_path),
+                    ecosystem="angular",
+                    findings=[
+                        # Transitive CVE whose parent @angular/core IS being upgraded -> should be skipped!
+                        VulnerabilityFinding(
+                            cve_id="CVE-2022-0001",
+                            package_name="stale-angular-transitive",
+                            ecosystem="npm",
+                            current_version="1.0.0",
+                            severity=VulnerabilitySeverity.HIGH,
+                            fixed_version="1.1.0",
+                            is_direct=False,
+                            introduced_by=["@angular/core"],
+                        ),
+                        # Native binary package -> should be skipped!
+                        VulnerabilityFinding(
+                            cve_id="GHSA-67mh-4wv8-2f99",
+                            package_name="esbuild",
+                            ecosystem="npm",
+                            current_version="0.12.24",
+                            severity=VulnerabilitySeverity.HIGH,
+                            fixed_version="0.25.0",
+                            is_direct=False,
+                            introduced_by=["other-tool"],
+                        ),
+                        # Transitive CVE whose parent protractor is NOT being upgraded -> should be kept!
+                        VulnerabilityFinding(
+                            cve_id="CVE-2023-0002",
+                            package_name="adm-zip",
+                            ecosystem="npm",
+                            current_version="0.5.0",
+                            severity=VulnerabilitySeverity.HIGH,
+                            fixed_version="0.5.10",
+                            is_direct=False,
+                            introduced_by=["protractor"],
+                        ),
+                    ]
+                )
+                bundle = run_stage_a(
+                    workspace_path=tmp_path,
+                    adapter=adapter,
+                    repo_url=str(tmp_path),
+                    remediate_cves=True,
+                )
 
-            change_pkgs = {c.package_name: c for c in bundle.changes}
-            assert "@angular/core" in change_pkgs
-            # stale-angular-transitive must NOT be in changes (parent was upgraded)
-            assert "stale-angular-transitive" not in change_pkgs
-            # esbuild must NOT be in changes (native binary package)
-            assert "esbuild" not in change_pkgs
-            # adm-zip must be in changes (parent protractor was not upgraded)
-            assert "adm-zip" in change_pkgs
+                change_pkgs = {c.package_name: c for c in bundle.changes}
+                assert "@angular/core" in change_pkgs
+                # stale-angular-transitive must NOT be in changes (parent was upgraded)
+                assert "stale-angular-transitive" not in change_pkgs
+                # esbuild must NOT be in changes (native binary package)
+                assert "esbuild" not in change_pkgs
+                # adm-zip must be in changes (parent protractor was not upgraded)
+                assert "adm-zip" in change_pkgs
 
 
