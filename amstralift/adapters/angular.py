@@ -207,6 +207,44 @@ def extract_major_version(ver_str: str) -> int | None:
     return None
 
 
+def get_max_existing_major(repo_path: Path, package_name: str, direct_pkgs: dict[str, str]) -> int | None:
+    """Find the highest major version of package_name present in package.json or lockfile."""
+    majors: list[int] = []
+    if package_name in direct_pkgs:
+        m = extract_major_version(direct_pkgs[package_name])
+        if m is not None:
+            majors.append(m)
+
+    lock_file = repo_path / "package-lock.json"
+    if lock_file.exists():
+        try:
+            lock_data = json.loads(lock_file.read_text(encoding="utf-8"))
+            packages = lock_data.get("packages", {})
+            for path_key, meta in packages.items():
+                if not path_key:
+                    continue
+                parts = path_key.split("node_modules/")
+                if parts[-1] == package_name:
+                    v = meta.get("version", "")
+                    m = extract_major_version(v)
+                    if m is not None:
+                        majors.append(m)
+            if not majors and "dependencies" in lock_data:
+                def walk_v1(deps: dict[str, Any]) -> None:
+                    for k, v in deps.items():
+                        if k == package_name:
+                            m = extract_major_version(v.get("version", ""))
+                            if m is not None:
+                                majors.append(m)
+                        if "dependencies" in v:
+                            walk_v1(v["dependencies"])
+                walk_v1(lock_data.get("dependencies", {}))
+        except Exception:
+            pass
+
+    return max(majors) if majors else None
+
+
 def _modernize_angular_workspace_json(repo_path: Path, target_major: int | None = None) -> None:
     """Modernize angular.json schema across Angular major versions.
 
@@ -894,8 +932,15 @@ class AngularAdapter(BaseAdapter):
         for change in changes:
             if change.change_type == "transitive":
                 clean_target = change.to_version if change.to_version.startswith(("^", "~")) else f"^{change.to_version}"
+                target_m = extract_major_version(clean_target)
                 direct_pkgs = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
-                if change.package_name in direct_pkgs and change.parent_package and change.parent_package in direct_pkgs:
+                max_m = get_max_existing_major(repo_path, change.package_name, direct_pkgs)
+
+                # Never allow an older major patch to globally downgrade a higher major used elsewhere in the project
+                if max_m is not None and target_m is not None and target_m < max_m:
+                    if change.parent_package:
+                        data.setdefault("overrides", {}).setdefault(change.parent_package, {})[change.package_name] = clean_target
+                elif change.package_name in direct_pkgs and change.parent_package and change.parent_package in direct_pkgs:
                     data.setdefault("overrides", {}).setdefault(change.parent_package, {})[change.package_name] = clean_target
                 else:
                     data.setdefault("overrides", {})[change.package_name] = clean_target

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import httpx
 
+from amstralift.adapters.angular import extract_major_version, get_max_existing_major
 from amstralift.adapters.base import BaseAdapter, get_node_execution_env
 from amstralift.core.models import (
     DependencyChange,
@@ -151,8 +152,15 @@ class ReactAdapter(BaseAdapter):
         for change in changes:
             if change.change_type == "transitive":
                 clean_target = change.to_version if change.to_version.startswith(("^", "~")) else f"^{change.to_version}"
+                target_m = extract_major_version(clean_target)
                 direct_pkgs = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
-                if change.package_name in direct_pkgs and change.parent_package and change.parent_package in direct_pkgs:
+                max_m = get_max_existing_major(repo_path, change.package_name, direct_pkgs)
+
+                # Never allow an older major patch to globally downgrade a higher major used elsewhere in the project
+                if max_m is not None and target_m is not None and target_m < max_m:
+                    if change.parent_package:
+                        data.setdefault("overrides", {}).setdefault(change.parent_package, {})[change.package_name] = clean_target
+                elif change.package_name in direct_pkgs and change.parent_package and change.parent_package in direct_pkgs:
                     data.setdefault("overrides", {}).setdefault(change.parent_package, {})[change.package_name] = clean_target
                 else:
                     data.setdefault("overrides", {})[change.package_name] = clean_target

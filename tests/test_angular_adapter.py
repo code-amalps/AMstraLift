@@ -834,6 +834,65 @@ def test_align_angular_ecosystem_prunes_codelyzer(tmp_path: Path):
     assert "eslint" in data["devDependencies"]
 
 
+def test_angular_apply_upgrade_protects_higher_major_transitives(tmp_path: Path):
+    """Verify that an older major security patch never globally downgrades a modern version in lockfile."""
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(json.dumps({
+        "name": "my-app",
+        "devDependencies": {
+            "protractor": "^7.0.0"
+        }
+    }), encoding="utf-8")
+
+    lock_json = tmp_path / "package-lock.json"
+    lock_json.write_text(json.dumps({
+        "name": "my-app",
+        "lockfileVersion": 3,
+        "packages": {
+            "node_modules/@angular-devkit/core/node_modules/ajv": {
+                "version": "8.20.0"
+            },
+            "node_modules/protractor/node_modules/ajv": {
+                "version": "6.12.6"
+            },
+            "node_modules/adm-zip": {
+                "version": "0.5.10"
+            }
+        }
+    }), encoding="utf-8")
+
+    adapter = AngularAdapter()
+    changes = [
+        # Older major fix for legacy tool
+        DependencyChange(
+            package_name="ajv",
+            from_version="6.12.6",
+            to_version="6.14.0",
+            change_type="transitive",
+            parent_package="protractor",
+        ),
+        # Equal/higher major fix
+        DependencyChange(
+            package_name="adm-zip",
+            from_version="0.5.10",
+            to_version="0.6.1",
+            change_type="transitive",
+        ),
+    ]
+
+    adapter.apply_upgrade(tmp_path, changes)
+
+    data = json.loads(pkg_json.read_text(encoding="utf-8"))
+    assert "overrides" in data
+    # adm-zip is safely global because target major 0 >= max major 0
+    assert data["overrides"]["adm-zip"] == "^0.6.1"
+    # ajv is NOT global because target major 6 < max major 8
+    assert "ajv" not in data["overrides"]
+    # ajv is scoped under protractor
+    assert data["overrides"]["protractor"]["ajv"] == "^6.14.0"
+
+
+
 
 
 
