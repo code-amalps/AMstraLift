@@ -4,7 +4,10 @@ import tempfile
 from pathlib import Path
 
 from amstralift.core.workspace import get_active_branch, prepare_stage_a_workspace
-from amstralift.governance.vulnerabilities import VulnerabilityManager
+from amstralift.governance.vulnerabilities import (
+    VulnerabilityManager,
+    VulnerabilitySeverity,
+)
 from amstralift.security.dependency_graph import DependencyGraphAnalyzer
 from amstralift.security.models import (
     RemediationResult,
@@ -98,7 +101,17 @@ class SecurityOrchestrator:
 
         # 4. Check governance policy (e.g. major version approval, auto-remediation eligibility)
         has_major = plan.has_major_upgrades
-        highest_sev = report.findings[0].severity if report.findings else None
+        severity_rank = {
+            VulnerabilitySeverity.CRITICAL: 4,
+            VulnerabilitySeverity.HIGH: 3,
+            VulnerabilitySeverity.MEDIUM: 2,
+            VulnerabilitySeverity.LOW: 1,
+        }
+        highest_sev = (
+            max(report.findings, key=lambda f: severity_rank.get(f.severity, 0)).severity
+            if report.findings
+            else None
+        )
         if highest_sev:
             allowed, reason = self.governance.is_auto_remediation_allowed(
                 severity=highest_sev, is_major_upgrade=has_major

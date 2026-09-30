@@ -25,6 +25,13 @@ ECOSYSTEM_MAP = {
     "pypi": "PyPI",
 }
 
+SEVERITY_RANK: dict[VulnerabilitySeverity, int] = {
+    VulnerabilitySeverity.CRITICAL: 4,
+    VulnerabilitySeverity.HIGH: 3,
+    VulnerabilitySeverity.MEDIUM: 2,
+    VulnerabilitySeverity.LOW: 1,
+}
+
 
 def parse_severity(raw_vuln: dict[str, Any]) -> tuple[VulnerabilitySeverity, float | None]:
     """Parse severity and CVSS score from OSV vulnerability record."""
@@ -210,6 +217,7 @@ class OSVClient:
                 for pkg, ver in chunk:
                     findings.extend(self.query_package(pkg, ver, ecosystem))
 
+        findings.sort(key=lambda f: SEVERITY_RANK.get(f.severity, 0), reverse=True)
         return AuditReport(
             repo_path=repo_path,
             ecosystem=ecosystem,
@@ -359,6 +367,7 @@ class OSVClient:
                                 sf.exemption_id = cov.exception_id
                     findings.extend(sub_findings)
 
+        findings.sort(key=lambda f: SEVERITY_RANK.get(f.severity, 0), reverse=True)
         return AuditReport(
             repo_path=repo_path,
             ecosystem=ecosystem,
