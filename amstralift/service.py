@@ -83,12 +83,17 @@ class UpgradeOrchestrator:
         draft_on_fail: bool = False,
         modernize: list[str] | None = None,
         remediate_cves: bool = True,
+        incremental: bool | None = None,
     ) -> tuple[SignedAdvisoryBundle, PullRequestProposal]:
         """Execute complete upgrade workflow for a repository."""
         repo_path = repo_path.resolve()
 
         ecosystem_name = ecosystem or self.auto_detect_ecosystem(repo_path)
         adapter = self.get_adapter(ecosystem_name)
+        if incremental is not None:
+            self.incremental = incremental
+            if hasattr(adapter, "incremental"):
+                adapter.incremental = incremental
 
         if not adapter.detect(repo_path):
             raise OrchestrationError(

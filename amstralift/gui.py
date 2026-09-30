@@ -191,34 +191,53 @@ class AMstraLiftGUI:
         )
         mod_combo.grid(row=0, column=3, sticky=tk.W, padx=8, pady=4)
 
+        # Row 1: Branches
+        ttk.Label(grid_frame, text="Base Branch:").grid(row=1, column=0, sticky=tk.W, pady=4)
+        self.base_branch_var = tk.StringVar(value="")
+        base_entry = ttk.Entry(grid_frame, textvariable=self.base_branch_var, width=17)
+        base_entry.grid(row=1, column=1, sticky=tk.W, padx=8, pady=4)
+
+        ttk.Label(grid_frame, text="Output Branch:").grid(row=1, column=2, sticky=tk.W, pady=4, padx=(16, 0))
+        self.output_branch_var = tk.StringVar(value="")
+        out_branch_entry = ttk.Entry(grid_frame, textvariable=self.output_branch_var, width=17)
+        out_branch_entry.grid(row=1, column=3, sticky=tk.W, padx=8, pady=4)
+
+        hint_lbl = ttk.Label(
+            grid_frame,
+            text="(Optional: Leave blank to use active branch and auto-generated upgrade branch)",
+            font=("Segoe UI", 8),
+            foreground="#6b7280",
+        )
+        hint_lbl.grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=(0, 6))
+
         # Checkboxes
         self.incremental_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             grid_frame,
             text="Incremental Upgrade (one major step at a time, e.g. 12 → 13)",
             variable=self.incremental_var,
-        ).grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=3)
+        ).grid(row=3, column=0, columnspan=4, sticky=tk.W, pady=3)
 
         self.remediate_cves_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             grid_frame,
             text="Auto-remediate known CVEs (apply safe scoped overrides)",
             variable=self.remediate_cves_var,
-        ).grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=3)
+        ).grid(row=4, column=0, columnspan=4, sticky=tk.W, pady=3)
 
         self.dry_run_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             grid_frame,
             text="Dry run only (simulate migration without modifying Git branch)",
             variable=self.dry_run_var,
-        ).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=3)
+        ).grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=3)
 
         self.allow_failed_gates_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             grid_frame,
             text="Allow failed gates (create branch even if test gates time out)",
             variable=self.allow_failed_gates_var,
-        ).grid(row=3, column=2, columnspan=2, sticky=tk.W, pady=3)
+        ).grid(row=5, column=2, columnspan=2, sticky=tk.W, pady=3)
 
         # Action Buttons Row
         action_frame = ttk.Frame(f)
@@ -367,15 +386,29 @@ class AMstraLiftGUI:
                 from amstralift.service import UpgradeOrchestrator
                 from amstralift.execution.stage_a import NoUpgradesAvailableError
 
-                orchestrator = UpgradeOrchestrator()
+                orchestrator = UpgradeOrchestrator(incremental=inc)
                 print(f"Starting AMstraLift upgrade on: {repo_path_str}")
                 print(f"Incremental: {inc} | Remediate CVEs: {cve} | Modernizations: {mod_param}\n")
+
+                base_b = self.base_branch_var.get().strip() or None
+                out_b = self.output_branch_var.get().strip() or None
+
+                effective_branch = base_b
+                if not effective_branch:
+                    from amstralift.core.workspace import get_active_branch, run_git
+                    active = get_active_branch(Path(repo_path_str))
+                    for candidate in ("Dev", "main", "master"):
+                        if candidate != active and run_git(["rev-parse", "--verify", candidate], cwd=Path(repo_path_str)).returncode == 0:
+                            active = candidate
+                            break
+                    effective_branch = active or "main"
 
                 bundle, proposal = orchestrator.run_upgrade(
                     repo_path=Path(repo_path_str),
                     ecosystem=eco_param,
+                    target_branch=effective_branch,
+                    output_branch=out_b,
                     dry_run=dry,
-                    incremental=inc,
                     allow_failed_gates=allow_fail,
                     modernize=mod_param.split(",") if mod_param else None,
                     remediate_cves=cve,
