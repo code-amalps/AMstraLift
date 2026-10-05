@@ -169,13 +169,19 @@ def compute_relative_import(from_file: Path, to_file: Path) -> str:
 
 def _inject_top_imports(content: str, symbols_to_add: dict[str, str]) -> str:
     """Inject missing import { Symbol } from 'module'; statements at the top of the file."""
-    if not symbols_to_add:
+    # Purge any invalid single-letter symbols or chunk module paths
+    clean_symbols = {
+        sym: mod
+        for sym, mod in symbols_to_add.items()
+        if len(sym) >= 2 and ".d-" not in mod and "overlay.d" not in mod
+    }
+    if not clean_symbols:
         return content
 
     new_lines: list[str] = []
     modified_content = content
 
-    for sym, mod in symbols_to_add.items():
+    for sym, mod in clean_symbols.items():
         # Check if symbol is already imported
         if re.search(rf"\b{re.escape(sym)}\b", modified_content.split("@Component")[0]):
             continue
@@ -364,7 +370,20 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
     # 2. Build Component Registry mapping selectors to class name and path across all *.ts files
     component_files: list[Path] = []
     for f in safe_rglob(repo_path, "*.ts"):
-        if f.name.endswith(".spec.ts") or f.name.endswith(".d.ts"):
+        f_name = f.name
+        f_posix = f.as_posix()
+        # Exclude spec, test, declaration files, and bundler cache/chunk artifacts
+        if (
+            f_name.endswith(".spec.ts")
+            or f_name.endswith(".test.ts")
+            or f_name.endswith(".d.ts")
+            or ".d-" in f_name
+            or ".cache" in f_posix
+            or "/dist/" in f_posix
+            or "/out-tsc/" in f_posix
+            or "/node_modules/" in f_posix
+            or "/.angular/" in f_posix
+        ):
             continue
         try:
             head = f.read_text(encoding="utf-8", errors="ignore")
@@ -385,9 +404,15 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
         sel_match = re.search(r"selector\s*:\s*['\"]([^'\"]+)['\"]", txt)
         cls_match = re.search(r"export\s+class\s+([A-Za-z0-9_]+)", txt)
         if sel_match and cls_match:
+            sel = sel_match.group(1).strip()
+            cls_name = cls_match.group(1).strip()
+            # Angular custom component selectors MUST contain a hyphen (e.g. app-*, rtcm-*)
+            # and be at least 3 characters. Single-character names or non-hyphenated HTML tags must never be registered.
+            if len(sel) < 3 or "-" not in sel or len(cls_name) < 2:
+                continue
             is_shared = (shared_dir is not None and comp_file.is_relative_to(shared_dir))
-            registry[sel_match.group(1)] = {
-                "class_name": cls_match.group(1),
+            registry[sel] = {
+                "class_name": cls_name,
                 "path": comp_file,
                 "is_shared": is_shared,
             }
@@ -401,7 +426,27 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
         except Exception:
             continue
 
+        # Purge any bogus declaration chunk imports (e.g. from '@angular/cdk/overlay.d-BdoMyOhX' or '.d-*')
+        sanitized = re.sub(
+            r"(?m)^import\s*\{[^}]*\}\s*from\s*['\"][^'\"]*overlay\.d-[^'\"]*['\"];?\s*\n?",
+            "",
+            content,
+        )
+        sanitized = re.sub(
+            r"(?m)^import\s*\{\s*R\s*\}\s*from\s*['\"][^'\"]*['\"];?\s*\n?",
+            "",
+            sanitized,
+        )
+        content_sanitized = (sanitized != content)
+        if content_sanitized:
+            content = sanitized
+
         if "@Component" not in content:
+            if content_sanitized:
+                try:
+                    comp_file.write_text(content, encoding="utf-8")
+                except Exception:
+                    pass
             continue
 
         dec_match = re.search(r"@Component\s*\(\s*\{", content)
@@ -520,7 +565,7 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
 
         # Check child components from registry
         for sel, info in registry.items():
-            if info["path"] != comp_file and f"<{sel}" in template_content:
+            if info["path"] != comp_file and re.search(rf"<{re.escape(sel)}[\s>/]", template_content):
                 if not info["is_shared"]:
                     child_cls = info["class_name"]
                     imports_to_add.append(child_cls)
@@ -543,9 +588,11 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
 
         if existing_imp_match:
             existing_imports = [x.strip() for x in existing_imp_match.group(1).split(",") if x.strip()]
-            missing_imps = [x for x in unique_needed if x not in existing_imports]
-            if missing_imps:
-                updated_imports = existing_imports + missing_imps
+            cleaned_existing = [x for x in existing_imports if x != "R"]
+            had_r = len(cleaned_existing) != len(existing_imports)
+            missing_imps = [x for x in unique_needed if x not in cleaned_existing]
+            if missing_imps or had_r:
+                updated_imports = cleaned_existing + missing_imps
                 new_imp_str = f"imports: [{', '.join(updated_imports)}]"
                 new_dec_content = (
                     new_dec_content[:existing_imp_match.start()]
@@ -567,9 +614,23 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
                 to_add_entries.append(f"schemas: [{', '.join(schemas_to_add)}]")
 
             if to_add_entries:
-                injection = ",\n  " + ",\n  ".join(to_add_entries)
-                new_dec_content = new_dec_content.rstrip() + injection
+                clean_dec = new_dec_content.rstrip()
+                while clean_dec.endswith(","):
+                    clean_dec = clean_dec[:-1].rstrip()
+                if clean_dec:
+                    new_dec_content = clean_dec + ",\n  " + ",\n  ".join(to_add_entries)
+                else:
+                    new_dec_content = "\n  " + ",\n  ".join(to_add_entries)
                 modified_dec = True
+
+        # Clean up any duplicate commas (e.g. ',,' from previous runs)
+        fixed_dec = re.sub(r",\s*,+", ",", new_dec_content)
+        if fixed_dec != new_dec_content:
+            new_dec_content = fixed_dec
+            modified_dec = True
+
+        if content_sanitized:
+            modified_dec = True
 
         if modified_dec:
             # Reconstruct content with updated decorator

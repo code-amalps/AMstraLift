@@ -361,6 +361,7 @@ def test_modernize_angular_tsconfig(tmp_path: Path):
     "module": "esnext",
     "target": "es2015",
     "lib": ["es2018", "dom"],
+    "ignoreDeprecations": "6.0"
   },
   "angularCompilerOptions": {
     "strictTemplates": true,
@@ -380,7 +381,7 @@ def test_modernize_angular_tsconfig(tmp_path: Path):
     assert opts["target"] == "ES2022"
     assert opts["lib"] == ["ES2022", "dom"]
     assert opts["useDefineForClassFields"] is False
-    assert opts["ignoreDeprecations"] == "6.0"
+    assert "ignoreDeprecations" not in opts
     assert "fullTemplateTypeCheck" not in updated.get("angularCompilerOptions", {})
     assert updated["angularCompilerOptions"]["strictTemplates"] is True
 
@@ -869,6 +870,74 @@ export class AdminModule {}""",
     assert "AdminShell" in mod_txt
     assert "ProjectSettings" in mod_txt
     assert "imports: [" in mod_txt
+
+
+def test_modernize_angular_standalone_heals_double_commas_and_bogus_chunk_imports(tmp_path: Path):
+    import re
+    from amstralift.adapters.angular_standalone import modernize_angular_standalone_components
+
+    # 1. Component with trailing comma before modernization to ensure NO double comma is generated
+    comp1 = tmp_path / "notification.component.ts"
+    comp1.write_text(
+        """import { Component } from '@angular/core';
+
+@Component({
+  selector: 'app-notification',
+  templateUrl: './notification.component.html',
+  styleUrls: ['./notification.component.scss'],
+})
+export class NotificationComponent {}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "notification.component.html").write_text("<p>notification</p>", encoding="utf-8")
+
+    # 2. Component with existing double comma and bogus chunk import to ensure it gets healed
+    comp2 = tmp_path / "unauthorized.component.ts"
+    comp2.write_text(
+        """import { Component } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { R } from '@angular/cdk/overlay.d-BdoMyOhX';
+
+@Component({
+  selector: 'app-unauthorized',
+  templateUrl: './unauthorized.component.html',
+  styleUrls: ['./unauthorized.component.scss'],,
+  standalone: true,
+  imports: [CommonModule, R]
+})
+export class UnauthorizedComponent {}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "unauthorized.component.html").write_text("<router-outlet></router-outlet>", encoding="utf-8")
+
+    # 3. Dummy chunk file that should be ignored by the component registry
+    chunk_file = tmp_path / "overlay.d-BdoMyOhX.ts"
+    chunk_file.write_text(
+        """import { Component } from '@angular/core';
+@Component({ selector: 'r' })
+export class R {}
+""",
+        encoding="utf-8",
+    )
+
+    applied = modernize_angular_standalone_components(tmp_path)
+    assert len(applied) >= 1
+
+    # Verify comp1: has standalone: true, imports: [CommonModule], and NO double comma ',,'
+    txt1 = comp1.read_text(encoding="utf-8")
+    assert ",," not in txt1
+    assert "standalone: true" in txt1
+    assert "CommonModule" in txt1
+
+    # Verify comp2: double comma healed, bogus import purged, R removed from imports
+    txt2 = comp2.read_text(encoding="utf-8")
+    assert ",," not in txt2
+    assert "overlay.d-BdoMyOhX" not in txt2
+    assert "import { R }" not in txt2
+    assert "imports: [CommonModule, RouterModule]" in txt2 or "RouterModule" in txt2
+    assert "R" not in [x.strip() for x in re.search(r"imports:\s*\[(.*?)\]", txt2).group(1).split(",")]
 
 
 def test_modernize_angular_builder_19_plus(tmp_path: Path):

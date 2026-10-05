@@ -408,7 +408,7 @@ def _modernize_angular_tsconfig(repo_path: Path, target_major: int | None = None
     - Sets 'target': 'ES2022' for Angular 17+
     - Updates 'lib' to ['ES2022', 'dom'] for Angular 17+
     - Sets 'useDefineForClassFields': false for Angular 17+ (preserves decorator semantics)
-    - Sets 'ignoreDeprecations': '6.0' for Angular 22+ (TypeScript 6.x)
+    - Removes invalid 'ignoreDeprecations' compiler options that cause TS5103
     - Removes deprecated 'fullTemplateTypeCheck' from 'angularCompilerOptions'
     """
     applied = []
@@ -482,10 +482,11 @@ def _modernize_angular_tsconfig(repo_path: Path, target_major: int | None = None
                 compiler_opts["useDefineForClassFields"] = False
                 changed = True
 
-        # 5. ignoreDeprecations -> '6.0' for TypeScript 6 / Angular 22+
-        if target_major is not None and target_major >= 22:
-            if compiler_opts.get("ignoreDeprecations") != "6.0":
-                compiler_opts["ignoreDeprecations"] = "6.0"
+        # 5. Purge invalid ignoreDeprecations compiler options that cause TS5103
+        if "ignoreDeprecations" in compiler_opts:
+            val = str(compiler_opts.get("ignoreDeprecations", "")).strip()
+            if val in ("6.0", "6", ""):
+                del compiler_opts["ignoreDeprecations"]
                 changed = True
 
         # 6. angularCompilerOptions -> clean up fullTemplateTypeCheck
@@ -870,6 +871,29 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
                 )
                 modified = True
                 test_bootstrap_count += 1
+
+        # 7. Clean up bogus declaration chunk imports (e.g. from '@angular/cdk/overlay.d-BdoMyOhX' or '.d-*')
+        if ".d-" in content or "overlay.d" in content or "import { R }" in content or "import { R," in content:
+            new_content = re.sub(
+                r"(?m)^import\s*\{[^}]*\}\s*from\s*['\"][^'\"]*overlay\.d-[^'\"]*['\"];?\s*\n?",
+                "",
+                content,
+            )
+            new_content = re.sub(
+                r"(?m)^import\s*\{\s*R\s*\}\s*from\s*['\"][^'\"]*['\"];?\s*\n?",
+                "",
+                new_content,
+            )
+            if new_content != content:
+                content = new_content
+                modified = True
+
+        # 8. Clean up accidental double commas in @Component decorators (e.g. styleUrls: [...],,)
+        if ",," in content:
+            new_content = re.sub(r",\s*,+", ",", content)
+            if new_content != content:
+                content = new_content
+                modified = True
 
         if modified:
             try:
