@@ -578,6 +578,7 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
     type_import_count = 0
     reactive_forms_count = 0
     raw_loader_count = 0
+    test_bootstrap_count = 0
 
     for ts_file in repo_path.rglob("*.ts"):
         if any(part in excluded_dirs for part in ts_file.parts):
@@ -713,6 +714,27 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
                     modified = True
                     raw_loader_count += 1
 
+        # 6. Modernize legacy test.ts for Angular 15+ (remove obsolete Webpack require.context)
+        if target_major is None or target_major >= 15:
+            if ts_file.name == "test.ts" and "require.context" in content:
+                content = re.sub(
+                    r"declare\s+const\s+require\s*:\s*\{[\s\S]*?\n\};\s*",
+                    "",
+                    content,
+                )
+                content = re.sub(
+                    r"(?://[^\n]*\n\s*)?const\s+context\s*=\s*require\.context\([^;]+;\s*",
+                    "",
+                    content,
+                )
+                content = re.sub(
+                    r"(?://[^\n]*\n\s*)?context\.keys\(\)\.(?:map|forEach)\(context\);?\s*",
+                    "",
+                    content,
+                )
+                modified = True
+                test_bootstrap_count += 1
+
         if modified:
             try:
                 ts_file.write_text(content, encoding="utf-8")
@@ -727,6 +749,8 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
         applied.append(f"Modernized {reactive_forms_count} file(s) to UntypedFormBuilder/UntypedFormGroup for Angular 14+ compatibility")
     if raw_loader_count > 0:
         applied.append(f"Modernized {raw_loader_count} file(s) inlining legacy Webpack raw-loader imports for esbuild compatibility")
+    if test_bootstrap_count > 0:
+        applied.append(f"Modernized {test_bootstrap_count} test bootstrap file(s) removing obsolete 'require.context' for Angular 15+ test runner")
 
     return applied
 
@@ -842,7 +866,6 @@ class AngularAdapter(BaseAdapter):
         tracked_direct_prefixes = (
             "@angular/",
             "@angular-devkit/",
-            "@ngrx/",
             "@angular-extensions/",
             "@ngx-translate/",
             "@fortawesome/",
@@ -948,18 +971,17 @@ class AngularAdapter(BaseAdapter):
 
                 cur_major = extract_major_version(cur_ver)
                 target_eslint_major = extract_major_version(rec_eslint)
-                if cur_major and target_eslint_major and cur_major < target_eslint_major:
-                    tier = classify_angular_tier(pkg)
-                    candidates.append(
-                        DependencyChange(
-                            package_name=pkg,
-                            from_version=cur_ver,
-                            to_version=rec_eslint,
-                            change_type="dev",
-                            tier=tier,
-                            rationale=f"Align ESLint to {rec_eslint} for @angular-eslint compatibility. {policy_reason}",
-                        )
+                tier = classify_angular_tier(pkg)
+                candidates.append(
+                    DependencyChange(
+                        package_name=pkg,
+                        from_version=cur_ver,
+                        to_version=rec_eslint,
+                        change_type="dev",
+                        tier=tier,
+                        rationale=f"Align ESLint to {rec_eslint} for @angular-eslint compatibility. {policy_reason}",
                     )
+                )
                 continue
 
             if any(pkg.startswith(p) for p in tracked_dev_prefixes) or pkg in tracked_dev_packages:
@@ -1220,8 +1242,8 @@ class AngularAdapter(BaseAdapter):
         """Execute build and test gates declared in package.json.
 
         Handles Angular-specific test runner quirks:
-        - ng test (Karma) runs in watch mode by default → inject --watch=false --no-progress
-        - Karma requires a browser → inject --browsers=ChromeHeadless in CI/headless environments
+        - Karma runs in watch mode by default → inject headless/no-watch flags when Karma is configured
+        - Other Angular test builders receive no Karma-only flags
         - Jest runs once and exits → no special flags needed
         - Timeout is classified as REQUIRED_TIMEOUT (uncertain), NOT REQUIRED_FAILED
         """
@@ -1293,13 +1315,20 @@ class AngularAdapter(BaseAdapter):
         for gate_name, script_cmd, is_required in gates:
             if not script_cmd:
                 status = GateStatus.REQUIRED_SKIPPED if is_required else GateStatus.OPTIONAL_PASSED
+                if gate_name == "test" and raw_test_script and resolved_test_cmd is None:
+                    skip_message = (
+                        "Angular workspace has no configured test target. Add a test target under a project "
+                        "in angular.json before running this test script."
+                    )
+                else:
+                    skip_message = f"Script '{gate_name}' not defined in package.json"
                 results.append(
                     GateResult(
                         name=gate_name,
                         command="N/A",
                         status=status,
                         exit_code=0,
-                        stdout=f"Script '{gate_name}' not defined in package.json",
+                        stdout=skip_message,
                     )
                 )
                 continue
@@ -1486,7 +1515,7 @@ class AngularAdapter(BaseAdapter):
         Detection priority:
         1. Jest (runs once, exits cleanly) — no flags needed
         2. Vitest — inject --run flag
-        3. ng test / karma — inject --watch=false --no-progress --browsers=ChromeHeadless
+        3. Karma — inject --watch=false --no-progress --browsers=ChromeHeadless
         4. Unknown script — fallback to npm run test
         """
         if not raw_test_script:
@@ -1506,15 +1535,21 @@ class AngularAdapter(BaseAdapter):
             if test_subcmd:
                 effective_script = test_subcmd
 
+        runner_command = effective_script
+        if is_chained and has_npm:
+            runner_command = f"npm exec -- {effective_script}"
+
         script_lower = effective_script.lower()
 
         if "jest" in script_lower:
-            return "npm run test" if has_npm else raw_test_script
+            return runner_command if is_chained else ("npm run test" if has_npm else raw_test_script)
 
         if "vitest" in script_lower:
             if "--run" not in script_lower:
+                if is_chained:
+                    return f"{runner_command} --run"
                 return "npm test -- --run" if has_npm else f"{raw_test_script} --run"
-            return "npm run test" if has_npm else raw_test_script
+            return runner_command if is_chained else ("npm run test" if has_npm else raw_test_script)
 
         is_ng_test = "ng test" in script_lower or "ng t " in script_lower or script_lower.startswith("ng t")
         is_karma = "karma" in script_lower
@@ -1525,6 +1560,45 @@ class AngularAdapter(BaseAdapter):
                 p for p in repo_path.rglob("karma*.conf*.js")
                 if "node_modules" not in p.parts
             ]
+            test_builders: list[str] = []
+            angular_json = repo_path / "angular.json"
+            if angular_json.exists():
+                try:
+                    workspace = json.loads(angular_json.read_text(encoding="utf-8"))
+                    for project in workspace.get("projects", {}).values():
+                        targets = project.get("architect", project.get("targets", {}))
+                        test_target = targets.get("test", {})
+                        builder = test_target.get("builder") or test_target.get("executor", "")
+                        if builder:
+                            test_builders.append(str(builder).lower())
+                except (OSError, json.JSONDecodeError, AttributeError):
+                    pass
+
+            if angular_json.exists() and is_ng_test and not test_builders:
+                return None
+
+            uses_karma = (
+                is_karma
+                or any("karma" in builder for builder in test_builders)
+                or (not test_builders and bool(karma_confs))
+            )
+            if not uses_karma:
+                modern_script = re.sub(
+                    r"\s+--browsers(?:=\S+|\s+\S+)?",
+                    "",
+                    effective_script,
+                    flags=re.IGNORECASE,
+                )
+                modern_script = re.sub(
+                    r"\s+--(?:watch(?:=(?:true|false))?|no-watch|no-progress|progress(?:=(?:true|false))?)\b",
+                    "",
+                    modern_script,
+                    flags=re.IGNORECASE,
+                ).strip()
+                if is_chained:
+                    return f"npm exec -- {modern_script}"
+                return f"npm exec -- {modern_script}" if has_npm else modern_script
+
             already_headless = False
             for kc in karma_confs:
                 try:
@@ -1545,9 +1619,11 @@ class AngularAdapter(BaseAdapter):
 
             flag_str = " ".join(flags)
             if has_npm:
+                if is_chained:
+                    return f"{runner_command} {flag_str}" if flag_str else runner_command
                 return f"npm test -- {flag_str}" if flag_str else "npm run test"
             else:
-                return f"{raw_test_script} {flag_str}" if flag_str else raw_test_script
+                return f"{effective_script} {flag_str}" if flag_str else effective_script
 
         return "npm run test" if has_npm else raw_test_script
 

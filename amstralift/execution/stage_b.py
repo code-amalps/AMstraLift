@@ -137,7 +137,13 @@ def run_stage_b(
             issues = []
             for r in bundle.gate_summary.results:
                 if r.status == GateStatus.REQUIRED_FAILED:
-                    msg = (r.stderr or r.stdout or f"exit code {r.exit_code}").strip().replace("\r", "").replace("\n", " ")
+                    diagnostic_msg = (
+                        gate_diagnostic.error_message
+                        if r is failing_gate and gate_diagnostic and gate_diagnostic.error_message
+                        else None
+                    )
+                    msg = (diagnostic_msg or r.stderr or r.stdout or f"exit code {r.exit_code}")
+                    msg = msg.strip().replace("\r", "").replace("\n", " ")
                     issues.append(f"'{r.name}' FAILED: {msg[:120]}")
                 elif r.status == GateStatus.REQUIRED_TIMEOUT:
                     msg = (r.stdout or "runner timed out").strip().replace("\r", "").replace("\n", " ")

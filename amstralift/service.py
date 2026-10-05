@@ -8,6 +8,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from amstralift.adapters.angular import AngularAdapter
 from amstralift.adapters.base import BaseAdapter

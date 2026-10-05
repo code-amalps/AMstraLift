@@ -136,7 +136,8 @@ index 1111111..2222222 100644
                     command="npm test",
                     status=GateStatus.REQUIRED_FAILED,
                     exit_code=1,
-                    stderr="src/app/modal.ts(12,4): error TS2339: Property 'entryComponents' does not exist.",
+                    stdout="src/app/modal.ts(12,4): error TS2339: Property 'entryComponents' does not exist.",
+                    stderr='The "@angular-devkit/build-angular:karma" builder is deprecated.',
                 )
             ]
         ),
@@ -159,6 +160,8 @@ def test_stage_b_fails_closed_without_draft_on_fail(tmp_path: Path, dummy_bundle
         assert exc_info.value.diagnostic is not None
         assert exc_info.value.diagnostic.failing_file == "src/app/modal.ts"
         assert exc_info.value.diagnostic.error_code == "TS2339"
+        assert "entryComponents" in str(exc_info.value)
+        assert "builder is deprecated" not in str(exc_info.value)
 
 
 def test_stage_b_draft_on_fail_creates_draft_branch(tmp_path: Path, dummy_bundle_with_failed_gate: SignedAdvisoryBundle):

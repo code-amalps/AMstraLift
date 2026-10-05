@@ -1126,6 +1126,7 @@ class AMstraLiftGUI:
                     output_branch=out_b,
                     dry_run=dry,
                     allow_failed_gates=allow_fail,
+                    draft_on_fail=True,
                     modernize=mod_param.split(",") if mod_param else None,
                     remediate_cves=cve,
                     progress_callback=_progress_cb,
@@ -1141,22 +1142,27 @@ class AMstraLiftGUI:
                     print(f" - {chg.package_name}: {chg.from_version} -> {chg.to_version} ({chg.change_type})")
                 print("=======================================================\n")
 
-                self.root.after(0, lambda: self._set_running_state(False, f"✔ Upgrade Complete: {proposal.branch_name}", 100))
-                self.root.after(0, lambda: messagebox.showinfo(
+                branch_msg = proposal.branch_name
+                status_msg = proposal.publish_status
+                changes_count = len(bundle.bundle.changes)
+                self.root.after(0, lambda b=branch_msg: self._set_running_state(False, f"✔ Upgrade Complete: {b}", 100))
+                self.root.after(0, lambda b=branch_msg, s=status_msg, c=changes_count: messagebox.showinfo(
                     "Upgrade Complete",
-                    f"AMstraLift completed successfully!\n\nTarget Branch: {proposal.branch_name}\nStatus: {proposal.publish_status}\nChanges: {len(bundle.bundle.changes)}",
+                    f"AMstraLift completed successfully!\n\nTarget Branch: {b}\nStatus: {s}\nChanges: {c}",
                 ))
             except OperationCancelledError:
                 print("\n[ABORTED] Operation stopped by user.", file=sys.stderr)
                 self.root.after(0, lambda: self._set_running_state(False, "⏹ Aborted by user.", 0))
             except NoUpgradesAvailableError as ne:
-                print(f"\n[Info] {ne}")
+                info_msg = str(ne)
+                print(f"\n[Info] {info_msg}")
                 self.root.after(0, lambda: self._set_running_state(False, "Repository already up to date.", 100))
-                self.root.after(0, lambda: messagebox.showinfo("Up to Date", str(ne)))
+                self.root.after(0, lambda m=info_msg: messagebox.showinfo("Up to Date", m))
             except Exception as exc:
-                print(f"\n[Error] Upgrade failed: {exc}", file=sys.stderr)
-                self.root.after(0, lambda: self._set_running_state(False, f"Failed: {exc}", 0))
-                self.root.after(0, lambda: messagebox.showerror("Upgrade Failed", f"An error occurred during upgrade:\n\n{exc}"))
+                err_msg = str(exc)
+                print(f"\n[Error] Upgrade failed: {err_msg}", file=sys.stderr)
+                self.root.after(0, lambda m=err_msg: self._set_running_state(False, f"Failed: {m}", 0))
+                self.root.after(0, lambda m=err_msg: messagebox.showerror("Upgrade Failed", f"An error occurred during upgrade:\n\n{m}"))
             finally:
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
@@ -1228,14 +1234,15 @@ class AMstraLiftGUI:
                         self.root.after(0, lambda: messagebox.showwarning("Remediation Halted", f"Security remediation halted:\n\n{result.error_message}"))
 
                 status_msg = f"✔ Remediation complete: {result.branch_name}" if (mode == "apply" and result.remediation_successful) else f"✔ Audit complete: {len(result.report.findings)} CVE(s) found."
-                self.root.after(0, lambda: self._set_running_state(False, status_msg, 100))
+                self.root.after(0, lambda s=status_msg: self._set_running_state(False, s, 100))
             except OperationCancelledError:
                 print("\n[ABORTED] Security scan stopped by user.", file=sys.stderr)
                 self.root.after(0, lambda: self._set_running_state(False, "⏹ Aborted by user.", 0))
             except Exception as exc:
-                print(f"\n[Error] Audit failed: {exc}", file=sys.stderr)
-                self.root.after(0, lambda: self._set_running_state(False, f"Audit error: {exc}", 0))
-                self.root.after(0, lambda: messagebox.showerror("Audit Error", str(exc)))
+                err_msg = str(exc)
+                print(f"\n[Error] Audit failed: {err_msg}", file=sys.stderr)
+                self.root.after(0, lambda m=err_msg: self._set_running_state(False, f"Audit error: {m}", 0))
+                self.root.after(0, lambda m=err_msg: messagebox.showerror("Audit Error", m))
             finally:
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr

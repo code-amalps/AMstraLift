@@ -9,6 +9,7 @@ from amstralift.governance.vulnerabilities import VulnerabilitySeverity
 from amstralift.security.models import (
     AuditReport,
     RemediationPlan,
+    RemediationPlanItem,
     VulnerabilityFinding,
 )
 from amstralift.security.plan_generator import RemediationPlanGenerator
@@ -102,6 +103,45 @@ def test_npm_overrides_application(tmp_path: Path):
     updated_data = json.loads(pkg_json.read_text(encoding="utf-8"))
     assert "overrides" in updated_data
     assert updated_data["overrides"]["body-parser"] == "1.19.0"
+
+
+def test_npm_angular_major_upgrade_aligns_cli_toolchain(tmp_path: Path):
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(
+        json.dumps(
+            {
+                "dependencies": {"@angular/core": "^17.3.12"},
+                "devDependencies": {
+                    "@angular/cli": "^17.3.12",
+                    "@angular/compiler-cli": "~17.3.12",
+                    "@angular-devkit/build-angular": "^17.3.12",
+                    "unrelated-tool": "^1.0.0",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan = RemediationPlan(
+        items=[
+            RemediationPlanItem(
+                cve_id="CVE-2026-0001",
+                package_name="@angular/core",
+                current_version="^17.3.12",
+                target_version="^20.3.28",
+                is_direct=True,
+            )
+        ]
+    )
+
+    with patch("amstralift.security.remediation_engine.shutil.which", return_value=None):
+        RemediationEngine.apply_npm(tmp_path, plan)
+
+    updated = json.loads(pkg_json.read_text(encoding="utf-8"))
+    assert updated["dependencies"]["@angular/core"] == "^20.3.28"
+    assert updated["devDependencies"]["@angular/cli"] == "^20.3.28"
+    assert updated["devDependencies"]["@angular/compiler-cli"] == "~20.3.28"
+    assert updated["devDependencies"]["@angular-devkit/build-angular"] == "^20.3.28"
+    assert updated["devDependencies"]["unrelated-tool"] == "^1.0.0"
 
 
 def test_dotnet_transitive_pin_application(tmp_path: Path):

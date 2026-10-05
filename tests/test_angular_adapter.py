@@ -155,12 +155,28 @@ def test_angular_adapter_apply_upgrade(tmp_path: Path, monkeypatch):
 def test_resolve_angular_test_command(tmp_path: Path):
     adapter = AngularAdapter()
 
+    (tmp_path / "angular.json").write_text(
+        json.dumps(
+            {
+                "projects": {
+                    "app": {
+                        "architect": {
+                            "test": {"builder": "@angular-devkit/build-angular:karma"}
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
     # 1. Karma / ng test script with configuration -> injects --watch=false --browsers=ChromeHeadless
     script = "npm run lint && ng test --configuration=test"
     cmd = adapter._resolve_angular_test_command(script, tmp_path, has_npm=True)
     assert "--watch=false" in cmd
     assert "--browsers=ChromeHeadless" in cmd
-    assert "npm test --" in cmd
+    assert cmd.startswith("npm exec -- ng test --configuration=test")
+    assert "npm run lint" not in cmd
 
     # 2. Already headless karma.conf.js in a subproject
     subproject_dir = tmp_path / "projects" / "my-app"
@@ -175,10 +191,86 @@ def test_resolve_angular_test_command(tmp_path: Path):
     # 3. Jest script -> kept as npm run test without Karma flags
     jest_cmd = adapter._resolve_angular_test_command("jest --coverage", tmp_path, has_npm=True)
     assert jest_cmd == "npm run test"
+    chained_jest_cmd = adapter._resolve_angular_test_command(
+        "npm run lint && jest --coverage", tmp_path, has_npm=True
+    )
+    assert chained_jest_cmd == "npm exec -- jest --coverage"
 
     # 4. Vitest -> injects --run
     vitest_cmd = adapter._resolve_angular_test_command("vitest", tmp_path, has_npm=True)
     assert "--run" in vitest_cmd
+    chained_vitest_cmd = adapter._resolve_angular_test_command(
+        "npm run lint && vitest", tmp_path, has_npm=True
+    )
+    assert chained_vitest_cmd == "npm exec -- vitest --run"
+
+    # 5. Angular's unit-test builder does not accept Karma-only CLI flags.
+    modern_workspace = tmp_path / "modern"
+    modern_workspace.mkdir()
+    (modern_workspace / "angular.json").write_text(
+        json.dumps(
+            {
+                "projects": {
+                    "app": {
+                        "targets": {
+                            "test": {"builder": "@angular/build:unit-test"}
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (modern_workspace / "karma.conf.js").write_text(
+        "browsers: ['ChromeHeadless']",
+        encoding="utf-8",
+    )
+    modern_cmd = adapter._resolve_angular_test_command(
+        "ng test --watch=false --no-progress --browsers=ChromeHeadless",
+        modern_workspace,
+        has_npm=True,
+    )
+    assert modern_cmd == "npm exec -- ng test"
+    assert "--watch=false" not in modern_cmd
+    assert "--no-progress" not in modern_cmd
+    assert "--browsers=ChromeHeadless" not in modern_cmd
+
+
+def test_angular_missing_test_target_is_reported_as_skipped(tmp_path: Path, monkeypatch):
+    from amstralift.core.models import GateStatus
+
+    (tmp_path / "package.json").write_text(
+        json.dumps({"scripts": {"test": "ng test --watch=false"}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "angular.json").write_text(
+        json.dumps(
+            {
+                "projects": {
+                    "app": {
+                        "projectType": "application",
+                        "architect": {"build": {"builder": "@angular-devkit/build-angular:browser"}},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "amstralift.adapters.angular.get_node_execution_env",
+        lambda: {"PATH": "node-path"},
+    )
+    monkeypatch.setattr(
+        "amstralift.adapters.angular.shutil.which",
+        lambda name, path=None: "npm" if name == "npm" else None,
+    )
+
+    summary = AngularAdapter().run_build_and_tests(tmp_path)
+
+    test_result = next(result for result in summary.results if result.name == "test")
+    assert test_result.status == GateStatus.REQUIRED_SKIPPED
+    assert "no configured test target" in test_result.stdout.lower()
+    assert not summary.all_required_passed
 
 
 def test_angular_run_build_and_tests_timeout_handling(tmp_path: Path, monkeypatch):
@@ -357,9 +449,34 @@ export class CustomInterceptor {
         encoding="utf-8",
     )
 
+    # 3. Legacy test.ts with require.context for Angular 15+
+    test_file = tmp_path / "test.ts"
+    test_file.write_text(
+        """import 'zone.js/testing';
+declare const require: {
+  context(
+    path: string,
+    deep?: boolean,
+    filter?: RegExp
+  ): {
+    keys(): string[];
+    <T>(id: string): T;
+  };
+};
+
+getTestBed().initTestEnvironment();
+// Then we find all the tests.
+const context = require.context('./', true, /\\.spec\\.ts$/);
+// And load the modules.
+context.keys().map(context);
+""",
+        encoding="utf-8",
+    )
+
     applied = _modernize_angular_source_files(tmp_path, target_major=17)
     assert any("Effect" in m for m in applied)
     assert any("HttpEvent" in m for m in applied)
+    assert any("require.context" in m for m in applied)
 
     updated_effects = effects_file.read_text(encoding="utf-8")
     assert "Effect" not in updated_effects or "createEffect" in updated_effects
@@ -369,6 +486,10 @@ export class CustomInterceptor {
 
     updated_interceptor = interceptor_file.read_text(encoding="utf-8")
     assert "type HttpEvent" in updated_interceptor
+
+    updated_test_file = test_file.read_text(encoding="utf-8")
+    assert "require.context" not in updated_test_file
+    assert "declare const require" not in updated_test_file
 
 
 def test_angular_run_build_and_tests_removes_openssl_legacy_for_v17(tmp_path: Path, monkeypatch):

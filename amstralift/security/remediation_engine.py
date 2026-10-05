@@ -67,6 +67,44 @@ class RemediationEngine:
                 pkg_data.setdefault("overrides", {})[pkg] = target_v
                 has_changes = True
 
+        angular_core_upgrade = next(
+            (item for item in plan.items if item.package_name == "@angular/core" and item.is_direct),
+            None,
+        )
+        if angular_core_upgrade:
+            target_version = re.sub(
+                r"^[~^=<>v]+", "", angular_core_upgrade.target_version
+            )
+            target_major_match = re.match(r"\d+", target_version)
+            if target_major_match:
+                target_major = int(target_major_match.group())
+                angular_tooling_packages = {
+                    "@angular/build",
+                    "@angular/cli",
+                    "@angular/compiler-cli",
+                    "@angular-devkit/architect",
+                    "@angular-devkit/build-angular",
+                    "@angular-devkit/core",
+                    "@angular-devkit/schematics",
+                    "@angular-devkit/schematics-cli",
+                }
+                for section in ("dependencies", "devDependencies"):
+                    for package_name, current_version in pkg_data.get(section, {}).items():
+                        if package_name not in angular_tooling_packages:
+                            continue
+                        current_version = str(current_version)
+                        current_major_match = re.match(
+                            r"\D*(\d+)", current_version
+                        )
+                        if (
+                            current_major_match
+                            and int(current_major_match.group(1)) < target_major
+                        ):
+                            prefix_match = re.match(r"^[~^]", current_version)
+                            prefix = prefix_match.group() if prefix_match else ""
+                            pkg_data[section][package_name] = f"{prefix}{target_version}"
+                            has_changes = True
+
         if has_changes:
             pkg_json_path.write_text(json.dumps(pkg_data, indent=2) + "\n", encoding="utf-8")
             modified_files.append("package.json")
