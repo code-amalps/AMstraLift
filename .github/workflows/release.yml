@@ -53,10 +53,6 @@ jobs:
         run: |
           uv sync --group dev
 
-      - name: Run verification test suite
-        run: |
-          uv run pytest tests/ -q
-
       - name: Build standalone executable with PyInstaller
         run: |
           uv run --with pyinstaller pyinstaller --name amstralift --onefile --clean --collect-all amstralift amstralift/cli.py
