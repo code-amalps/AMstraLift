@@ -242,6 +242,7 @@ class SecurityOrchestrator:
                     repo_id=repo_id,
                     remote_url=remote_url,
                     explicit_changes=changes,
+                    allow_failed_gates=True,
                     cancellation_token=cancellation_token,
                 )
 

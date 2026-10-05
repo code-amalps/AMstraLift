@@ -678,5 +678,50 @@ def test_orchestrator_allow_major_permits_major_bumps(tmp_path: Path):
         assert result.plan.items[0].is_major_bump is True
 
 
+def test_orchestrator_passes_allow_failed_gates_for_unverified_no_tests(tmp_path: Path):
+    """Verify that when VerificationEngine reports UNVERIFIED_NO_TESTS, run_upgrade is called with allow_failed_gates=True."""
+    from amstralift.security.models import VerificationStatus
+    from amstralift.security.orchestrator import SecurityOrchestrator
+
+    report = AuditReport(
+        repo_path=str(tmp_path),
+        ecosystem="angular",
+        findings=[
+            VulnerabilityFinding(
+                cve_id="GHSA-test-cve",
+                package_name="minimist",
+                ecosystem="angular",
+                current_version="1.2.6",
+                severity=VulnerabilitySeverity.HIGH,
+                fixed_version="1.2.8",
+                all_fixed_versions=["1.2.8"],
+                is_direct=True,
+            ),
+        ],
+    )
+
+    orchestrator = SecurityOrchestrator()
+    proposal = MagicMock(branch_name="amstralift/security-patch", publish_status="COMMITTED_LOCAL_BRANCH", labels=[], title="PR")
+
+    with patch.object(orchestrator.scanner, "scan_discovered_dependencies", return_value=report), \
+         patch("amstralift.security.orchestrator.DependencyGraphAnalyzer.analyze", return_value=[]), \
+         patch("amstralift.security.orchestrator.prepare_stage_a_workspace"), \
+         patch("amstralift.security.orchestrator.RemediationEngine.apply_plan", return_value=["package.json"]), \
+         patch("amstralift.security.orchestrator.VerificationEngine.execute_gates", return_value=(True, VerificationStatus.UNVERIFIED_NO_TESTS, GateSummary(), None, None)), \
+         patch.object(orchestrator.upgrade_orchestrator, "run_upgrade", return_value=(MagicMock(), proposal)) as mock_run_upgrade:
+
+        result = orchestrator.run_remediation(
+            repo_path=tmp_path,
+            ecosystem="angular",
+            mode="apply",
+            target_branch="main",
+        )
+
+        assert result.remediation_successful is True
+        assert mock_run_upgrade.call_args.kwargs.get("allow_failed_gates") is True
+        assert "unverified-no-tests" in proposal.labels
+        assert "[UNVERIFIED - NO TESTS]" in proposal.title
+
+
 
 
