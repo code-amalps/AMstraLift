@@ -95,14 +95,36 @@ class PythonAdapter(BaseAdapter):
         )
 
     def fetch_latest_version(self, package_name: str) -> str | None:
-        """Fetch latest version from PyPI JSON API."""
+        """Fetch latest stable GA version from PyPI JSON API, rejecting pre-releases."""
         url = f"{self.pypi_base}/{package_name}/json"
         try:
             with httpx.Client(timeout=self.timeout_seconds) as client:
                 res = client.get(url)
                 if res.status_code == 200:
                     data = res.json()
-                    return data.get("info", {}).get("version")
+                    info_ver = data.get("info", {}).get("version")
+                    from packaging.version import InvalidVersion, Version
+                    if info_ver:
+                        try:
+                            v_obj = Version(info_ver)
+                            if not v_obj.is_prerelease and not v_obj.is_devrelease:
+                                return info_ver
+                        except InvalidVersion:
+                            pass
+
+                    # Info version was pre-release or invalid; find highest stable release
+                    releases = data.get("releases", {})
+                    stable_versions = []
+                    for rel_str in releases:
+                        try:
+                            v_obj = Version(rel_str)
+                            if not v_obj.is_prerelease and not v_obj.is_devrelease:
+                                stable_versions.append((v_obj, rel_str))
+                        except InvalidVersion:
+                            continue
+                    if stable_versions:
+                        stable_versions.sort(key=lambda item: item[0])
+                        return stable_versions[-1][1]
         except Exception:
             return None
         return None

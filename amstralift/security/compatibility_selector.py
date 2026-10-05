@@ -73,6 +73,14 @@ class CompatibilityAwareVersionSelector:
             if _parse_semver_tuple(fv) >= cur_tuple or _parse_semver_tuple(fv)[0] == cur_major
         ]
 
+        # Filter out unreleased/pre-releases when stable releases exist
+        stable_initial = [
+            fv for fv in initial_candidates
+            if not any(pre in fv.lower() for pre in ("-rc", "-preview", "-alpha", "-beta", "-canary", "-next", "-dev"))
+        ]
+        if stable_initial:
+            initial_candidates = stable_initial
+
         if not initial_candidates:
             # All reported versions are lower majors with no backport
             highest = sorted_fixes[-1] if sorted_fixes else current_version

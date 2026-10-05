@@ -252,3 +252,84 @@ def test_dotnet_format_timeout_resilience(tmp_path: Path):
     assert "timed out after 45s; upgrade preserved" in results[0]
 
 
+def test_dotnet_never_upgrades_to_unreleased_or_rc_versions():
+    """Verify that DotNetLifecycleGovernance strictly refuses to upgrade to unreleased/RC channels like .NET 11 RC."""
+    from amstralift.governance.dotnet_lifecycle import DotNetChannel, DotNetLifecycleGovernance
+
+    mock_channels = [
+        DotNetChannel(
+            channel_version="11.0",
+            release_type="sts",
+            support_phase="go-live",  # Microsoft RC/preview tag
+            latest_release="11.0.0-rc.1",
+        ),
+        DotNetChannel(
+            channel_version="10.0",
+            release_type="lts",
+            support_phase="active",
+            latest_release="10.0.12",
+        ),
+        DotNetChannel(
+            channel_version="9.0",
+            release_type="sts",
+            support_phase="maintenance",
+            latest_release="9.0.20",
+        ),
+    ]
+
+    with patch.object(DotNetLifecycleGovernance, "fetch_channels", return_value=mock_channels):
+        # 1. From net10.0: .NET 11 is RC/go-live so it MUST NOT upgrade
+        decision = DotNetLifecycleGovernance.evaluate_tfm("net10.0", incremental=True)
+        assert decision is not None
+        assert decision.should_upgrade is False
+        assert decision.target_tfm == "net10.0"
+        assert "peak officially released GA" in decision.reason
+
+        # 2. Even with max_supported_major=10, net10 stays at net10
+        decision_sdk = DotNetLifecycleGovernance.evaluate_tfm("net10.0", max_supported_major=10)
+        assert decision_sdk.should_upgrade is False
+        assert decision_sdk.target_tfm == "net10.0"
+
+        # 3. From net9.0: .NET 10 is active GA, so it should upgrade to net10.0
+        decision_from_9 = DotNetLifecycleGovernance.evaluate_tfm("net9.0", incremental=True)
+        assert decision_from_9.should_upgrade is True
+        assert decision_from_9.target_tfm == "net10.0"
+
+
+def test_dotnet_nuget_never_selects_prerelease():
+    """Verify NuGet package resolution ignores pre-release and RC packages."""
+    adapter = DotNetAdapter()
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "versions": [
+                    "8.0.0",
+                    "8.0.1",
+                    "9.0.0-preview.1",
+                    "9.0.0-rc.1",
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def get(url):
+            return FakeResponse()
+
+    with patch("amstralift.adapters.dotnet.httpx.Client", FakeClient):
+        ver = adapter.fetch_latest_version("Example.Package")
+        assert ver == "8.0.1"
+
+

@@ -1,3 +1,3 @@
 """AMstraLift: Automated Dependency & Framework Upgrade Engine."""
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"

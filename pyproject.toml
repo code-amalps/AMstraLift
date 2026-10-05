@@ -1,6 +1,6 @@
 [project]
 name = "amstralift"
-version = "0.1.4"
+version = "0.1.5"
 description = "Automated dependency and framework upgrade engine with a cryptographically bound trust boundary."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.27.0",
     "fastapi>=0.111.0",
     "uvicorn>=0.30.0",
+    "truststore>=0.10.4",
 ]
 
 [project.scripts]

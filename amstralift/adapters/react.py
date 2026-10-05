@@ -59,9 +59,11 @@ class ReactAdapter(BaseAdapter):
         self,
         registry_url: str = NPM_REGISTRY_BASE,
         timeout_seconds: float = 10.0,
+        incremental: bool = False,
     ):
         self.registry_url = registry_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.incremental = incremental
 
     @property
     def name(self) -> str:
@@ -83,15 +85,38 @@ class ReactAdapter(BaseAdapter):
         except Exception:
             return False
 
-    def fetch_latest_version(self, package_name: str) -> str | None:
-        """Fetch latest version tag from npm registry."""
+    def fetch_latest_version(self, package_name: str, target_major: int | None = None) -> str | None:
+        """Fetch latest stable GA version tag from npm registry (never pre-release).
+
+        If target_major is provided, returns latest stable version matching that major.
+        """
         url = f"{self.registry_url}/{package_name}"
         try:
             with httpx.Client(timeout=self.timeout_seconds) as client:
                 res = client.get(url)
                 if res.status_code == 200:
                     data = res.json()
-                    return data.get("dist-tags", {}).get("latest")
+                    if target_major is not None:
+                        matching = []
+                        for version in data.get("versions", {}):
+                            match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
+                            if match and int(match.group(1)) == target_major:
+                                matching.append((tuple(map(int, match.groups())), version))
+                        if matching:
+                            return max(matching, key=lambda item: item[0])[1]
+                        return None
+
+                    latest = data.get("dist-tags", {}).get("latest")
+                    if latest and not any(pre in latest.lower() for pre in ("-rc", "-canary", "-next", "-beta", "-alpha", "-dev", "-preview")):
+                        return latest
+
+                    stable_matching = []
+                    for version in data.get("versions", {}):
+                        match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
+                        if match:
+                            stable_matching.append((tuple(map(int, match.groups())), version))
+                    if stable_matching:
+                        return max(stable_matching, key=lambda item: item[0])[1]
         except Exception:
             return None
         return None
@@ -108,10 +133,38 @@ class ReactAdapter(BaseAdapter):
         direct_deps = data.get("dependencies", {})
         dev_deps = data.get("devDependencies", {})
 
+        # Determine current React major and latest GA React major
+        react_core_ver = direct_deps.get("react") or dev_deps.get("react") or direct_deps.get("react-dom")
+        cur_react_major = extract_major_version(react_core_ver) if react_core_ver else None
+
+        target_react_major = None
+        if cur_react_major is not None:
+            latest_react = self.fetch_latest_version("react")
+            latest_ga_major = extract_major_version(latest_react) if latest_react else None
+            if self.incremental:
+                if latest_ga_major is not None and cur_react_major >= latest_ga_major:
+                    target_react_major = cur_react_major
+                elif latest_ga_major is not None:
+                    target_react_major = min(cur_react_major + 1, latest_ga_major)
+                else:
+                    target_react_major = cur_react_major + 1
+            else:
+                target_react_major = latest_ga_major
+
+        def get_react_target_major(pkg_name: str) -> int | None:
+            if target_react_major is None:
+                return None
+            if pkg_name in ("react", "react-dom", "react-is", "react-test-renderer") or pkg_name.startswith("@types/react"):
+                return target_react_major
+            return None
+
         for pkg, cur_ver in direct_deps.items():
             if pkg in ("react", "react-dom") or pkg.startswith("react-") or pkg.startswith("@reduxjs/"):
                 clean_cur = cur_ver.lstrip("^~>=<")
-                latest = self.fetch_latest_version(pkg)
+                major_constraint = get_react_target_major(pkg)
+                latest = self.fetch_latest_version(pkg, target_major=major_constraint)
+                if not latest and major_constraint is not None and not (pkg in ("react", "react-dom") or pkg.startswith("@types/react")):
+                    latest = self.fetch_latest_version(pkg, target_major=None)
                 if latest and latest != clean_cur:
                     tier = classify_react_tier(pkg)
                     candidates.append(
@@ -128,7 +181,10 @@ class ReactAdapter(BaseAdapter):
         for pkg, cur_ver in dev_deps.items():
             if pkg.startswith("@types/react") or pkg.startswith("eslint-plugin-react"):
                 clean_cur = cur_ver.lstrip("^~>=<")
-                latest = self.fetch_latest_version(pkg)
+                major_constraint = get_react_target_major(pkg)
+                latest = self.fetch_latest_version(pkg, target_major=major_constraint)
+                if not latest and major_constraint is not None and not (pkg in ("react", "react-dom") or pkg.startswith("@types/react")):
+                    latest = self.fetch_latest_version(pkg, target_major=None)
                 if latest and latest != clean_cur:
                     tier = classify_react_tier(pkg)
                     candidates.append(

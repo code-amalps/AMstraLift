@@ -50,7 +50,7 @@ class UpgradeOrchestrator:
             "angular": AngularAdapter(lts_config=angular_lts_config, incremental=incremental),
             "python": PythonAdapter(runtime_config=python_runtime_config),
             "dotnet": DotNetAdapter(incremental=incremental),
-            "react": ReactAdapter(),
+            "react": ReactAdapter(incremental=incremental),
         }
 
     def get_adapter(self, name: str) -> BaseAdapter:

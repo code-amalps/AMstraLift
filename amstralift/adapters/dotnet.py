@@ -41,6 +41,25 @@ TIER_2_PATTERNS = [
 ]
 
 
+def get_installed_dotnet_sdk_majors() -> list[int]:
+    """Detect installed .NET SDK major versions via 'dotnet --list-sdks'."""
+    dotnet_bin = shutil.which("dotnet")
+    if not dotnet_bin:
+        return []
+    try:
+        res = subprocess.run([dotnet_bin, "--list-sdks"], capture_output=True, text=True, timeout=5)
+        if res.returncode != 0:
+            return []
+        majors: set[int] = set()
+        for line in res.stdout.splitlines():
+            m = re.match(r"^\s*(\d+)\.\d+", line.strip())
+            if m:
+                majors.add(int(m.group(1)))
+        return sorted(list(majors))
+    except Exception:
+        return []
+
+
 def classify_dotnet_tier(package_name: str) -> DependencyTier:
     """Classify .NET NuGet package into Tier 1, 2, or 3."""
     for pattern in TIER_3_PATTERNS:
@@ -91,7 +110,7 @@ class DotNetAdapter(BaseAdapter):
         )
 
     def fetch_latest_version(self, package_name: str) -> str | None:
-        """Fetch latest stable version from NuGet flatcontainer API."""
+        """Fetch latest stable GA version from NuGet flatcontainer API (never pre-release)."""
         url = f"{self.nuget_base}/{package_name.lower()}/index.json"
         try:
             with httpx.Client(timeout=self.timeout_seconds) as client:
@@ -102,8 +121,6 @@ class DotNetAdapter(BaseAdapter):
                     stable = [v for v in versions if "-" not in v]
                     if stable:
                         return stable[-1]
-                    if versions:
-                        return versions[-1]
         except Exception:
             return None
         return None
@@ -115,7 +132,10 @@ class DotNetAdapter(BaseAdapter):
         props_files = safe_rglob(repo_path, ["Directory.Build.props", "Directory.Build.targets"])
         cpm_files = safe_rglob(repo_path, "Directory.Packages.props")
 
-        # 1. Discover TargetFramework upgrades
+        # 1. Discover TargetFramework upgrades, constrained by installed host .NET SDK
+        installed_sdks = get_installed_dotnet_sdk_majors()
+        max_sdk_major = max(installed_sdks) if installed_sdks else None
+
         discovered_tfms: set[str] = set()
         for fpath in (*props_files, *csproj_files):
             try:
@@ -132,6 +152,7 @@ class DotNetAdapter(BaseAdapter):
                                         tfm,
                                         prefer_lts=self.prefer_lts,
                                         incremental=self.incremental,
+                                        max_supported_major=max_sdk_major,
                                     )
                                     if decision and decision.should_upgrade:
                                         candidates.append(

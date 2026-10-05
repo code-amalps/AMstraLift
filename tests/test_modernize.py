@@ -218,7 +218,7 @@ def test_python_modernize_runs_ruff_when_available(tmp_path: Path):
     from amstralift.adapters.python import PythonAdapter
 
     adapter = PythonAdapter()
-    with patch("shutil.which", side_effect=lambda x: "/bin/ruff" if x == "ruff" else None), \
+    with patch("shutil.which", side_effect=lambda x, *a, **kw: "/bin/ruff" if x == "ruff" else None), \
          patch("subprocess.run") as mock_sub:
         mock_sub.return_value = MagicMock(returncode=0, stdout="", stderr="")
         applied = adapter.apply_modernizations(tmp_path, ["syntax"])

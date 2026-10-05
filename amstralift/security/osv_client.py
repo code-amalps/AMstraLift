@@ -4,8 +4,12 @@ Provides free, fast vulnerability lookups across npm, NuGet, and PyPI.
 Docs: https://google.github.io/osv.dev/post-v1-query/
 """
 
+import json
 import logging
 import re
+import shutil
+import subprocess
+from pathlib import Path
 from typing import Any, Callable
 
 import httpx
@@ -127,13 +131,135 @@ def select_minimal_fixed_version(current_ver: str, fixed_versions: list[str]) ->
 
 def create_resilient_httpx_client(timeout: float = 15.0) -> httpx.Client:
     """Create an httpx client configured for corporate networks and SSL interception."""
+    # 1. Try truststore (Windows Native Certificate Store)
     try:
+        import ssl
         import truststore
-        ssl_ctx = truststore.SSLContext()
+        ssl_ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        return httpx.Client(timeout=timeout, trust_env=True, verify=ssl_ctx)
+    except Exception:
+        pass
+    # 2. Try default context with loaded OS certs
+    try:
+        import ssl
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.load_default_certs()
         return httpx.Client(timeout=timeout, trust_env=True, verify=ssl_ctx)
     except Exception:
         pass
     return httpx.Client(timeout=timeout, trust_env=True)
+
+
+def scan_dotnet_cli_vulnerabilities(repo_path: Path) -> list[VulnerabilityFinding]:
+    """Execute local dotnet list package --vulnerable as an offline / corporate proxy audit source."""
+    dotnet_bin = shutil.which("dotnet")
+    if not dotnet_bin or not repo_path.exists():
+        return []
+
+    # Fast guard: only run dotnet CLI if repo contains .sln or .*proj files
+    try:
+        from amstralift.core.workspace import safe_rglob
+        if not safe_rglob(repo_path, ["*.sln", "*.csproj", "*.fsproj"]):
+            return []
+    except Exception:
+        pass
+
+    findings: list[VulnerabilityFinding] = []
+    # 1. First attempt: json format
+    try:
+        res = subprocess.run(
+            [dotnet_bin, "list", "package", "--vulnerable", "--include-transitive", "--format", "json"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if res.returncode == 0 and res.stdout.strip().startswith("{"):
+            data = json.loads(res.stdout)
+            for proj in data.get("projects", []):
+                for fw in proj.get("frameworks", []):
+                    # Direct packages
+                    for p in fw.get("topLevelPackages", []):
+                        pkg_id = p.get("id", "")
+                        ver = p.get("resolvedVersion") or p.get("requestedVersion", "")
+                        for v in p.get("vulnerabilities", []):
+                            sev_raw = v.get("severity", "MEDIUM").upper()
+                            sev = VulnerabilitySeverity(sev_raw) if sev_raw in VulnerabilitySeverity.__members__ else VulnerabilitySeverity.MEDIUM
+                            cve_id = v.get("cve") or v.get("advisoryUrl", "NUGET-ADVISORY").split("/")[-1]
+                            findings.append(
+                                VulnerabilityFinding(
+                                    cve_id=cve_id,
+                                    package_name=pkg_id,
+                                    ecosystem="NuGet",
+                                    current_version=ver,
+                                    severity=sev,
+                                    summary=f"Vulnerability reported by NuGet audit in {pkg_id} ({ver})",
+                                    is_direct=True,
+                                )
+                            )
+                    # Transitive packages
+                    for p in fw.get("transitivePackages", []):
+                        pkg_id = p.get("id", "")
+                        ver = p.get("resolvedVersion", "")
+                        for v in p.get("vulnerabilities", []):
+                            sev_raw = v.get("severity", "MEDIUM").upper()
+                            sev = VulnerabilitySeverity(sev_raw) if sev_raw in VulnerabilitySeverity.__members__ else VulnerabilitySeverity.MEDIUM
+                            cve_id = v.get("cve") or v.get("advisoryUrl", "NUGET-ADVISORY").split("/")[-1]
+                            findings.append(
+                                VulnerabilityFinding(
+                                    cve_id=cve_id,
+                                    package_name=pkg_id,
+                                    ecosystem="NuGet",
+                                    current_version=ver,
+                                    severity=sev,
+                                    summary=f"Transitive vulnerability reported by NuGet audit in {pkg_id} ({ver})",
+                                    is_direct=False,
+                                )
+                            )
+            if findings:
+                return findings
+    except Exception:
+        pass
+
+    # 2. Second attempt: standard console format
+    try:
+        res = subprocess.run(
+            [dotnet_bin, "list", "package", "--vulnerable", "--include-transitive"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                line = line.strip()
+                if not line or line.startswith(("[", "Project", "The following", "Top-level", "Transitive")):
+                    continue
+                parts = line.split()
+                if len(parts) >= 4 and parts[-2].upper() in ("CRITICAL", "HIGH", "MODERATE", "MEDIUM", "LOW"):
+                    pkg_id = parts[0].lstrip(">").strip()
+                    resolved = parts[2] if len(parts) >= 5 else parts[1]
+                    sev_str = parts[-2].upper()
+                    if sev_str == "MODERATE":
+                        sev_str = "MEDIUM"
+                    sev = VulnerabilitySeverity(sev_str) if sev_str in VulnerabilitySeverity.__members__ else VulnerabilitySeverity.MEDIUM
+                    advisory = parts[-1] if parts[-1].startswith("http") else ""
+                    cve_id = advisory.split("/")[-1] if advisory else "NUGET-VULN"
+                    findings.append(
+                        VulnerabilityFinding(
+                            cve_id=cve_id,
+                            package_name=pkg_id,
+                            ecosystem="NuGet",
+                            current_version=resolved,
+                            severity=sev,
+                            summary=f"NuGet advisory in {pkg_id} ({resolved})",
+                            is_direct=True,
+                        )
+                    )
+    except Exception:
+        pass
+
+    return findings
 
 
 class OSVClient:
@@ -374,6 +500,7 @@ class OSVClient:
         # 3. Query uncached unique keys in chunks
         chunk_size = 100
         total_chunks = (len(uncached_keys) + chunk_size - 1) // chunk_size if uncached_keys else 0
+        scan_failed_or_blocked = False
 
         with create_resilient_httpx_client(timeout=self.timeout_seconds * 1.5) as client:
             for chunk_idx, i in enumerate(range(0, len(uncached_keys), chunk_size)):
@@ -398,10 +525,19 @@ class OSVClient:
                 ]
 
                 def _post_batch(batch_queries: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+                    # Attempt 1: Standard client (truststore / native OS certificates)
                     try:
                         res = client.post(OSV_BATCH_URL, json={"queries": batch_queries})
                         if res.status_code == 200:
                             return res.json().get("results", [])
+                    except Exception:
+                        pass
+                    # Attempt 2: Resilient fallback for corporate MITM proxies with custom root CAs
+                    try:
+                        with httpx.Client(timeout=client.timeout, trust_env=True, verify=False) as insecure_client:
+                            res = insecure_client.post(OSV_BATCH_URL, json={"queries": batch_queries})
+                            if res.status_code == 200:
+                                return res.json().get("results", [])
                     except Exception:
                         pass
                     return None
@@ -423,6 +559,7 @@ class OSVClient:
                             vulns_by_key[k] = v_list
                             self._dep_query_cache[(k[0], k[1], osv_eco)] = v_list
                 else:
+                    scan_failed_or_blocked = True
                     info_msg = (
                         f"↳ [Info] OSV query unreachable or blocked for batch of {len(chunk_keys)} packages "
                         f"(corporate proxy / offline); continuing safely."
@@ -457,9 +594,20 @@ class OSVClient:
                                 finding.exemption_id = cov.exception_id
                         findings.append(finding)
 
+            # 5. If OSV query was blocked by corporate proxy, attempt local CLI audit fallback for .NET
+            if (not findings) and repo_path and ecosystem in ("dotnet", "nuget"):
+                try:
+                    local_findings = scan_dotnet_cli_vulnerabilities(Path(repo_path))
+                    if local_findings:
+                        if progress_callback:
+                            progress_callback(f"↳ [Corporate Proxy Fallback] Discovered {len(local_findings)} vulnerability advisories via local .NET NuGet Audit feed.")
+                        findings.extend(local_findings)
+                except Exception as exc:
+                    logger.debug("Local dotnet vulnerability fallback failed: %s", exc)
+
         scan_duration = time.time() - start_t
         findings.sort(key=lambda f: SEVERITY_RANK.get(f.severity, 0), reverse=True)
-        summary_msg = f"↳ OSV scan completed: {len(findings)} advisories detected across {len(dependencies)} packages ({scan_duration:.1f}s)."
+        summary_msg = f"↳ Vulnerability audit completed: {len(findings)} advisories detected across {len(dependencies)} packages ({scan_duration:.1f}s)."
         if progress_callback:
             progress_callback(summary_msg)
         else:
@@ -470,4 +618,6 @@ class OSVClient:
             ecosystem=ecosystem,
             scanned_packages_count=len(dependencies),
             findings=findings,
+            scan_failed_or_blocked=scan_failed_or_blocked and not findings,
+            audit_source="NuGet Audit Feed (dotnet CLI)" if (scan_failed_or_blocked and findings) else "OSV.dev",
         )

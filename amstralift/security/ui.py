@@ -19,6 +19,19 @@ class SecurityUI:
     def render_dashboard(cls, report: AuditReport, console: Console) -> None:
         """Render the comprehensive Vulnerability Dashboard."""
         if not report.findings:
+            if getattr(report, "scan_failed_or_blocked", False):
+                console.print(
+                    Panel.fit(
+                        f"[bold yellow]⚠️ Vulnerability Scan Incomplete (Corporate Proxy / Offline)[/bold yellow]\n\n"
+                        f"[yellow]The vulnerability database (api.osv.dev) was unreachable or blocked by corporate proxy.\n"
+                        f"Unable to verify vulnerability status for {report.scanned_packages_count} packages.\n"
+                        f"Check corporate proxy / network access or use local audit feeds.[/yellow]",
+                        title="Security Audit Incomplete",
+                        border_style="yellow",
+                    )
+                )
+                return
+
             console.print(
                 Panel.fit(
                     f"[bold green]✔ Zero Vulnerabilities Found![/bold green]\n\n"

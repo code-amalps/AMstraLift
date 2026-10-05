@@ -922,8 +922,8 @@ class AngularAdapter(BaseAdapter):
     def fetch_latest_version(self, package_name: str, target_major: int | None = None) -> str | None:
         """Fetch version from npm registry.
 
-        If target_major is provided, returns latest version matching that major,
-        otherwise returns dist-tags.latest.
+        If target_major is provided, returns latest stable GA version matching that major,
+        otherwise returns dist-tags.latest (ensuring it is not a pre-release).
         """
         url = f"{self.registry_url}/{package_name}"
         try:
@@ -940,7 +940,18 @@ class AngularAdapter(BaseAdapter):
                         if matching:
                             return max(matching, key=lambda item: item[0])[1]
                         return None
-                    return data.get("dist-tags", {}).get("latest")
+
+                    latest = data.get("dist-tags", {}).get("latest")
+                    if latest and not any(pre in latest.lower() for pre in ("-rc", "-next", "-beta", "-alpha", "-canary", "-dev", "-preview")):
+                        return latest
+
+                    stable_matching = []
+                    for version in data.get("versions", {}):
+                        match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
+                        if match:
+                            stable_matching.append((tuple(map(int, match.groups())), version))
+                    if stable_matching:
+                        return max(stable_matching, key=lambda item: item[0])[1]
         except Exception:
             return None
         return None
@@ -957,26 +968,42 @@ class AngularAdapter(BaseAdapter):
         direct_deps = data.get("dependencies", {})
         dev_deps = data.get("devDependencies", {})
 
+        # Fetch latest officially released GA version of @angular/core from npm
+        latest_core = self.fetch_latest_version("@angular/core")
+        latest_ga_major = extract_major_version(latest_core) if latest_core else None
+
         # Evaluate Angular LTS policy or Incremental (+1 major)
         target_major = None
         policy_reason = ""
         if self.lts_config:
             policy_decision = AngularLTSGovernance.evaluate(self.lts_config)
             target_major = policy_decision.target_major if not policy_decision.use_latest_fallback else None
+            if target_major is not None and latest_ga_major is not None and target_major > latest_ga_major:
+                target_major = latest_ga_major
             policy_reason = f"LTS Policy: {policy_decision.reason}"
 
         # Detect current Angular core major from package.json
         core_ver = direct_deps.get("@angular/core") or dev_deps.get("@angular/core") or direct_deps.get("@angular/common")
         cur_angular_major = extract_major_version(core_ver) if core_ver else None
-        target_angular_major = target_major
-        if target_angular_major is None:
-            latest_core = self.fetch_latest_version("@angular/core")
-            target_angular_major = extract_major_version(latest_core) if latest_core else None
 
-        if target_major is None and self.incremental and cur_angular_major is not None:
-            target_major = cur_angular_major + 1
-            policy_reason = f"Incremental upgrade (+1 major): v{cur_angular_major} -> v{target_major}"
-        elif not policy_reason:
+        if target_major is None:
+            if self.incremental and cur_angular_major is not None:
+                if latest_ga_major is not None:
+                    if cur_angular_major >= latest_ga_major:
+                        # Already at peak officially released GA version; do not upgrade to unreleased major!
+                        target_major = cur_angular_major
+                        policy_reason = f"Current Angular v{cur_angular_major} is at peak officially released GA version."
+                    else:
+                        target_major = min(cur_angular_major + 1, latest_ga_major)
+                        policy_reason = f"Incremental upgrade (+1 major): v{cur_angular_major} -> v{target_major}"
+                else:
+                    target_major = cur_angular_major + 1
+                    policy_reason = f"Incremental upgrade (+1 major): v{cur_angular_major} -> v{target_major}"
+            else:
+                target_major = latest_ga_major
+
+        target_angular_major = target_major
+        if not policy_reason:
             policy_reason = "Ecosystem Upgrade"
 
         def get_major_constraint(pkg_name: str) -> int | None:

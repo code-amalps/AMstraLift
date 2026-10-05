@@ -140,3 +140,44 @@ def test_python_end_to_end_workflow(tmp_path: Path):
     assert current_head != base_sha
     updated_pyproject = (repo_path / "pyproject.toml").read_text(encoding="utf-8")
     assert "cryptography>=43.0.1" in updated_pyproject
+
+
+def test_python_fetch_latest_ignores_prerelease():
+    """Verify PythonAdapter.fetch_latest_version rejects pre-release and dev versions from PyPI."""
+    adapter = PythonAdapter()
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "info": {
+                    "version": "2.0.0rc1",  # Latest on info is a pre-release
+                },
+                "releases": {
+                    "1.9.0": [],
+                    "1.9.2": [],
+                    "2.0.0rc1": [],
+                    "2.0.0.dev1": [],
+                },
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def get(url):
+            return FakeResponse()
+
+    with patch("amstralift.adapters.python.httpx.Client", FakeClient):
+        ver = adapter.fetch_latest_version("example-pkg")
+        assert ver == "1.9.2"
+

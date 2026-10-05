@@ -82,6 +82,8 @@ class AuditReport(BaseModel):
     ecosystem: str
     scanned_packages_count: int = 0
     findings: list[VulnerabilityFinding] = Field(default_factory=list)
+    scan_failed_or_blocked: bool = False
+    audit_source: str = "OSV.dev"
 
     @property
     def vulnerable_packages_count(self) -> int:

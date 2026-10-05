@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from amstralift.adapters.angular import AngularAdapter, classify_angular_tier
 from amstralift.core.models import DependencyChange, DependencyTier
@@ -1176,6 +1177,69 @@ def test_modernize_angular_libraries(tmp_path: Path):
     assert "projects/abc-angular-lib/src/public-api.ts" in paths
 
     assert (tmp_path / "dist" / "abc-angular-lib" / "package.json").exists()
+
+
+def test_angular_never_upgrades_to_unreleased_major(tmp_path: Path):
+    """Verify that when Angular is on peak GA version (e.g. 19.0.0), it never bumps to unreleased Angular 20."""
+    adapter = AngularAdapter(incremental=True)
+    pkg_file = tmp_path / "package.json"
+    pkg_file.write_text(
+        json.dumps({
+            "dependencies": {
+                "@angular/core": "^19.0.0",
+                "@angular/common": "^19.0.0",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    with patch.object(adapter, "fetch_latest_version", return_value="19.2.1"):
+        candidates = adapter.discover_candidates(tmp_path)
+        # Angular is already at peak released GA (19); must not upgrade to v20
+        core_changes = [c for c in candidates if c.package_name == "@angular/core"]
+        for c in core_changes:
+            from amstralift.adapters.angular import extract_major_version
+            assert extract_major_version(c.to_version) <= 19
+
+
+def test_angular_fetch_latest_ignores_prerelease():
+    """Verify AngularAdapter.fetch_latest_version rejects -rc, -next, -beta pre-releases."""
+    adapter = AngularAdapter()
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "dist-tags": {
+                    "latest": "20.0.0-next.1",
+                },
+                "versions": {
+                    "18.2.0": {},
+                    "19.2.1": {},
+                    "20.0.0-next.1": {},
+                },
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def get(url):
+            return FakeResponse()
+
+    with patch("amstralift.adapters.angular.httpx.Client", FakeClient):
+        ver = adapter.fetch_latest_version("@angular/core")
+        assert ver == "19.2.1"
+
 
 
 

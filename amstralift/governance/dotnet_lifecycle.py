@@ -57,6 +57,7 @@ class DotNetChannel(BaseModel):
     release_type: Literal["lts", "sts"]
     support_phase: str  # "active", "maintenance", "eol", "preview", "go-live"
     eol_date: date | None = None
+    latest_release: str = ""
 
     @property
     def major(self) -> int:
@@ -69,6 +70,17 @@ class DotNetChannel(BaseModel):
     @property
     def is_eol(self) -> bool:
         return self.support_phase.lower() == "eol"
+
+    @property
+    def is_ga(self) -> bool:
+        """A channel is General Availability (GA) if it is officially active or in maintenance,
+        and its latest release is not a preview, rc, alpha, or beta."""
+        if self.support_phase.lower() not in ("active", "maintenance"):
+            return False
+        if not self.latest_release:
+            return True
+        rel_lower = self.latest_release.lower()
+        return not any(pre in rel_lower for pre in ("-rc", "-preview", "-alpha", "-beta", "-dev"))
 
 
 class DotNetLifecycleDecision(BaseModel):
@@ -104,6 +116,7 @@ class DotNetLifecycleGovernance:
                         sp = item.get("support-phase", "active").lower()
                         eol = item.get("eol-date")
                         eol_d = date.fromisoformat(eol) if eol else None
+                        lr = item.get("latest-release") or ""
                         if cv and ("." in cv):
                             channels.append(
                                 DotNetChannel(
@@ -111,6 +124,7 @@ class DotNetLifecycleGovernance:
                                     release_type="lts" if rt == "lts" else "sts",
                                     support_phase=sp,
                                     eol_date=eol_d,
+                                    latest_release=lr,
                                 )
                             )
                     if channels:
@@ -138,8 +152,13 @@ class DotNetLifecycleGovernance:
         tfm: str,
         prefer_lts: bool = True,
         incremental: bool = True,
+        max_supported_major: int | None = None,
     ) -> DotNetLifecycleDecision | None:
-        """Evaluate a TargetFramework like 'net9.0' and recommend target upgrade."""
+        """Evaluate a TargetFramework like 'net9.0' and recommend target upgrade.
+
+        Strictly restricts candidate channels to officially released General Availability (GA) versions.
+        Never upgrades to unreleased, preview, or RC versions, and never exceeds max_supported_major.
+        """
         import re
 
         match = re.match(r"^net(\d+)\.0$", tfm.strip().lower())
@@ -155,19 +174,25 @@ class DotNetLifecycleGovernance:
         cur_phase = cur_channel.support_phase if cur_channel else "active"
         cur_eol = cur_channel.eol_date if cur_channel else None
 
-        # Filter valid upgrade candidate channels (greater than cur_major, not eol, not preview)
+        # Filter valid upgrade candidate channels (greater than cur_major, not eol, officially GA)
         supported_candidates = [
             c for c in channels
-            if c.major > cur_major and not c.is_eol and c.support_phase in ("active", "maintenance", "go-live")
+            if c.major > cur_major and not c.is_eol and c.is_ga
         ]
 
-        if not supported_candidates:
-            # Check if there is a higher channel even if not yet active
-            future_candidates = [c for c in channels if c.major > cur_major]
-            if future_candidates:
-                supported_candidates = future_candidates
+        if max_supported_major is not None:
+            supported_candidates = [c for c in supported_candidates if c.major <= max_supported_major]
 
         if not supported_candidates:
+            higher_ga = [c for c in channels if c.major > cur_major and not c.is_eol and c.is_ga]
+            if max_supported_major is not None and higher_ga and all(c.major > max_supported_major for c in higher_ga):
+                reason = (
+                    f"Current .NET {cur_major} is at the maximum version supported by installed host SDK "
+                    f"(.NET {max_supported_major}). Higher target framework is restricted until a matching SDK is installed."
+                )
+            else:
+                reason = f"Current .NET {cur_major} is at the peak officially released GA version."
+
             return DotNetLifecycleDecision(
                 current_tfm=tfm,
                 current_major=cur_major,
@@ -178,7 +203,7 @@ class DotNetLifecycleGovernance:
                 target_major=cur_major,
                 target_release_type=cur_type,
                 should_upgrade=False,
-                reason=f"Current .NET {cur_major} is at the peak supported version.",
+                reason=reason,
             )
 
         if incremental:

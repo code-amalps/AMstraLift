@@ -116,7 +116,7 @@ def test_react_end_to_end_workflow(tmp_path: Path):
     secret = b"test-react-secret-key-32b-secret"
     orchestrator = UpgradeOrchestrator(secret_key=secret)
 
-    def mock_fetch(pkg: str):
+    def mock_fetch(pkg: str, *args, **kwargs):
         versions = {
             "react": "18.3.1",
             "react-router-dom": "6.26.0",
@@ -141,3 +141,65 @@ def test_react_end_to_end_workflow(tmp_path: Path):
     assert current_head != base_sha
     updated_pkg = json.loads((repo_path / "package.json").read_text(encoding="utf-8"))
     assert updated_pkg["dependencies"]["react"] == "^18.3.1"
+
+
+def test_react_never_upgrades_to_unreleased_major(tmp_path: Path):
+    """Verify that when React is on peak GA version (e.g. 19.0.0), it never bumps to unreleased React 20."""
+    adapter = ReactAdapter(incremental=True)
+    pkg_file = tmp_path / "package.json"
+    pkg_file.write_text(
+        json.dumps({
+            "dependencies": {
+                "react": "^19.0.0",
+                "react-dom": "^19.0.0",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    # When latest released GA version on npm is 19.0.0
+    with patch.object(adapter, "fetch_latest_version", return_value="19.0.0"):
+        candidates = adapter.discover_candidates(tmp_path)
+        # React is already at latest released GA; no candidates to unreleased v20
+        react_changes = [c for c in candidates if c.package_name in ("react", "react-dom")]
+        assert len(react_changes) == 0
+
+
+def test_react_fetch_latest_ignores_prerelease():
+    """Verify ReactAdapter.fetch_latest_version rejects -rc, -canary, -next pre-releases."""
+    adapter = ReactAdapter()
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "dist-tags": {
+                    "latest": "19.1.0-canary-20261005",
+                },
+                "versions": {
+                    "18.3.1": {},
+                    "19.0.0": {},
+                    "19.1.0-canary-20261005": {},
+                },
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def get(url):
+            return FakeResponse()
+
+    with patch("amstralift.adapters.react.httpx.Client", FakeClient):
+        ver = adapter.fetch_latest_version("react")
+        assert ver == "19.0.0"
+
