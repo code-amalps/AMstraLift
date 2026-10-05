@@ -115,8 +115,15 @@ _COMPOSE_IMAGE_RE = re.compile(
 
 
 def _find_dockerfiles(repo_path: Path) -> list[Path]:
-    """Find all Dockerfiles and Dockerfile.* variants in the repository."""
-    return safe_rglob(repo_path, "Dockerfile*")
+    """Find all Dockerfiles (e.g. Dockerfile, Dockerfile.*, *Dockerfile*, *.dockerfile) in the repository."""
+    candidates = safe_rglob(repo_path, ["Dockerfile*", "*Dockerfile*", "*.dockerfile"])
+    found = []
+    seen = set()
+    for f in candidates:
+        if "dockerfile" in f.name.lower() and f not in seen:
+            seen.add(f)
+            found.append(f)
+    return found
 
 
 def _find_compose_files(repo_path: Path) -> list[Path]:

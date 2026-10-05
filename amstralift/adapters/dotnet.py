@@ -4,6 +4,7 @@ Handles .NET NuGet package discovery via NuGet flatcontainer API,
 *.csproj / packages.lock.json updates, dependency tiering, and dotnet build/test gates.
 """
 
+import logging
 import re
 import shutil
 import subprocess
@@ -12,6 +13,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import httpx
+
+logger = logging.getLogger("amstralift.adapters.dotnet")
 
 from amstralift.adapters.base import BaseAdapter
 from amstralift.core.workspace import safe_rglob
@@ -74,13 +77,16 @@ class DotNetAdapter(BaseAdapter):
         return "dotnet"
 
     def detect(self, repo_path: Path) -> bool:
-        """Detect .NET project via *.csproj, *.fsproj, *.sln, or Directory.Build.props."""
+        """Detect .NET project via *.csproj, *.fsproj, *.sln, Directory.Build.props, or Directory.Packages.props."""
         return (
             any(repo_path.glob("*.csproj"))
             or any(repo_path.glob("*.sln"))
             or any(repo_path.glob("*.fsproj"))
+            or (repo_path / "Directory.Build.props").exists()
+            or (repo_path / "Directory.Packages.props").exists()
             or bool(safe_rglob(repo_path, "*.csproj"))
             or bool(safe_rglob(repo_path, "*.sln"))
+            or bool(safe_rglob(repo_path, "Directory.Packages.props"))
         )
 
     def fetch_latest_version(self, package_name: str) -> str | None:
@@ -102,90 +108,162 @@ class DotNetAdapter(BaseAdapter):
         return None
 
     def discover_candidates(self, repo_path: Path) -> list[DependencyChange]:
-        """Scan *.csproj files for TargetFramework and PackageReference entries."""
+        """Scan *.csproj, Directory.Build.props, and Directory.Packages.props for TargetFramework and PackageReference entries."""
         candidates: list[DependencyChange] = []
-        csproj_files = safe_rglob(repo_path, "*.csproj")
+        csproj_files = safe_rglob(repo_path, ["*.csproj", "*.fsproj"])
+        props_files = safe_rglob(repo_path, ["Directory.Build.props", "Directory.Build.targets"])
+        cpm_files = safe_rglob(repo_path, "Directory.Packages.props")
 
         # 1. Discover TargetFramework upgrades
         discovered_tfms: set[str] = set()
-        for csproj in csproj_files:
+        for fpath in (*props_files, *csproj_files):
             try:
-                tree = ET.parse(csproj)
+                tree = ET.parse(fpath)
                 root = tree.getroot()
-                tfm_node = root.find(".//TargetFramework")
-                if tfm_node is not None and tfm_node.text:
-                    tfm = tfm_node.text.strip()
-                    if tfm not in discovered_tfms:
-                        discovered_tfms.add(tfm)
-                        decision = DotNetLifecycleGovernance.evaluate_tfm(
-                            tfm,
-                            prefer_lts=self.prefer_lts,
-                            incremental=self.incremental,
-                        )
-                        if decision and decision.should_upgrade:
-                            candidates.append(
-                                DependencyChange(
-                                    package_name="Microsoft.NET.TargetFramework",
-                                    from_version=decision.current_tfm,
-                                    to_version=decision.target_tfm,
-                                    change_type="direct",
-                                    tier=DependencyTier.TIER_2_VERIFY_BEHAVIOR,
-                                    rationale=decision.reason,
-                                )
-                            )
+                for tag in ("TargetFramework", "TargetFrameworks"):
+                    for node in root.findall(f".//{tag}"):
+                        if node is not None and node.text:
+                            for raw_tfm in node.text.split(";"):
+                                tfm = raw_tfm.strip()
+                                if tfm and tfm not in discovered_tfms:
+                                    discovered_tfms.add(tfm)
+                                    decision = DotNetLifecycleGovernance.evaluate_tfm(
+                                        tfm,
+                                        prefer_lts=self.prefer_lts,
+                                        incremental=self.incremental,
+                                    )
+                                    if decision and decision.should_upgrade:
+                                        candidates.append(
+                                            DependencyChange(
+                                                package_name="Microsoft.NET.TargetFramework",
+                                                from_version=decision.current_tfm,
+                                                to_version=decision.target_tfm,
+                                                change_type="direct",
+                                                tier=DependencyTier.TIER_2_VERIFY_BEHAVIOR,
+                                                rationale=decision.reason,
+                                            )
+                                        )
             except Exception:
                 continue
 
-        # 2. Discover PackageReference upgrades
+        # 2. Discover PackageReference upgrades (supporting Central Package Management)
+        declared_pkgs: dict[str, str] = {}
+
+        # 2a. Inspect Central Package Management (Directory.Packages.props)
+        for cpm in cpm_files:
+            try:
+                tree = ET.parse(cpm)
+                root = tree.getroot()
+                for pv in root.findall(".//PackageVersion") + root.findall(".//GlobalPackageReference"):
+                    pkg = pv.get("Include") or pv.get("Update")
+                    ver = pv.get("Version") or pv.findtext("Version")
+                    if pkg and ver and not ver.startswith("$"):
+                        declared_pkgs[pkg] = ver
+            except Exception:
+                continue
+
+        # 2b. Inspect *.csproj and *.fsproj files
         for csproj in csproj_files:
             try:
                 tree = ET.parse(csproj)
                 root = tree.getroot()
                 for pr in root.findall(".//PackageReference"):
                     pkg = pr.get("Include") or pr.get("Update")
-                    ver = pr.get("Version")
-                    if pkg and ver:
-                        latest = self.fetch_latest_version(pkg)
-                        if latest and latest != ver:
-                            tier = classify_dotnet_tier(pkg)
-                            candidates.append(
-                                DependencyChange(
-                                    package_name=pkg,
-                                    from_version=ver,
-                                    to_version=latest,
-                                    change_type="direct",
-                                    tier=tier,
-                                    rationale=f"Upgrade .NET NuGet package {pkg} to {latest} via NuGet API",
-                                )
-                            )
+                    ver = pr.get("Version") or pr.findtext("Version")
+                    if pkg and ver and not ver.startswith("$"):
+                        declared_pkgs.setdefault(pkg, ver)
+            except Exception:
+                continue
+
+        # 2c. Query NuGet for package updates
+        for pkg, ver in declared_pkgs.items():
+            try:
+                latest = self.fetch_latest_version(pkg)
+                if latest and latest != ver:
+                    tier = classify_dotnet_tier(pkg)
+                    candidates.append(
+                        DependencyChange(
+                            package_name=pkg,
+                            from_version=ver,
+                            to_version=latest,
+                            change_type="direct",
+                            tier=tier,
+                            rationale=f"Upgrade .NET NuGet package {pkg} to {latest} via NuGet API",
+                        )
+                    )
             except Exception:
                 continue
 
         return candidates
 
     def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange]) -> None:
-        """Apply package and TargetFramework updates to *.csproj files and packages.lock.json."""
-        csproj_files = safe_rglob(repo_path, "*.csproj")
-        for csproj in csproj_files:
-            content = csproj.read_text(encoding="utf-8")
-            for c in changes:
-                if c.package_name == "Microsoft.NET.TargetFramework":
-                    pattern = rf'(<TargetFramework>\s*){re.escape(c.from_version)}(\s*</TargetFramework>)'
-                    content = re.sub(pattern, rf'\g<1>{c.to_version}\g<2>', content, flags=re.IGNORECASE)
-                else:
-                    pattern = rf'(<PackageReference\s+[^>]*Include="{re.escape(c.package_name)}"[^>]*Version=)"[^"]*"'
-                    replacement = rf'\1"{c.to_version}"'
-                    content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
-            csproj.write_text(content, encoding="utf-8")
+        """Apply package and TargetFramework updates to *.csproj, Directory.Build.props, Directory.Packages.props, and packages.lock.json."""
+        csproj_files = safe_rglob(repo_path, ["*.csproj", "*.fsproj"])
+        props_files = safe_rglob(repo_path, ["Directory.Build.props", "Directory.Build.targets"])
+        cpm_files = safe_rglob(repo_path, "Directory.Packages.props")
 
+        # 1. Update TargetFramework across *.csproj and Directory.Build.props
+        for fpath in (*props_files, *csproj_files):
+            try:
+                content = fpath.read_text(encoding="utf-8")
+                orig = content
+                for c in changes:
+                    if c.package_name == "Microsoft.NET.TargetFramework":
+                        pattern = rf'(<TargetFramework(?:s)?\s*>\s*){re.escape(c.from_version)}(\s*</TargetFramework(?:s)?>)'
+                        content = re.sub(pattern, rf'\g<1>{c.to_version}\g<2>', content, flags=re.IGNORECASE)
+                if content != orig:
+                    fpath.write_text(content, encoding="utf-8")
+            except Exception:
+                pass
+
+        # 2. Update PackageReference in *.csproj
+        for csproj in csproj_files:
+            try:
+                content = csproj.read_text(encoding="utf-8")
+                orig = content
+                for c in changes:
+                    if c.package_name != "Microsoft.NET.TargetFramework":
+                        clean_to = c.to_version.lstrip("^~")
+                        pattern_attr = rf'(<PackageReference\s+[^>]*Include="{re.escape(c.package_name)}"[^>]*Version=)"[^"]*"'
+                        content = re.sub(pattern_attr, rf'\1"{clean_to}"', content, flags=re.IGNORECASE)
+                        pattern_child = rf'(<PackageReference\s+[^>]*Include="{re.escape(c.package_name)}"[^>]*>\s*<Version>)[^<]*(</Version>)'
+                        content = re.sub(pattern_child, rf'\g<1>{clean_to}\g<2>', content, flags=re.IGNORECASE)
+                if content != orig:
+                    csproj.write_text(content, encoding="utf-8")
+            except Exception:
+                pass
+
+        # 3. Update Directory.Packages.props (Central Package Management)
+        for cpm in cpm_files:
+            try:
+                content = cpm.read_text(encoding="utf-8")
+                orig = content
+                for c in changes:
+                    if c.package_name != "Microsoft.NET.TargetFramework":
+                        clean_to = c.to_version.lstrip("^~")
+                        pattern_attr = rf'(<(?:PackageVersion|GlobalPackageReference)\s+[^>]*Include="{re.escape(c.package_name)}"[^>]*Version=)"[^"]*"'
+                        content = re.sub(pattern_attr, rf'\1"{clean_to}"', content, flags=re.IGNORECASE)
+                        pattern_child = rf'(<(?:PackageVersion|GlobalPackageReference)\s+[^>]*Include="{re.escape(c.package_name)}"[^>]*>\s*<Version>)[^<]*(</Version>)'
+                        content = re.sub(pattern_child, rf'\g<1>{clean_to}\g<2>', content, flags=re.IGNORECASE)
+                if content != orig:
+                    cpm.write_text(content, encoding="utf-8")
+            except Exception:
+                pass
+
+        # 4. Update packages.lock.json
         for lock_file in safe_rglob(repo_path, "packages.lock.json"):
-            lock_content = lock_file.read_text(encoding="utf-8")
-            for c in changes:
-                if c.package_name != "Microsoft.NET.TargetFramework":
-                    pattern = rf'("{re.escape(c.package_name)}":\s*\{{[^}}]*"resolved":\s*)"[^"]*"'
-                    replacement = rf'\1"{c.to_version}"'
-                    lock_content = re.sub(pattern, replacement, lock_content, flags=re.IGNORECASE)
-            lock_file.write_text(lock_content, encoding="utf-8")
+            try:
+                lock_content = lock_file.read_text(encoding="utf-8")
+                orig = lock_content
+                for c in changes:
+                    if c.package_name != "Microsoft.NET.TargetFramework":
+                        pattern = rf'("{re.escape(c.package_name)}":\s*\{{[^}}]*"resolved":\s*)"[^"]*"'
+                        replacement = rf'\1"{c.to_version}"'
+                        lock_content = re.sub(pattern, replacement, lock_content, flags=re.IGNORECASE)
+                if lock_content != orig:
+                    lock_file.write_text(lock_content, encoding="utf-8")
+            except Exception:
+                pass
 
         # ── Docker: update FROM / image: tags in Dockerfiles & docker-compose ──
         tfm_change = next(
@@ -292,12 +370,35 @@ class DotNetAdapter(BaseAdapter):
 
     def get_declared_dependencies(self, repo_path: Path) -> dict[str, str]:
         deps: dict[str, str] = {}
+        # 1. Inspect Central Package Management (CPM) files: Directory.Packages.props, etc.
+        for prop_pattern in ("Directory.Packages.props", "Directory.Build.props", "Directory.Build.targets", "Packages.props"):
+            for prop_file in safe_rglob(repo_path, prop_pattern):
+                try:
+                    tree = ET.parse(prop_file)
+                    for tag in (".//PackageVersion", ".//GlobalPackageReference", ".//PackageReference"):
+                        for elem in tree.getroot().findall(tag):
+                            pkg = elem.get("Include") or elem.get("Update")
+                            ver = elem.get("Version")
+                            if not ver:
+                                ver_elem = elem.find("Version")
+                                if ver_elem is not None and ver_elem.text:
+                                    ver = ver_elem.text.strip()
+                            if pkg and ver:
+                                deps[pkg] = ver
+                except Exception:
+                    continue
+
+        # 2. Inspect *.csproj files
         for csproj in safe_rglob(repo_path, "*.csproj"):
             try:
                 tree = ET.parse(csproj)
                 for pr in tree.getroot().findall(".//PackageReference"):
                     pkg = pr.get("Include") or pr.get("Update")
                     ver = pr.get("Version")
+                    if not ver:
+                        ver_elem = pr.find("Version")
+                        if ver_elem is not None and ver_elem.text:
+                            ver = ver_elem.text.strip()
                     if pkg and ver:
                         deps[pkg] = ver
             except Exception:
@@ -315,25 +416,47 @@ class DotNetAdapter(BaseAdapter):
         if not shutil.which("dotnet"):
             return ["Skipped .NET modernizations: dotnet CLI not found in environment"]
 
+        def _run_format(cmd: list[str], success_msg: str, timeout_secs: int) -> str:
+            cmd_display = " ".join(cmd)
+            try:
+                res = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True, timeout=timeout_secs)
+                if res.returncode == 0:
+                    return success_msg
+                else:
+                    return f"{cmd_display} returned exit code {res.returncode}"
+            except subprocess.TimeoutExpired:
+                logger.warning("'%s' timed out after %ds; skipping non-critical modernization", cmd_display, timeout_secs)
+                return f"Skipped '{cmd_display}' (timed out after {timeout_secs}s; upgrade preserved)"
+            except Exception as e:
+                logger.warning("'%s' failed: %s; skipping non-critical modernization", cmd_display, e)
+                return f"Skipped '{cmd_display}' ({e})"
+
         # 1. Code Style / Modern C# Syntax
         if any(f in ("style", "format", "all") for f in normalized):
-            res = subprocess.run(["dotnet", "format", "style", "--severity", "info"], cwd=repo_path, capture_output=True, text=True, timeout=120)
-            if res.returncode == 0:
-                applied.append("Applied modern C# code style fixes via 'dotnet format style'")
-            else:
-                applied.append(f"dotnet format style returned exit code {res.returncode}")
+            msg = _run_format(
+                ["dotnet", "format", "style", "--severity", "warn"],
+                "Applied modern C# code style fixes via 'dotnet format style'",
+                60,
+            )
+            applied.append(msg)
 
         # 2. Whitespace and Layout Modernization
         if any(f in ("whitespace", "all") for f in normalized):
-            res = subprocess.run(["dotnet", "format", "whitespace"], cwd=repo_path, capture_output=True, text=True, timeout=60)
-            if res.returncode == 0:
-                applied.append("Formatted whitespace layout via 'dotnet format whitespace'")
+            msg = _run_format(
+                ["dotnet", "format", "whitespace"],
+                "Formatted whitespace layout via 'dotnet format whitespace'",
+                45,
+            )
+            applied.append(msg)
 
         # 3. Roslyn Analyzers and Deprecation Fixes
         if any(f in ("analyzers", "fixes", "all") for f in normalized):
-            res = subprocess.run(["dotnet", "format", "analyzers", "--severity", "info"], cwd=repo_path, capture_output=True, text=True, timeout=180)
-            if res.returncode == 0:
-                applied.append("Applied Roslyn analyzer deprecation code fixes via 'dotnet format analyzers'")
+            msg = _run_format(
+                ["dotnet", "format", "analyzers", "--severity", "warn"],
+                "Applied Roslyn analyzer deprecation code fixes via 'dotnet format analyzers'",
+                90,
+            )
+            applied.append(msg)
 
         return applied
 

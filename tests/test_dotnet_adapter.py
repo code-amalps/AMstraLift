@@ -152,3 +152,103 @@ def test_dotnet_target_framework_upgrade(tmp_path: Path):
     updated = csproj.read_text(encoding="utf-8")
     assert "<TargetFramework>net10.0</TargetFramework>" in updated
 
+
+def test_dotnet_cpm_discovery_and_upgrade(tmp_path: Path):
+    """Verify Central Package Management (Directory.Packages.props) and Directory.Build.props support."""
+    adapter = DotNetAdapter()
+
+    # Directory.Packages.props (Central Package Management)
+    cpm_props = tmp_path / "Directory.Packages.props"
+    cpm_props.write_text(
+        """<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="7.0.0" />
+    <PackageVersion Include="Newtonsoft.Json">
+      <Version>12.0.1</Version>
+    </PackageVersion>
+    <GlobalPackageReference Include="SonarAnalyzer.CSharp" Version="8.0.0" />
+  </ItemGroup>
+</Project>""",
+        encoding="utf-8",
+    )
+
+    # Directory.Build.props (Central TargetFramework)
+    build_props = tmp_path / "Directory.Build.props"
+    build_props.write_text(
+        """<Project>
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+  </PropertyGroup>
+</Project>""",
+        encoding="utf-8",
+    )
+
+    # App.csproj with no Version attributes (CPM pattern)
+    subproject = tmp_path / "src" / "Api"
+    subproject.mkdir(parents=True, exist_ok=True)
+    csproj = subproject / "Api.csproj"
+    csproj.write_text(
+        """<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Newtonsoft.Json" />
+  </ItemGroup>
+</Project>""",
+        encoding="utf-8",
+    )
+
+    assert adapter.detect(tmp_path) is True
+
+    # 1. Test get_declared_dependencies
+    declared = adapter.get_declared_dependencies(tmp_path)
+    assert declared.get("Microsoft.Extensions.Logging") == "7.0.0"
+    assert declared.get("Newtonsoft.Json") == "12.0.1"
+    assert declared.get("SonarAnalyzer.CSharp") == "8.0.0"
+
+    # 2. Test discover_candidates (with mocked latest versions)
+    def mock_fetch(pkg: str):
+        versions = {
+            "Microsoft.Extensions.Logging": "8.0.0",
+            "Newtonsoft.Json": "13.0.3",
+            "SonarAnalyzer.CSharp": "9.0.0",
+        }
+        return versions.get(pkg)
+
+    with patch.object(DotNetAdapter, "fetch_latest_version", side_effect=mock_fetch):
+        candidates = adapter.discover_candidates(tmp_path)
+
+    pkg_names = {c.package_name: c.to_version for c in candidates}
+    assert pkg_names.get("Microsoft.Extensions.Logging") == "8.0.0"
+    assert pkg_names.get("Newtonsoft.Json") == "13.0.3"
+    assert pkg_names.get("SonarAnalyzer.CSharp") == "9.0.0"
+    assert pkg_names.get("Microsoft.NET.TargetFramework") == "net10.0"
+
+    # 3. Test apply_upgrade updates both Directory.Packages.props and Directory.Build.props
+    adapter.apply_upgrade(tmp_path, candidates)
+
+    updated_cpm = cpm_props.read_text(encoding="utf-8")
+    assert 'PackageVersion Include="Microsoft.Extensions.Logging" Version="8.0.0"' in updated_cpm
+    assert "13.0.3" in updated_cpm
+    assert 'GlobalPackageReference Include="SonarAnalyzer.CSharp" Version="9.0.0"' in updated_cpm
+
+    updated_build_props = build_props.read_text(encoding="utf-8")
+    assert "<TargetFramework>net10.0</TargetFramework>" in updated_build_props
+
+
+def test_dotnet_format_timeout_resilience(tmp_path: Path):
+    """Verify that dotnet format timing out does not abort the migration."""
+    import subprocess
+
+    adapter = DotNetAdapter()
+
+    with patch("shutil.which", return_value="C:\\Program Files\\dotnet\\dotnet.exe"), \
+         patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["dotnet", "format", "style"], timeout=60)):
+        results = adapter.apply_modernizations(tmp_path, ["style"])
+
+    assert len(results) == 1
+    assert "timed out after 60s; upgrade preserved" in results[0]
+
+
