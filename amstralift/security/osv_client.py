@@ -5,7 +5,7 @@ Docs: https://google.github.io/osv.dev/post-v1-query/
 """
 
 import re
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -304,8 +304,11 @@ class OSVClient:
         ecosystem: str,
         repo_path: str = "",
         governance_manager: Any = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> AuditReport:
         """Scan a list of DiscoveredDependency objects, preserving direct/transitive relationships."""
+        import time
+
         osv_eco = self.map_ecosystem(ecosystem)
         findings: list[VulnerabilityFinding] = []
 
@@ -317,24 +320,32 @@ class OSVClient:
                 findings=[],
             )
 
-        # Batch query in chunks of 100
+        start_t = time.time()
         chunk_size = 100
-        for i in range(0, len(dependencies), chunk_size):
-            chunk = dependencies[i : i + chunk_size]
-            queries = [
-                {
-                    "package": {"name": dep.package_name, "ecosystem": osv_eco},
-                    "version": dep.version.lstrip("^~>=<v").strip(),
-                }
-                for dep in chunk
-                if dep.version and dep.version != "*"
-            ]
+        total_chunks = (len(dependencies) + chunk_size - 1) // chunk_size
 
-            if not queries:
-                continue
+        with httpx.Client(timeout=self.timeout_seconds * 2) as client:
+            for chunk_idx, i in enumerate(range(0, len(dependencies), chunk_size)):
+                chunk = dependencies[i : i + chunk_size]
+                progress_msg = f"↳ Querying OSV database: Batch {chunk_idx + 1}/{total_chunks} ({len(chunk)} packages)..."
+                if progress_callback:
+                    progress_callback(progress_msg)
+                else:
+                    print(f"   {progress_msg}", flush=True)
 
-            try:
-                with httpx.Client(timeout=self.timeout_seconds * 2) as client:
+                queries = [
+                    {
+                        "package": {"name": dep.package_name, "ecosystem": osv_eco},
+                        "version": dep.version.lstrip("^~>=<v").strip(),
+                    }
+                    for dep in chunk
+                    if dep.version and dep.version != "*"
+                ]
+
+                if not queries:
+                    continue
+
+                try:
                     res = client.post(OSV_BATCH_URL, json={"queries": queries})
                     if res.status_code == 200:
                         batch_res = res.json().get("results", [])
@@ -354,20 +365,27 @@ class OSVClient:
                                             finding.is_exempted = True
                                             finding.exemption_id = cov.exception_id
                                     findings.append(finding)
-            except Exception:
-                for dep in chunk:
-                    sub_findings = self.query_package(dep.package_name, dep.version, ecosystem)
-                    for sf in sub_findings:
-                        sf.is_direct = dep.is_direct
-                        sf.introduced_by = dep.introduced_by
-                        if governance_manager:
-                            cov = governance_manager.check_coverage(sf.cve_id, sf.package_name, sf.current_version)
-                            if cov:
-                                sf.is_exempted = True
-                                sf.exemption_id = cov.exception_id
-                    findings.extend(sub_findings)
+                except Exception:
+                    for dep in chunk:
+                        sub_findings = self.query_package(dep.package_name, dep.version, ecosystem)
+                        for sf in sub_findings:
+                            sf.is_direct = dep.is_direct
+                            sf.introduced_by = dep.introduced_by
+                            if governance_manager:
+                                cov = governance_manager.check_coverage(sf.cve_id, sf.package_name, sf.current_version)
+                                if cov:
+                                    sf.is_exempted = True
+                                    sf.exemption_id = cov.exception_id
+                        findings.extend(sub_findings)
 
+        scan_duration = time.time() - start_t
         findings.sort(key=lambda f: SEVERITY_RANK.get(f.severity, 0), reverse=True)
+        summary_msg = f"↳ OSV scan completed: {len(findings)} advisories detected across {len(dependencies)} packages ({scan_duration:.1f}s)."
+        if progress_callback:
+            progress_callback(summary_msg)
+        else:
+            print(f"   {summary_msg}", flush=True)
+
         return AuditReport(
             repo_path=repo_path,
             ecosystem=ecosystem,

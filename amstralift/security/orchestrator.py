@@ -1,6 +1,7 @@
 """Security Orchestrator coordinating the 16-step Safe Remediation Workflow across Audit, Preview, and Apply modes."""
 
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from amstralift.core.cancellation import (
@@ -53,6 +54,7 @@ class SecurityOrchestrator:
         allow_major: bool = False,
         safe_only: bool = True,
         cancellation_token: CancellationToken | None = None,
+        progress_callback: Callable[[int, str], None] | None = None,
     ) -> RemediationResult:
         """Execute the safe remediation workflow."""
         with CancellableScope(cancellation_token):
@@ -62,20 +64,29 @@ class SecurityOrchestrator:
             effective_branch = target_branch or get_active_branch(repo_path)
 
             # 1. Discover all direct & transitive dependencies with introduction chains
+            if progress_callback:
+                progress_callback(10, "Discovering dependencies & parsing manifests...")
+            print(f"   ↳ Analyzing dependency graph across {effective_ecosystem} project...", flush=True)
             deps = DependencyGraphAnalyzer.analyze(repo_path, effective_ecosystem)
+            print(f"   ↳ Discovered {len(deps)} direct & transitive packages across manifests & lockfiles.", flush=True)
             check_cancelled(cancellation_token)
 
             # 2. Query vulnerability database with governance exemption evaluation
+            if progress_callback:
+                progress_callback(25, "Querying OSV vulnerability database...")
             report = self.scanner.scan_discovered_dependencies(
                 deps,
                 ecosystem=effective_ecosystem,
                 repo_path=str(repo_path),
                 governance_manager=self.governance,
+                progress_callback=lambda msg: print(f"   {msg}", flush=True),
             )
             check_cancelled(cancellation_token)
 
             # Mode: AUDIT
             if mode == "audit":
+                if progress_callback:
+                    progress_callback(100, "Audit completed.")
                 return RemediationResult(
                     mode="audit",
                     report=report,
@@ -85,7 +96,15 @@ class SecurityOrchestrator:
                 )
 
             # 3. Generate compatibility-aware remediation plan
+            if progress_callback:
+                progress_callback(40, "Calculating compatibility-aware remediation plan...")
             plan = RemediationPlanGenerator.generate_plan(report)
+            direct_cnt = sum(1 for item in plan.items if item.is_direct)
+            transitive_cnt = len(plan.items) - direct_cnt
+            print(
+                f"   ↳ Remediation plan computed: {len(plan.items)} updates ({direct_cnt} direct, {transitive_cnt} transitive).",
+                flush=True,
+            )
             check_cancelled(cancellation_token)
 
             # Mode: PREVIEW
@@ -187,6 +206,8 @@ class SecurityOrchestrator:
 
             try:
                 check_cancelled(cancellation_token)
+                if progress_callback:
+                    progress_callback(55, "Preparing isolated Stage A sandbox workspace...")
                 prepare_stage_a_workspace(
                     source_repo_path=repo_path,
                     target_workspace_path=sandbox_dir,
@@ -195,10 +216,15 @@ class SecurityOrchestrator:
                 check_cancelled(cancellation_token)
 
                 # 6. Apply minimal direct and transitive dependency changes inside sandbox
+                if progress_callback:
+                    progress_callback(65, "Applying security updates to sandbox manifests & lockfiles...")
+                print(f"   ↳ Applying {len(plan.items)} updates to sandbox...", flush=True)
                 _modified_files = RemediationEngine.apply_plan(sandbox_dir, effective_ecosystem, plan)
                 check_cancelled(cancellation_token)
 
                 # 7. Execute the 5 Verification Gates
+                if progress_callback:
+                    progress_callback(75, "Executing verification gates in sandbox...")
                 (
                     gates_passed,
                     confidence,
@@ -228,6 +254,8 @@ class SecurityOrchestrator:
                     )
 
                 # 8. Convert plan into DependencyChanges for Stage B publishing
+                if progress_callback:
+                    progress_callback(85, "Cryptographically signing and committing remediation...")
                 changes = RemediationPlanGenerator.plan_to_dependency_changes(plan)
                 check_cancelled(cancellation_token)
 

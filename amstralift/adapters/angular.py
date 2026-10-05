@@ -150,6 +150,10 @@ def get_angular_ecosystem_recommendation(
         if target_angular_major >= 16:
             return "^2.8.1"
 
+    if pkg_name in ("ng-packagr", "@angular-devkit/build-angular"):
+        if target_angular_major and target_angular_major >= 15:
+            return f"^{target_angular_major}.0.0"
+
     return None
 
 
@@ -167,13 +171,14 @@ def _align_angular_ecosystem_dependencies(repo_path: Path, target_major: int | N
     modified = False
     applied = []
 
-    deps = data.get("dependencies", {})
-    for pkg, cur_ver in list(deps.items()):
-        rec_ver = get_angular_ecosystem_recommendation(pkg, cur_ver, target_major)
-        if rec_ver and cur_ver != rec_ver:
-            deps[pkg] = rec_ver
-            modified = True
-            applied.append(f"Aligned {pkg} to {rec_ver} for Angular {target_major} compatibility")
+    for dep_sec in ("dependencies", "devDependencies"):
+        sec = data.get(dep_sec, {})
+        for pkg, cur_ver in list(sec.items()):
+            rec_ver = get_angular_ecosystem_recommendation(pkg, cur_ver, target_major)
+            if rec_ver and cur_ver != rec_ver:
+                sec[pkg] = rec_ver
+                modified = True
+                applied.append(f"Aligned {pkg} to {rec_ver} for Angular {target_major} compatibility")
 
     # For Angular 19+, ensure @angular/build is in devDependencies
     if target_major is None or target_major >= 19:
@@ -500,6 +505,114 @@ def _modernize_angular_tsconfig(repo_path: Path, target_major: int | None = None
                 )
             except Exception:
                 pass
+
+    return applied
+
+
+def _modernize_angular_libraries(repo_path: Path, target_major: int | None = None) -> list[str]:
+    """Modernize Angular library projects in the workspace.
+
+    1. Discovers library projects via angular.json or projects/*/package.json.
+    2. Updates library peerDependencies and dependencies for @angular/* packages and tslib.
+    3. Ensures local dist/<lib_name> placeholder package exists if referenced by file: dependency.
+    4. Updates tsconfig.json compilerOptions.paths to include source fallback (projects/<lib>/src/public-api.ts).
+    """
+    applied = []
+    angular_json = repo_path / "angular.json"
+    lib_names: set[str] = set()
+
+    if angular_json.exists():
+        try:
+            workspace = json.loads(angular_json.read_text(encoding="utf-8"))
+            for name, proj in workspace.get("projects", {}).items():
+                if isinstance(proj, dict) and proj.get("projectType") == "library":
+                    lib_names.add(name)
+        except Exception:
+            pass
+
+    # Discover all library package.json files
+    lib_pkg_files = list(repo_path.glob("projects/*/package.json"))
+    for pkg_f in lib_pkg_files:
+        lib_name = pkg_f.parent.name
+        lib_names.add(lib_name)
+        try:
+            data = json.loads(pkg_f.read_text(encoding="utf-8"))
+            modified = False
+            for sec in ("peerDependencies", "dependencies", "devDependencies"):
+                if sec in data and isinstance(data[sec], dict):
+                    for k, v in list(data[sec].items()):
+                        if k.startswith("@angular/"):
+                            if target_major is not None:
+                                new_v = f"^{target_major}.0.0"
+                                if v != new_v:
+                                    data[sec][k] = new_v
+                                    modified = True
+                        elif k == "tslib" and target_major and target_major >= 16:
+                            if v != "^2.8.1":
+                                data[sec][k] = "^2.8.1"
+                                modified = True
+            if modified:
+                pkg_f.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+                applied.append(f"Updated library '{lib_name}' package.json for Angular {target_major}")
+        except Exception:
+            pass
+
+    # If root package.json or projects reference dist/<lib_name>, create placeholder package.json so npm install succeeds
+    root_pkg = repo_path / "package.json"
+    if root_pkg.exists() and lib_names:
+        for name in lib_names:
+            dist_dir = repo_path / "dist" / name
+            dist_pkg = dist_dir / "package.json"
+            if not dist_pkg.exists():
+                try:
+                    dist_dir.mkdir(parents=True, exist_ok=True)
+                    dist_pkg.write_text(
+                        json.dumps({"name": name, "version": "0.0.1", "main": "index.js"}, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    pass
+
+    # Update tsconfig paths to ensure direct source fallback
+    for tsconfig_f in repo_path.glob("tsconfig*.json"):
+        try:
+            raw = tsconfig_f.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                continue
+            compiler_opts = data.setdefault("compilerOptions", {})
+            paths = compiler_opts.setdefault("paths", {})
+            modified_paths = False
+            for name in lib_names:
+                candidates = [
+                    f"projects/{name}/src/public-api.ts",
+                    f"projects/{name}/src/public_api.ts",
+                    f"projects/{name}/src/index.ts",
+                    f"projects/{name}/public-api.ts",
+                ]
+                entry = next((c for c in candidates if (repo_path / c).exists()), None)
+                if not entry:
+                    entry = f"projects/{name}/src/public-api.ts"
+
+                existing = paths.get(name)
+                if isinstance(existing, list):
+                    if entry not in existing:
+                        existing.append(entry)
+                        paths[name] = existing
+                        modified_paths = True
+                elif isinstance(existing, str):
+                    if existing != entry:
+                        paths[name] = [existing, entry]
+                        modified_paths = True
+                else:
+                    paths[name] = [f"dist/{name}", entry]
+                    modified_paths = True
+
+            if modified_paths:
+                tsconfig_f.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+                applied.append(f"Configured source fallback paths for library '{name}' in {tsconfig_f.name}")
+        except Exception:
+            pass
 
     return applied
 
@@ -1088,6 +1201,7 @@ class AngularAdapter(BaseAdapter):
         _modernize_angular_tsconfig(repo_path, target_major=target_major_int)
         _modernize_angular_stylesheets(repo_path)
         _modernize_angular_source_files(repo_path, target_major=target_major_int)
+        _modernize_angular_libraries(repo_path, target_major=target_major_int)
         _modernize_angular_gitignore(repo_path)
 
         # Update package-lock.json accurately using npm_lockfile
@@ -1311,6 +1425,9 @@ class AngularAdapter(BaseAdapter):
                 stale_lock.unlink(missing_ok=True)
             except Exception:
                 pass
+
+        # If workspace has library projects, pre-build them so dependent applications compile cleanly
+        self._build_workspace_libraries(repo_path, gate_env)
 
         for gate_name, script_cmd, is_required in gates:
             if not script_cmd:
@@ -1627,6 +1744,42 @@ class AngularAdapter(BaseAdapter):
 
         return "npm run test" if has_npm else raw_test_script
 
+    def _build_workspace_libraries(self, repo_path: Path, gate_env: dict[str, str]) -> None:
+        """Pre-build any library projects in the workspace so dependent applications can resolve them."""
+        angular_json = repo_path / "angular.json"
+        if not angular_json.exists():
+            return
+
+        try:
+            workspace = json.loads(angular_json.read_text(encoding="utf-8"))
+            lib_names = []
+            for name, proj in workspace.get("projects", {}).items():
+                if isinstance(proj, dict) and proj.get("projectType") == "library":
+                    lib_names.append(name)
+
+            if not lib_names:
+                return
+
+            has_npm = shutil.which("npm", path=gate_env.get("PATH")) is not None
+            for lib_name in lib_names:
+                print(f"   ↳ Pre-building workspace library '{lib_name}' for dependent applications...", flush=True)
+                build_cmd = f"npm exec -- ng build {lib_name}" if has_npm else f"npx ng build {lib_name}"
+                res = run_cancellable_subprocess(
+                    build_cmd,
+                    shell=True,
+                    cwd=repo_path,
+                    env=gate_env,
+                    capture_output=True,
+                    text=True,
+                    timeout=180.0,
+                )
+                if res.returncode == 0:
+                    print(f"   ✔ Workspace library '{lib_name}' built successfully.", flush=True)
+                else:
+                    err = (res.stderr or res.stdout or "").strip()
+                    logger.warning(f"Could not pre-build library '{lib_name}': {err[:300]}")
+        except Exception as e:
+            logger.warning(f"Failed to check workspace libraries: {e}")
 
     def get_declared_dependencies(self, repo_path: Path) -> dict[str, str]:
         pkg_file = repo_path / "package.json"

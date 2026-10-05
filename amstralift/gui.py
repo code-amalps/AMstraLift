@@ -1016,7 +1016,10 @@ class AMstraLiftGUI:
         if self.is_running:
             elapsed = int(time.time() - self.start_time)
             mins, secs = divmod(elapsed, 60)
-            self.timer_var.set(f"⏱ {mins:02d}:{secs:02d}")
+            spinners = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            self.spinner_idx = getattr(self, "spinner_idx", 0) + 1
+            s_glyph = spinners[self.spinner_idx % len(spinners)]
+            self.timer_var.set(f"{s_glyph} {mins:02d}:{secs:02d}")
             self.timer_id = self.root.after(1000, self._update_timer)
 
     def _set_running_state(self, is_running: bool, status_msg: str, progress_pct: int = 0):
@@ -1202,9 +1205,9 @@ class AMstraLiftGUI:
 
                 check_cancelled(self.cancellation_token)
                 print(f"Scanning dependencies in: {repo_path_str} (Mode: {mode})...\n")
-                if mode == "apply":
-                    print(f"Policy: Safe-only fixes: {safe_only} | Allow major upgrades: {allow_major}\n")
-                self.root.after(0, lambda: self.progress_bar.configure(value=30))
+                def _audit_progress_cb(pct: int, msg: str):
+                    self.root.after(0, lambda: self.status_var.set(msg))
+                    self.root.after(0, lambda: self.progress_bar.configure(value=pct))
 
                 result = orchestrator.run_remediation(
                     repo_path=Path(repo_path_str),
@@ -1212,6 +1215,7 @@ class AMstraLiftGUI:
                     allow_major=allow_major,
                     safe_only=safe_only,
                     cancellation_token=self.cancellation_token,
+                    progress_callback=_audit_progress_cb,
                 )
                 check_cancelled(self.cancellation_token)
 

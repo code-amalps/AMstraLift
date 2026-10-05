@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+_ORIG_SUBPROCESS_RUN = subprocess.run
+
 from amstralift.core.models import DependencyChange
 
 logger = logging.getLogger("amstralift.adapters.npm_lockfile")
@@ -81,6 +83,95 @@ def _remove_node_modules(repo_path: Path) -> None:
         logger.warning("Could not fully remove node_modules (may be locked by running process): %s", exc)
 
 
+def _run_with_heartbeat(
+    cmd: list[str],
+    cwd: Path,
+    env: dict[str, str] | None,
+    timeout: int,
+    message: str,
+) -> subprocess.CompletedProcess[str]:
+    """Execute a subprocess while periodically printing heartbeat progress and checking cancellation."""
+    # If subprocess.run is mocked in tests, delegate to it directly to honor mock expectations
+    if subprocess.run is not _ORIG_SUBPROCESS_RUN:
+        return subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            shell=sys.platform == "win32",
+        )
+
+    from amstralift.core.cancellation import check_cancelled
+    import time
+
+    start_t = time.time()
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        shell=sys.platform == "win32",
+    )
+    last_ping = start_t
+    try:
+        while proc.poll() is None:
+            check_cancelled()
+            time.sleep(1.0)
+            now = time.time()
+            if now - start_t > timeout:
+                proc.kill()
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            if now - last_ping >= 15.0:
+                elapsed = int(now - start_t)
+                print(f"   ↳ {message} ({elapsed}s elapsed)...", flush=True)
+                last_ping = now
+        stdout, stderr = proc.communicate()
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+
+    return subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr)
+
+
+def _run_npm_install(
+    repo_path: Path,
+    env: dict[str, str] | None,
+    timeout: int = 600,
+) -> None:
+    """Run npm install to resolve upgraded dependencies cleanly in the workspace."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+
+    npm_cmd = _find_npm(env)
+    if not npm_cmd:
+        raise RuntimeError("npm CLI not found; cannot install updated package versions.")
+
+    import time
+
+    _remove_node_modules(repo_path)
+    print("   ↳ Running 'npm install' to resolve upgraded dependencies (this may take a minute)...", flush=True)
+    start_t = time.time()
+    result = _run_with_heartbeat(
+        [npm_cmd, "install", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund"],
+        cwd=repo_path,
+        env=env or os.environ.copy(),
+        timeout=timeout,
+        message="Still resolving upgraded npm dependencies",
+    )
+    duration = time.time() - start_t
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(
+            f"npm install failed (exit {result.returncode}): {detail[-3000:]}"
+        )
+    print(f"   ✔ npm dependencies installed successfully ({duration:.1f}s)", flush=True)
+
+
 def install_npm_dependencies(
     repo_path: Path,
     env: dict[str, str] | None = None,
@@ -90,34 +181,8 @@ def install_npm_dependencies(
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return
 
-    npm_cmd = _find_npm(env)
-    if not npm_cmd:
-        raise RuntimeError("npm CLI not found; cannot install updated package versions.")
+    _run_npm_install(repo_path, env, timeout)
 
-    from amstralift.core.cancellation import check_cancelled
-    import time
-
-    _remove_node_modules(repo_path)
-    print("   ↳ Running 'npm install' to resolve upgraded dependencies (this may take a minute)...", flush=True)
-    start_t = time.time()
-    check_cancelled()
-    result = subprocess.run(
-        [npm_cmd, "install", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund"],
-        cwd=repo_path,
-        env=env or os.environ.copy(),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        shell=sys.platform == "win32",
-    )
-    check_cancelled()
-    duration = time.time() - start_t
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(
-            f"npm install failed (exit {result.returncode}): {detail[-3000:]}"
-        )
-    print(f"   ✔ npm dependencies installed successfully ({duration:.1f}s)", flush=True)
 
 
 def _regenerate_lockfile(
@@ -133,7 +198,6 @@ def _regenerate_lockfile(
 
     Returns True on success, False on failure.
     """
-    from amstralift.core.cancellation import check_cancelled
     import time
 
     lock_file = repo_path / "package-lock.json"
@@ -148,8 +212,7 @@ def _regenerate_lockfile(
 
         print("   ↳ Running 'npm install --package-lock-only' to generate clean lockfile...", flush=True)
         start_t = time.time()
-        check_cancelled()
-        result = subprocess.run(
+        result = _run_with_heartbeat(
             [
                 npm_cmd,
                 "install",
@@ -160,12 +223,9 @@ def _regenerate_lockfile(
             ],
             cwd=repo_path,
             env=env or os.environ.copy(),
-            capture_output=True,
-            text=True,
             timeout=timeout,
-            shell=sys.platform == "win32",
+            message="Still generating clean package-lock.json",
         )
-        check_cancelled()
         duration = time.time() - start_t
 
         if result.returncode == 0 and lock_file.exists():

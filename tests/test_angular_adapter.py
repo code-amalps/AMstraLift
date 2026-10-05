@@ -1113,6 +1113,71 @@ def test_angular_apply_upgrade_excludes_native_binary_overrides(tmp_path: Path):
     assert "some-dep" not in data["overrides"]
 
 
+def test_modernize_angular_libraries(tmp_path: Path):
+    from amstralift.adapters.angular import _align_angular_ecosystem_dependencies, _modernize_angular_libraries
+
+    angular_json = {
+        "version": 1,
+        "projects": {
+            "my-app": {"projectType": "application"},
+            "abc-angular-lib": {"projectType": "library", "root": "projects/abc-angular-lib"},
+        },
+    }
+    (tmp_path / "angular.json").write_text(json.dumps(angular_json), encoding="utf-8")
+
+    root_pkg = {
+        "name": "my-app",
+        "devDependencies": {
+            "ng-packagr": "^14.0.0",
+        },
+    }
+    (tmp_path / "package.json").write_text(json.dumps(root_pkg), encoding="utf-8")
+
+    lib_dir = tmp_path / "projects" / "abc-angular-lib"
+    lib_dir.mkdir(parents=True)
+    lib_pkg = {
+        "name": "abc-angular-lib",
+        "peerDependencies": {
+            "@angular/core": "^14.0.0",
+            "@angular/common": "^14.0.0",
+        },
+        "dependencies": {
+            "tslib": "^2.3.0",
+        },
+    }
+    (lib_dir / "package.json").write_text(json.dumps(lib_pkg), encoding="utf-8")
+    (lib_dir / "src").mkdir(parents=True)
+    (lib_dir / "src" / "public-api.ts").write_text("export const LIB = true;\n", encoding="utf-8")
+
+    tsconfig = {
+        "compilerOptions": {
+            "paths": {
+                "abc-angular-lib": ["dist/abc-angular-lib"],
+            },
+        },
+    }
+    (tmp_path / "tsconfig.json").write_text(json.dumps(tsconfig), encoding="utf-8")
+
+    _align_angular_ecosystem_dependencies(tmp_path, target_major=18)
+    applied = _modernize_angular_libraries(tmp_path, target_major=18)
+    assert len(applied) > 0
+
+    updated_root = json.loads((tmp_path / "package.json").read_text(encoding="utf-8"))
+    assert updated_root["devDependencies"]["ng-packagr"] == "^18.0.0"
+
+    updated_lib = json.loads((lib_dir / "package.json").read_text(encoding="utf-8"))
+    assert updated_lib["peerDependencies"]["@angular/core"] == "^18.0.0"
+    assert updated_lib["peerDependencies"]["@angular/common"] == "^18.0.0"
+    assert updated_lib["dependencies"]["tslib"] == "^2.8.1"
+
+    updated_tsconfig = json.loads((tmp_path / "tsconfig.json").read_text(encoding="utf-8"))
+    paths = updated_tsconfig["compilerOptions"]["paths"]["abc-angular-lib"]
+    assert "dist/abc-angular-lib" in paths
+    assert "projects/abc-angular-lib/src/public-api.ts" in paths
+
+    assert (tmp_path / "dist" / "abc-angular-lib" / "package.json").exists()
+
+
 
 
 

@@ -84,6 +84,7 @@ def run_stage_a(
     # 1. Discover upgrade candidates or use explicit changes
     _notify(1, 5, 10, "🔍 Analyzing repository and discovering dependencies...")
     candidates = explicit_changes if explicit_changes is not None else adapter.discover_candidates(workspace_path)
+    print(f"   ↳ Discovered {len(candidates)} upgradable dependency candidate(s).", flush=True)
 
     # 1b. Auto-discover direct and transitive dependencies with CVEs and add safe non-breaking remediation
     if remediate_cves and explicit_changes is None:
@@ -94,17 +95,21 @@ def run_stage_a(
             from amstralift.security.osv_client import OSVClient
             from amstralift.security.plan_generator import RemediationPlanGenerator
 
+            print(f"   ↳ Analyzing dependency tree across workspace ({adapter.name})...", flush=True)
             all_deps = DependencyGraphAnalyzer.analyze(workspace_path, adapter.name)
             if all_deps:
+                print(f"   ↳ Discovered {len(all_deps)} direct & transitive packages.", flush=True)
                 scanner = OSVClient()
                 audit_report = scanner.scan_discovered_dependencies(
                     all_deps,
                     ecosystem=adapter.name,
                     repo_path=str(workspace_path),
+                    progress_callback=lambda msg: print(f"   {msg}", flush=True),
                 )
                 if audit_report.findings:
                     plan = RemediationPlanGenerator.generate_plan(audit_report)
                     cve_changes = RemediationPlanGenerator.plan_to_dependency_changes(plan)
+                    print(f"   ↳ Evaluated vulnerabilities: {len(audit_report.findings)} advisories, {len(cve_changes)} fixes planned.", flush=True)
                     existing_names = {c.package_name for c in candidates}
                     for change in cve_changes:
                         if change.package_name in existing_names:
