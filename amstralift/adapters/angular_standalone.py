@@ -17,6 +17,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from amstralift.core.workspace import safe_rglob
+
 
 EXCLUDED_DIRS = {
     "node_modules",
@@ -208,30 +210,26 @@ def modernize_angular_material_templates(repo_path: Path) -> list[str]:
     applied = []
     modified_count = 0
 
-    for ext in ("*.html", "*.ts"):
-        for file_path in repo_path.rglob(ext):
-            if any(p in EXCLUDED_DIRS for p in file_path.parts):
-                continue
+    for file_path in safe_rglob(repo_path, ["*.html", "*.ts"]):
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except Exception:
+            continue
 
+        modified = False
+        if "<mat-placeholder" in content:
+            content = content.replace("<mat-placeholder", "<mat-label").replace("</mat-placeholder>", "</mat-label>")
+            modified = True
+        if "<mat-chip-list" in content:
+            content = content.replace("<mat-chip-list", "<mat-chip-set").replace("</mat-chip-list>", "</mat-chip-set>")
+            modified = True
+
+        if modified:
             try:
-                content = file_path.read_text(encoding="utf-8")
+                file_path.write_text(content, encoding="utf-8")
+                modified_count += 1
             except Exception:
-                continue
-
-            modified = False
-            if "<mat-placeholder" in content:
-                content = content.replace("<mat-placeholder", "<mat-label").replace("</mat-placeholder>", "</mat-label>")
-                modified = True
-            if "<mat-chip-list" in content:
-                content = content.replace("<mat-chip-list", "<mat-chip-set").replace("</mat-chip-list>", "</mat-chip-set>")
-                modified = True
-
-            if modified:
-                try:
-                    file_path.write_text(content, encoding="utf-8")
-                    modified_count += 1
-                except Exception:
-                    pass
+                pass
 
     if modified_count > 0:
         applied.append(
@@ -248,9 +246,7 @@ def modernize_ngmodules_with_standalone_components(
         return []
 
     applied = []
-    for ts_file in repo_path.rglob("*.ts"):
-        if any(p in EXCLUDED_DIRS for p in ts_file.parts):
-            continue
+    for ts_file in safe_rglob(repo_path, "*.ts"):
         if ts_file.name.endswith(".spec.ts") or ts_file.name.endswith(".d.ts"):
             continue
 
@@ -361,15 +357,13 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
     applied = []
 
     # 1. Locate SharedModule
-    shared_files = list(repo_path.rglob("*shared.module.ts"))
+    shared_files = safe_rglob(repo_path, "*shared.module.ts")
     shared_module_path = shared_files[0] if shared_files else None
     shared_dir = shared_module_path.parent if shared_module_path else None
 
     # 2. Build Component Registry mapping selectors to class name and path across all *.ts files
     component_files: list[Path] = []
-    for f in repo_path.rglob("*.ts"):
-        if any(p in EXCLUDED_DIRS for p in f.parts):
-            continue
+    for f in safe_rglob(repo_path, "*.ts"):
         if f.name.endswith(".spec.ts") or f.name.endswith(".d.ts"):
             continue
         try:

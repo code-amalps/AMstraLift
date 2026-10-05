@@ -20,6 +20,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from amstralift.core.workspace import safe_rglob
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Image tag mapping tables
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,15 +116,7 @@ _COMPOSE_IMAGE_RE = re.compile(
 
 def _find_dockerfiles(repo_path: Path) -> list[Path]:
     """Find all Dockerfiles and Dockerfile.* variants in the repository."""
-    found: list[Path] = []
-    for p in repo_path.rglob("Dockerfile*"):
-        # Skip files inside node_modules, .git, bin, obj
-        parts_lower = {part.lower() for part in p.parts}
-        if parts_lower & {"node_modules", ".git", "bin", "obj", "__pycache__"}:
-            continue
-        if p.is_file():
-            found.append(p)
-    return found
+    return safe_rglob(repo_path, "Dockerfile*")
 
 
 def _find_compose_files(repo_path: Path) -> list[Path]:

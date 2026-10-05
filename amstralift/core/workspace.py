@@ -4,6 +4,7 @@ Ensures Stage A receives a sanitized workspace with zero write credentials,
 and provides Stage B with re-diff verification and head concurrency checks.
 """
 
+import fnmatch
 import os
 import shutil
 import subprocess
@@ -51,6 +52,72 @@ STANDARD_IGNORED_DIRS: tuple[str, ...] = (
 )
 
 EPHEMERAL_CACHE_DIRS = STANDARD_IGNORED_DIRS
+
+
+def safe_rglob(
+    root: Path,
+    patterns: str | list[str] | tuple[str, ...],
+    excluded_dirs: set[str] | tuple[str, ...] = STANDARD_IGNORED_DIRS,
+) -> list[Path]:
+    """Safely recursively find files matching one or more glob patterns.
+
+    Guarantees:
+    1. Prunes excluded directories (like node_modules, .git, bin, obj, dist) top-down,
+       so the walker NEVER descends into them.
+    2. Uses followlinks=False so directory symlinks and junctions are never traversed.
+    3. Handles OS filesystem errors gracefully (e.g. WinError 3, PermissionError) without crashing.
+    4. Only returns existing, accessible files matching the pattern(s).
+    """
+    if not root.exists() or not root.is_dir():
+        return []
+
+    if isinstance(patterns, str):
+        patterns = [patterns]
+
+    clean_patterns: list[tuple[str, str]] = []
+    for pat in patterns:
+        p = pat.replace("\\", "/")
+        if p.startswith("**/"):
+            p = p[3:]
+        clean_patterns.append((pat, p))
+
+    excluded_lower = {d.lower() for d in excluded_dirs} | {".git"}
+    results: list[Path] = []
+
+    def _ignore_walk_error(err: OSError) -> None:
+        pass
+
+    for dirpath, dirnames, filenames in os.walk(
+        root, topdown=True, onerror=_ignore_walk_error, followlinks=False
+    ):
+        # Prune excluded directories in-place so os.walk never recurses into them
+        dirnames[:] = [d for d in dirnames if d.lower() not in excluded_lower]
+
+        current_dir = Path(dirpath)
+        for fname in filenames:
+            matched = False
+            for raw_pat, file_pat in clean_patterns:
+                if fnmatch.fnmatch(fname, file_pat):
+                    matched = True
+                    break
+                if "/" in raw_pat or "\\" in raw_pat:
+                    try:
+                        rel = (current_dir / fname).relative_to(root)
+                        if rel.match(raw_pat):
+                            matched = True
+                            break
+                    except Exception:
+                        pass
+            if matched:
+                file_path = current_dir / fname
+                try:
+                    if file_path.is_file():
+                        results.append(file_path)
+                except OSError:
+                    pass
+
+    return sorted(results)
+
 
 
 def configure_sandbox_git_excludes(workspace_path: Path) -> None:

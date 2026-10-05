@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
+from amstralift.core.workspace import safe_rglob
 from amstralift.security.models import DiscoveredDependency
 
 
@@ -159,7 +160,7 @@ class DependencyGraphAnalyzer:
         direct_pkgs: set[str] = set()
 
         # 1. Inspect Directory.Packages.props (Central Package Management)
-        for props_path in repo_path.glob("**/Directory.Packages.props"):
+        for props_path in safe_rglob(repo_path, "Directory.Packages.props"):
             try:
                 tree = ET.parse(props_path)
                 root = tree.getroot()
@@ -180,7 +181,7 @@ class DependencyGraphAnalyzer:
                 pass
 
         # 2. Inspect all .csproj files
-        for csproj_path in repo_path.glob("**/*.csproj"):
+        for csproj_path in safe_rglob(repo_path, "*.csproj"):
             try:
                 tree = ET.parse(csproj_path)
                 root = tree.getroot()
@@ -206,7 +207,7 @@ class DependencyGraphAnalyzer:
                 pass
 
         # 3. Inspect packages.lock.json for transitive dependencies
-        for lock_path in repo_path.glob("**/packages.lock.json"):
+        for lock_path in safe_rglob(repo_path, "packages.lock.json"):
             try:
                 data = json.loads(lock_path.read_text(encoding="utf-8"))
                 for tf_name, tf_data in data.get("dependencies", {}).items():

@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from amstralift.adapters.base import get_node_execution_env
+from amstralift.core.workspace import safe_rglob
 from amstralift.security.models import RemediationPlan
 
 
@@ -135,7 +136,7 @@ class RemediationEngine:
         modified_files: list[str] = []
 
         # 1. Check Directory.Packages.props (Central Package Management)
-        props_files = list(repo_path.glob("**/Directory.Packages.props"))
+        props_files = safe_rglob(repo_path, "Directory.Packages.props")
         cpm_handled: set[str] = set()
 
         for props_path in props_files:
@@ -153,7 +154,7 @@ class RemediationEngine:
                 modified_files.append(str(props_path.relative_to(repo_path)))
 
         # 2. Update .csproj files
-        csproj_files = list(repo_path.glob("**/*.csproj"))
+        csproj_files = safe_rglob(repo_path, "*.csproj")
         for csproj_path in csproj_files:
             content = csproj_path.read_text(encoding="utf-8")
             orig_content = content

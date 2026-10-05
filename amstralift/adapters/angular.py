@@ -22,6 +22,7 @@ from amstralift.core.cancellation import (
     check_cancelled,
     run_cancellable_subprocess,
 )
+from amstralift.core.workspace import safe_rglob
 from amstralift.core.models import (
     DependencyChange,
     DependencyTier,
@@ -407,11 +408,8 @@ def _modernize_angular_tsconfig(repo_path: Path, target_major: int | None = None
     - Removes deprecated 'fullTemplateTypeCheck' from 'angularCompilerOptions'
     """
     applied = []
-    excluded_dirs = {"node_modules", ".angular", ".nx", ".git", "dist", "coverage", ".venv"}
 
-    for tsconfig_file in repo_path.rglob("tsconfig*.json"):
-        if any(part in excluded_dirs for part in tsconfig_file.parts):
-            continue
+    for tsconfig_file in safe_rglob(repo_path, "tsconfig*.json"):
 
         try:
             raw_text = tsconfig_file.read_text(encoding="utf-8")
@@ -557,8 +555,33 @@ def _modernize_angular_libraries(repo_path: Path, target_major: int | None = Non
         except Exception:
             pass
 
-    # If root package.json or projects reference dist/<lib_name>, create placeholder package.json so npm install succeeds
+    # If root package.json or projects reference dist/<lib_name> or file:/link: dependencies,
+    # create placeholder package.json + index.js so npm install/junction creation succeeds cleanly
     root_pkg = repo_path / "package.json"
+    if root_pkg.exists():
+        try:
+            root_data = json.loads(root_pkg.read_text(encoding="utf-8"))
+            for sec in ("dependencies", "devDependencies"):
+                for dep_name, dep_val in root_data.get(sec, {}).items():
+                    if isinstance(dep_val, str) and (dep_val.startswith("file:") or dep_val.startswith("link:")):
+                        lib_names.add(dep_name)
+                        target_sub = dep_val.split(":", 1)[1].strip().replace("\\", "/").strip("./")
+                        if target_sub:
+                            target_dir = repo_path / target_sub
+                            target_pkg = target_dir / "package.json"
+                            if not target_pkg.exists():
+                                try:
+                                    target_dir.mkdir(parents=True, exist_ok=True)
+                                    target_pkg.write_text(
+                                        json.dumps({"name": dep_name, "version": "0.0.1", "main": "index.js"}, indent=2) + "\n",
+                                        encoding="utf-8",
+                                    )
+                                    (target_dir / "index.js").write_text("export {};\n", encoding="utf-8")
+                                except Exception:
+                                    pass
+        except Exception:
+            pass
+
     if root_pkg.exists() and lib_names:
         for name in lib_names:
             dist_dir = repo_path / "dist" / name
@@ -570,11 +593,12 @@ def _modernize_angular_libraries(repo_path: Path, target_major: int | None = Non
                         json.dumps({"name": name, "version": "0.0.1", "main": "index.js"}, indent=2) + "\n",
                         encoding="utf-8",
                     )
+                    (dist_dir / "index.js").write_text("export {};\n", encoding="utf-8")
                 except Exception:
                     pass
 
     # Update tsconfig paths to ensure direct source fallback
-    for tsconfig_f in repo_path.glob("tsconfig*.json"):
+    for tsconfig_f in safe_rglob(repo_path, "tsconfig*.json"):
         try:
             raw = tsconfig_f.read_text(encoding="utf-8")
             data = json.loads(raw)
@@ -646,10 +670,7 @@ def _modernize_angular_stylesheets(repo_path: Path, target_major: int | None = N
 
     count = 0
     m2_count = 0
-    for ext in ("*.scss", "*.sass", "*.css"):
-        for file_path in repo_path.rglob(ext):
-            if any(part in excluded_dirs for part in file_path.parts):
-                continue
+    for file_path in safe_rglob(repo_path, ["*.scss", "*.sass", "*.css"]):
             try:
                 content = file_path.read_text(encoding="utf-8")
                 orig_content = content
@@ -693,9 +714,7 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
     raw_loader_count = 0
     test_bootstrap_count = 0
 
-    for ts_file in repo_path.rglob("*.ts"):
-        if any(part in excluded_dirs for part in ts_file.parts):
-            continue
+    for ts_file in safe_rglob(repo_path, "*.ts"):
 
         try:
             content = ts_file.read_text(encoding="utf-8")
@@ -1672,11 +1691,7 @@ class AngularAdapter(BaseAdapter):
         is_karma = "karma" in script_lower
 
         if is_ng_test or is_karma:
-            # Check all karma configs in the repository (excluding node_modules)
-            karma_confs = [
-                p for p in repo_path.rglob("karma*.conf*.js")
-                if "node_modules" not in p.parts
-            ]
+            karma_confs = safe_rglob(repo_path, "karma*.conf*.js")
             test_builders: list[str] = []
             angular_json = repo_path / "angular.json"
             if angular_json.exists():

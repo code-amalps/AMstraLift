@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from amstralift.core.workspace import safe_rglob
+
 VOID_TAGS = {
     "img",
     "input",
@@ -230,10 +232,7 @@ def migrate_repository_control_flow(repo_path: Path) -> dict[str, int]:
     Returns dict mapping modified file path relative to repo to count of transformations.
     """
     stats: dict[str, int] = {}
-    for html_file in repo_path.glob("**/*.html"):
-        parts = html_file.parts
-        if "node_modules" in parts or "dist" in parts or ".git" in parts or ".angular" in parts:
-            continue
+    for html_file in safe_rglob(repo_path, "*.html"):
 
         try:
             original = html_file.read_text(encoding="utf-8")

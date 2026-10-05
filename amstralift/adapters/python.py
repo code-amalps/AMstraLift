@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 
 from amstralift.adapters.base import BaseAdapter
+from amstralift.core.workspace import safe_rglob
 from amstralift.core.models import (
     DependencyChange,
     DependencyTier,
@@ -359,8 +360,9 @@ class PythonAdapter(BaseAdapter):
                 else:
                     applied.append(f"Ruff syntax check returned exit code {res.returncode}")
             elif shutil.which("pyupgrade"):
+                py_files = [str(p) for p in safe_rglob(repo_path, "*.py")]
                 res = subprocess.run(
-                    ["pyupgrade", "--py311-plus", "--exit-zero-even-if-changed", *[str(p) for p in repo_path.glob("**/*.py")]],
+                    ["pyupgrade", "--py311-plus", "--exit-zero-even-if-changed", *py_files],
                     cwd=repo_path,
                     capture_output=True,
                     text=True,

@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 
 from amstralift.adapters.base import BaseAdapter
+from amstralift.core.workspace import safe_rglob
 from amstralift.core.models import (
     DependencyChange,
     DependencyTier,
@@ -78,8 +79,8 @@ class DotNetAdapter(BaseAdapter):
             any(repo_path.glob("*.csproj"))
             or any(repo_path.glob("*.sln"))
             or any(repo_path.glob("*.fsproj"))
-            or any(repo_path.glob("**/*.csproj"))
-            or any(repo_path.glob("**/*.sln"))
+            or bool(safe_rglob(repo_path, "*.csproj"))
+            or bool(safe_rglob(repo_path, "*.sln"))
         )
 
     def fetch_latest_version(self, package_name: str) -> str | None:
@@ -103,7 +104,7 @@ class DotNetAdapter(BaseAdapter):
     def discover_candidates(self, repo_path: Path) -> list[DependencyChange]:
         """Scan *.csproj files for TargetFramework and PackageReference entries."""
         candidates: list[DependencyChange] = []
-        csproj_files = list(repo_path.glob("**/*.csproj"))
+        csproj_files = safe_rglob(repo_path, "*.csproj")
 
         # 1. Discover TargetFramework upgrades
         discovered_tfms: set[str] = set()
@@ -164,7 +165,7 @@ class DotNetAdapter(BaseAdapter):
 
     def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange]) -> None:
         """Apply package and TargetFramework updates to *.csproj files and packages.lock.json."""
-        csproj_files = list(repo_path.glob("**/*.csproj"))
+        csproj_files = safe_rglob(repo_path, "*.csproj")
         for csproj in csproj_files:
             content = csproj.read_text(encoding="utf-8")
             for c in changes:
@@ -177,7 +178,7 @@ class DotNetAdapter(BaseAdapter):
                     content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
             csproj.write_text(content, encoding="utf-8")
 
-        for lock_file in repo_path.glob("**/packages.lock.json"):
+        for lock_file in safe_rglob(repo_path, "packages.lock.json"):
             lock_content = lock_file.read_text(encoding="utf-8")
             for c in changes:
                 if c.package_name != "Microsoft.NET.TargetFramework":
@@ -291,7 +292,7 @@ class DotNetAdapter(BaseAdapter):
 
     def get_declared_dependencies(self, repo_path: Path) -> dict[str, str]:
         deps: dict[str, str] = {}
-        for csproj in repo_path.glob("**/*.csproj"):
+        for csproj in safe_rglob(repo_path, "*.csproj"):
             try:
                 tree = ET.parse(csproj)
                 for pr in tree.getroot().findall(".//PackageReference"):

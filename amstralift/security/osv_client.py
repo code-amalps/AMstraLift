@@ -4,10 +4,13 @@ Provides free, fast vulnerability lookups across npm, NuGet, and PyPI.
 Docs: https://google.github.io/osv.dev/post-v1-query/
 """
 
+import logging
 import re
 from typing import Any, Callable
 
 import httpx
+
+logger = logging.getLogger("amstralift.security.osv_client")
 
 from amstralift.governance.vulnerabilities import VulnerabilitySeverity
 from amstralift.security.models import AuditReport, VulnerabilityFinding
@@ -125,8 +128,11 @@ def select_minimal_fixed_version(current_ver: str, fixed_versions: list[str]) ->
 class OSVClient:
     """Client for scanning dependencies using OSV.dev API."""
 
-    def __init__(self, timeout_seconds: float = 10.0):
+    def __init__(self, timeout_seconds: float = 10.0, max_scan_seconds: float = 60.0):
         self.timeout_seconds = timeout_seconds
+        self.max_scan_seconds = max_scan_seconds
+        self._vuln_cache: dict[str, dict[str, Any]] = {}
+        self._dep_query_cache: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
 
     def map_ecosystem(self, ecosystem: str) -> str:
         eco_clean = ecosystem.lower().strip()
@@ -182,40 +188,37 @@ class OSVClient:
                 findings=[],
             )
 
-        # Batch query in chunks of 100
-        items = list(dependencies.items())
+        # Filter valid items and clean versions
+        items = [
+            (pkg, ver.lstrip("^~>=<v").strip())
+            for pkg, ver in dependencies.items()
+            if ver and ver != "*"
+        ]
         chunk_size = 100
 
-        for i in range(0, len(items), chunk_size):
-            chunk = items[i : i + chunk_size]
-            queries = [
-                {
-                    "package": {"name": pkg, "ecosystem": osv_eco},
-                    "version": ver.lstrip("^~>=<v").strip(),
-                }
-                for pkg, ver in chunk
-                if ver and ver != "*"
-            ]
+        with httpx.Client(timeout=self.timeout_seconds * 1.5) as client:
+            for i in range(0, len(items), chunk_size):
+                chunk = items[i : i + chunk_size]
+                queries = [
+                    {"package": {"name": pkg, "ecosystem": osv_eco}, "version": ver}
+                    for pkg, ver in chunk
+                ]
 
-            if not queries:
-                continue
-
-            try:
-                with httpx.Client(timeout=self.timeout_seconds * 2) as client:
+                try:
                     res = client.post(OSV_BATCH_URL, json={"queries": queries})
                     if res.status_code == 200:
                         batch_res = res.json().get("results", [])
                         for idx, item in enumerate(batch_res):
-                            vulns = item.get("vulns", [])
-                            pkg_name, cur_ver = chunk[idx]
-                            for v in vulns:
-                                finding = self._build_finding(v, pkg_name, cur_ver, osv_eco)
-                                if finding:
-                                    findings.append(finding)
-            except Exception:
-                # If batch query fails, fall back to individual queries for this chunk
-                for pkg, ver in chunk:
-                    findings.extend(self.query_package(pkg, ver, ecosystem))
+                            if idx < len(chunk):
+                                vulns = item.get("vulns", [])
+                                pkg_name, cur_ver = chunk[idx]
+                                self._dep_query_cache[(pkg_name, cur_ver, osv_eco)] = vulns
+                                for v in vulns:
+                                    finding = self._build_finding(v, pkg_name, cur_ver, osv_eco, client=client)
+                                    if finding:
+                                        findings.append(finding)
+                except Exception as exc:
+                    logger.debug("OSV batch query failed for chunk: %s", exc)
 
         findings.sort(key=lambda f: SEVERITY_RANK.get(f.severity, 0), reverse=True)
         return AuditReport(
@@ -321,62 +324,105 @@ class OSVClient:
             )
 
         start_t = time.time()
-        chunk_size = 100
-        total_chunks = (len(dependencies) + chunk_size - 1) // chunk_size
 
-        with httpx.Client(timeout=self.timeout_seconds * 2) as client:
-            for chunk_idx, i in enumerate(range(0, len(dependencies), chunk_size)):
-                chunk = dependencies[i : i + chunk_size]
-                progress_msg = f"↳ Querying OSV database: Batch {chunk_idx + 1}/{total_chunks} ({len(chunk)} packages)..."
+        # 1. Group dependencies by (package_name, clean_ver) to deduplicate queries
+        dep_map: dict[tuple[str, str], list[Any]] = {}
+        for dep in dependencies:
+            clean_ver = dep.version.lstrip("^~>=<v").strip() if dep.version and dep.version != "*" else ""
+            dep_map.setdefault((dep.package_name, clean_ver), []).append(dep)
+
+        # 2. Separate cached vs uncached unique keys
+        uncached_keys: list[tuple[str, str]] = []
+        vulns_by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
+
+        for (pkg_name, clean_ver) in dep_map.keys():
+            if not clean_ver:
+                continue
+            cache_key = (pkg_name, clean_ver, osv_eco)
+            if cache_key in self._dep_query_cache:
+                vulns_by_key[(pkg_name, clean_ver)] = self._dep_query_cache[cache_key]
+            else:
+                uncached_keys.append((pkg_name, clean_ver))
+
+        # 3. Query uncached unique keys in chunks
+        chunk_size = 100
+        total_chunks = (len(uncached_keys) + chunk_size - 1) // chunk_size if uncached_keys else 0
+
+        with httpx.Client(timeout=self.timeout_seconds * 1.5) as client:
+            for chunk_idx, i in enumerate(range(0, len(uncached_keys), chunk_size)):
+                if time.time() - start_t > self.max_scan_seconds:
+                    timeout_msg = f"↳ [Warning] OSV database scan exceeded {int(self.max_scan_seconds)}s time budget; proceeding with partial results."
+                    if progress_callback:
+                        progress_callback(timeout_msg)
+                    else:
+                        print(f"   {timeout_msg}", flush=True)
+                    break
+
+                chunk_keys = uncached_keys[i : i + chunk_size]
+                progress_msg = f"↳ Querying OSV database: Batch {chunk_idx + 1}/{total_chunks} ({len(chunk_keys)} unique packages)..."
                 if progress_callback:
                     progress_callback(progress_msg)
                 else:
                     print(f"   {progress_msg}", flush=True)
 
                 queries = [
-                    {
-                        "package": {"name": dep.package_name, "ecosystem": osv_eco},
-                        "version": dep.version.lstrip("^~>=<v").strip(),
-                    }
-                    for dep in chunk
-                    if dep.version and dep.version != "*"
+                    {"package": {"name": pkg, "ecosystem": osv_eco}, "version": ver}
+                    for pkg, ver in chunk_keys
                 ]
 
-                if not queries:
-                    continue
+                def _post_batch(batch_queries: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
+                    try:
+                        res = client.post(OSV_BATCH_URL, json={"queries": batch_queries})
+                        if res.status_code == 200:
+                            return res.json().get("results", [])
+                    except Exception:
+                        pass
+                    return None
 
-                try:
-                    res = client.post(OSV_BATCH_URL, json={"queries": queries})
-                    if res.status_code == 200:
-                        batch_res = res.json().get("results", [])
-                        for idx, item in enumerate(batch_res):
-                            vulns = item.get("vulns", [])
-                            dep = chunk[idx]
-                            for v in vulns:
-                                finding = self._build_finding(v, dep.package_name, dep.version, osv_eco, client=client)
-                                if finding:
-                                    finding.is_direct = dep.is_direct
-                                    finding.introduced_by = dep.introduced_by
-                                    if governance_manager:
-                                        cov = governance_manager.check_coverage(
-                                            finding.cve_id, finding.package_name, finding.current_version
-                                        )
-                                        if cov:
-                                            finding.is_exempted = True
-                                            finding.exemption_id = cov.exception_id
-                                    findings.append(finding)
-                except Exception:
-                    for dep in chunk:
-                        sub_findings = self.query_package(dep.package_name, dep.version, ecosystem)
-                        for sf in sub_findings:
-                            sf.is_direct = dep.is_direct
-                            sf.introduced_by = dep.introduced_by
-                            if governance_manager:
-                                cov = governance_manager.check_coverage(sf.cve_id, sf.package_name, sf.current_version)
-                                if cov:
-                                    sf.is_exempted = True
-                                    sf.exemption_id = cov.exception_id
-                        findings.extend(sub_findings)
+                batch_results = _post_batch(queries)
+                if batch_results is None and len(queries) > 25:
+                    # Retry in two smaller sub-batches
+                    mid = len(queries) // 2
+                    sub1 = _post_batch(queries[:mid])
+                    sub2 = _post_batch(queries[mid:])
+                    if sub1 is not None and sub2 is not None:
+                        batch_results = sub1 + sub2
+
+                if batch_results is not None:
+                    for idx, item in enumerate(batch_results):
+                        if idx < len(chunk_keys):
+                            k = chunk_keys[idx]
+                            v_list = item.get("vulns", [])
+                            vulns_by_key[k] = v_list
+                            self._dep_query_cache[(k[0], k[1], osv_eco)] = v_list
+                else:
+                    logger.warning("OSV database query timed out or failed for batch of %d packages; skipping batch.", len(chunk_keys))
+                    for k in chunk_keys:
+                        vulns_by_key[k] = []
+                        self._dep_query_cache[(k[0], k[1], osv_eco)] = []
+
+            # 4. Build findings for each matched vulnerability and associate with every dependent
+            for (pkg_name, clean_ver), vulns in vulns_by_key.items():
+                if not vulns:
+                    continue
+                deps_for_key = dep_map.get((pkg_name, clean_ver), [])
+                sample_ver = deps_for_key[0].version if deps_for_key else clean_ver
+                for v in vulns:
+                    base_finding = self._build_finding(v, pkg_name, sample_ver, osv_eco, client=client)
+                    if not base_finding:
+                        continue
+                    for dep in deps_for_key:
+                        finding = base_finding.model_copy(deep=True)
+                        finding.is_direct = dep.is_direct
+                        finding.introduced_by = list(dep.introduced_by)
+                        if governance_manager:
+                            cov = governance_manager.check_coverage(
+                                finding.cve_id, finding.package_name, finding.current_version
+                            )
+                            if cov:
+                                finding.is_exempted = True
+                                finding.exemption_id = cov.exception_id
+                        findings.append(finding)
 
         scan_duration = time.time() - start_t
         findings.sort(key=lambda f: SEVERITY_RANK.get(f.severity, 0), reverse=True)
