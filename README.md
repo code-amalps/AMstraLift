@@ -136,7 +136,21 @@ AMstraLift features a deterministic Angular modernization pipeline that enables 
 
 ## 🚀 Running AMstraLift
 
-You can run AMstraLift using `uv`, standard `pip`, or as a **standalone compiled binary (`amstralift.exe`)**.
+AMstraLift can be executed using `uv`, standard `pip`, or as a **zero-dependency standalone binary (`amstralift.exe`)**.
+
+### 📥 Standalone Windows Executable (`amstralift.exe`)
+
+No Python or package installation is required:
+1. Download **`amstralift.exe`** from the [GitHub Releases](https://github.com/code-amalps/AMstraLift/releases) page.
+2. **Double-click** `amstralift.exe` to launch the full interactive desktop GUI (with Dark/Light themes, live log stream, abort controls, and progress tracking).
+3. Or run it directly from PowerShell / CMD as a command-line utility:
+   ```powershell
+   .\amstralift.exe --help
+   .\amstralift.exe audit --repo "C:\Projects\my-app"
+   .\amstralift.exe run --repo "C:\Projects\my-app"
+   ```
+
+---
 
 ### 1. Security Audit & Safe Remediation (`amstralift audit`)
 
