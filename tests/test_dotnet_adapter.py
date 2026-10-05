@@ -333,3 +333,37 @@ def test_dotnet_nuget_never_selects_prerelease():
         assert ver == "8.0.1"
 
 
+def test_dotnet_microsoft_graph_v4_guard_prevents_breaking_v5_upgrade(tmp_path: Path):
+    """Verify Microsoft.Graph is constrained to v4 (e.g. 4.54.0) when Microsoft.Graph.Auth or v4 is present."""
+    adapter = DotNetAdapter(incremental=True)
+
+    csproj = tmp_path / "STICMailReader.csproj"
+    csproj.write_text(
+        """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Graph" Version="4.34.0" />
+    <PackageReference Include="Microsoft.Graph.Auth" Version="1.0.0-preview.7" />
+  </ItemGroup>
+</Project>""",
+        encoding="utf-8",
+    )
+
+    def mock_fetch(pkg: str, target_major: int | None = None):
+        if pkg == "Microsoft.Graph":
+            # If target_major == 4, return highest v4; if unconstrained, would return 5.72.0
+            return "4.54.0" if target_major == 4 else "5.72.0"
+        return None
+
+    with patch.object(adapter, "fetch_latest_version", side_effect=mock_fetch):
+        candidates = adapter.discover_candidates(tmp_path)
+
+    pkg_updates = {c.package_name: c.to_version for c in candidates}
+    # Microsoft.Graph MUST be upgraded within v4, never breaking to v5!
+    assert pkg_updates.get("Microsoft.Graph") == "4.54.0"
+    # Microsoft.Graph.Auth must NOT be upgraded to an invalid preview
+    assert "Microsoft.Graph.Auth" not in pkg_updates
+
+

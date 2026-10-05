@@ -60,6 +60,15 @@ def get_installed_dotnet_sdk_majors() -> list[int]:
         return []
 
 
+def extract_major_version(ver_str: str) -> int | None:
+    """Extract integer major version from a version string."""
+    clean = ver_str.strip().lstrip("^~>=<")
+    match = re.match(r"^(\d+)", clean)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 def classify_dotnet_tier(package_name: str) -> DependencyTier:
     """Classify .NET NuGet package into Tier 1, 2, or 3."""
     for pattern in TIER_3_PATTERNS:
@@ -109,16 +118,29 @@ class DotNetAdapter(BaseAdapter):
             or bool(safe_rglob(repo_path, "Directory.Packages.props"))
         )
 
-    def fetch_latest_version(self, package_name: str) -> str | None:
-        """Fetch latest stable GA version from NuGet flatcontainer API (never pre-release)."""
+    def fetch_latest_version(self, package_name: str, target_major: int | None = None) -> str | None:
+        """Fetch latest stable GA version from NuGet flatcontainer API (never pre-release).
+
+        If target_major is provided, returns latest stable GA version matching that major version.
+        """
         url = f"{self.nuget_base}/{package_name.lower()}/index.json"
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
+            from amstralift.security.osv_client import create_resilient_httpx_client
+            with create_resilient_httpx_client(timeout=self.timeout_seconds) as client:
                 res = client.get(url)
                 if res.status_code == 200:
                     data = res.json()
                     versions = data.get("versions", [])
                     stable = [v for v in versions if "-" not in v]
+                    if target_major is not None:
+                        matching = []
+                        for v in stable:
+                            m = re.match(r"^(\d+)\.", v)
+                            if m and int(m.group(1)) == target_major:
+                                matching.append(v)
+                        if matching:
+                            return matching[-1]
+                        return None
                     if stable:
                         return stable[-1]
         except Exception:
@@ -197,10 +219,56 @@ class DotNetAdapter(BaseAdapter):
             except Exception:
                 continue
 
+        # Determine target dotnet major if TargetFramework upgrade was scheduled
+        target_dotnet_major: int | None = None
+        for c in candidates:
+            if c.package_name == "Microsoft.NET.TargetFramework":
+                m = re.match(r"^net(\d+)\.0$", c.to_version)
+                if m:
+                    target_dotnet_major = int(m.group(1))
+                    break
+
+        # Check for ecosystem incompatibilities
+        has_graph_auth = "Microsoft.Graph.Auth" in declared_pkgs
+
         # 2c. Query NuGet for package updates
         for pkg, ver in declared_pkgs.items():
             try:
-                latest = self.fetch_latest_version(pkg)
+                cur_pkg_major = extract_major_version(ver)
+                target_pkg_major: int | None = None
+
+                # Special compatibility guards for known breaking ecosystem rewrites:
+                if pkg == "Microsoft.Graph" and (has_graph_auth or cur_pkg_major == 4):
+                    # Microsoft Graph v5 is a major rewrite incompatible with Microsoft.Graph.Auth and v4 syntax (.Request(), IAuthenticationProvider).
+                    # Constrain to highest v4 release (4.54.0) to prevent compilation errors.
+                    target_pkg_major = 4
+                elif pkg == "Microsoft.Graph.Auth":
+                    # Deprecated preview package with no GA; do not attempt upgrade
+                    continue
+                else:
+                    # Framework packages (align with target .NET runtime major)
+                    is_framework_pkg = any(
+                        pkg.startswith(prefix) for prefix in (
+                            "Microsoft.AspNetCore.",
+                            "Microsoft.Extensions.",
+                            "Microsoft.EntityFrameworkCore.",
+                            "System.Text.Json",
+                            "System.Net.Http.Json",
+                            "Microsoft.NET.Test.Sdk",
+                        )
+                    )
+
+                    if is_framework_pkg and target_dotnet_major is not None:
+                        target_pkg_major = target_dotnet_major
+                    elif self.incremental and cur_pkg_major is not None:
+                        # In incremental mode, third-party packages must NOT cross major versions
+                        target_pkg_major = cur_pkg_major
+
+                try:
+                    latest = self.fetch_latest_version(pkg, target_major=target_pkg_major)
+                except TypeError:
+                    latest = self.fetch_latest_version(pkg)
+
                 if latest and latest != ver:
                     tier = classify_dotnet_tier(pkg)
                     candidates.append(
