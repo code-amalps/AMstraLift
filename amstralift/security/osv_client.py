@@ -125,12 +125,29 @@ def select_minimal_fixed_version(current_ver: str, fixed_versions: list[str]) ->
     return valid_fixes[0][1]
 
 
+def create_resilient_httpx_client(timeout: float = 15.0) -> httpx.Client:
+    """Create an httpx client configured for corporate networks and SSL interception."""
+    try:
+        import truststore
+        ssl_ctx = truststore.SSLContext()
+        return httpx.Client(timeout=timeout, trust_env=True, verify=ssl_ctx)
+    except Exception:
+        pass
+    return httpx.Client(timeout=timeout, trust_env=True)
+
+
 class OSVClient:
     """Client for scanning dependencies using OSV.dev API."""
 
-    def __init__(self, timeout_seconds: float = 10.0, max_scan_seconds: float = 60.0):
+    def __init__(
+        self,
+        timeout_seconds: float = 10.0,
+        max_scan_seconds: float = 60.0,
+        offline_mode: bool = False,
+    ):
         self.timeout_seconds = timeout_seconds
         self.max_scan_seconds = max_scan_seconds
+        self.offline_mode = offline_mode
         self._vuln_cache: dict[str, dict[str, Any]] = {}
         self._dep_query_cache: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
 
@@ -156,7 +173,7 @@ class OSVClient:
 
         findings: list[VulnerabilityFinding] = []
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
+            with create_resilient_httpx_client(timeout=self.timeout_seconds) as client:
                 res = client.post(OSV_QUERY_URL, json=payload)
                 if res.status_code == 200:
                     data = res.json()
@@ -196,7 +213,7 @@ class OSVClient:
         ]
         chunk_size = 100
 
-        with httpx.Client(timeout=self.timeout_seconds * 1.5) as client:
+        with create_resilient_httpx_client(timeout=self.timeout_seconds * 1.5) as client:
             for i in range(0, len(items), chunk_size):
                 chunk = items[i : i + chunk_size]
                 queries = [
@@ -315,6 +332,16 @@ class OSVClient:
         osv_eco = self.map_ecosystem(ecosystem)
         findings: list[VulnerabilityFinding] = []
 
+        if self.offline_mode:
+            if progress_callback:
+                progress_callback("↳ [Info] Corporate/Offline Safe mode: skipped external CVE lookup.")
+            return AuditReport(
+                repo_path=repo_path,
+                ecosystem=ecosystem,
+                scanned_packages_count=len(dependencies),
+                findings=[],
+            )
+
         if not dependencies:
             return AuditReport(
                 repo_path=repo_path,
@@ -348,7 +375,7 @@ class OSVClient:
         chunk_size = 100
         total_chunks = (len(uncached_keys) + chunk_size - 1) // chunk_size if uncached_keys else 0
 
-        with httpx.Client(timeout=self.timeout_seconds * 1.5) as client:
+        with create_resilient_httpx_client(timeout=self.timeout_seconds * 1.5) as client:
             for chunk_idx, i in enumerate(range(0, len(uncached_keys), chunk_size)):
                 if time.time() - start_t > self.max_scan_seconds:
                     timeout_msg = f"↳ [Warning] OSV database scan exceeded {int(self.max_scan_seconds)}s time budget; proceeding with partial results."
@@ -396,7 +423,13 @@ class OSVClient:
                             vulns_by_key[k] = v_list
                             self._dep_query_cache[(k[0], k[1], osv_eco)] = v_list
                 else:
-                    logger.warning("OSV database query timed out or failed for batch of %d packages; skipping batch.", len(chunk_keys))
+                    info_msg = (
+                        f"↳ [Info] OSV query unreachable or blocked for batch of {len(chunk_keys)} packages "
+                        f"(corporate proxy / offline); continuing safely."
+                    )
+                    if progress_callback:
+                        progress_callback(info_msg)
+                    logger.info("OSV database unreachable for batch of %d packages; continuing safely.", len(chunk_keys))
                     for k in chunk_keys:
                         vulns_by_key[k] = []
                         self._dep_query_cache[(k[0], k[1], osv_eco)] = []

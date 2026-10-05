@@ -245,10 +245,10 @@ def test_dotnet_format_timeout_resilience(tmp_path: Path):
     adapter = DotNetAdapter()
 
     with patch("shutil.which", return_value="C:\\Program Files\\dotnet\\dotnet.exe"), \
-         patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["dotnet", "format", "style"], timeout=60)):
+         patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["dotnet", "format", "style"], timeout=45)):
         results = adapter.apply_modernizations(tmp_path, ["style"])
 
     assert len(results) == 1
-    assert "timed out after 60s; upgrade preserved" in results[0]
+    assert "timed out after 45s; upgrade preserved" in results[0]
 
 

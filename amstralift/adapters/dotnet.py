@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -275,7 +276,12 @@ class DotNetAdapter(BaseAdapter):
             from amstralift.adapters.docker_updater import DockerfileUpdater
             DockerfileUpdater.update(repo_path, ecosystem="dotnet", target_version=tfm_change.to_version)
 
-    def run_build_and_tests(self, repo_path: Path, timeout_seconds: float = 300.0) -> GateSummary:
+    def run_build_and_tests(
+        self,
+        repo_path: Path,
+        timeout_seconds: float = 300.0,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> GateSummary:
         """Execute dotnet build and dotnet test gates."""
         results: list[GateResult] = []
         has_dotnet = shutil.which("dotnet") is not None
@@ -291,7 +297,7 @@ class DotNetAdapter(BaseAdapter):
             ("build", build_cmd, True),
         ]
 
-        for gate_name, cmd, is_required in gates:
+        for i, (gate_name, cmd, is_required) in enumerate(gates):
             if not cmd:
                 status = GateStatus.REQUIRED_SKIPPED if is_required else GateStatus.OPTIONAL_PASSED
                 results.append(
@@ -304,6 +310,9 @@ class DotNetAdapter(BaseAdapter):
                     )
                 )
                 continue
+
+            if progress_callback:
+                progress_callback(f"↳ [Gate {i+1}/{len(gates)}] Executing {gate_name} ('{cmd}')...")
 
             start_t = time.time()
             try:
@@ -322,8 +331,12 @@ class DotNetAdapter(BaseAdapter):
                 stderr = proc.stderr or ""
                 if proc.returncode == 0:
                     status = GateStatus.REQUIRED_PASSED if is_required else GateStatus.OPTIONAL_PASSED
+                    if progress_callback:
+                        progress_callback(f"  ✔ Gate '{gate_name}' passed ({duration:.1f}s)")
                 else:
                     status = GateStatus.REQUIRED_FAILED if is_required else GateStatus.OPTIONAL_FAILED
+                    if progress_callback:
+                        progress_callback(f"  ✖ Gate '{gate_name}' failed with exit code {proc.returncode} ({duration:.1f}s)")
 
                 results.append(
                     GateResult(
@@ -338,6 +351,8 @@ class DotNetAdapter(BaseAdapter):
                 )
             except subprocess.TimeoutExpired:
                 duration = time.time() - start_t
+                if progress_callback:
+                    progress_callback(f"  ⚠ Gate '{gate_name}' timed out after {duration:.0f}s")
                 timeout_note = (
                     f".NET {gate_name} timed out after {duration:.0f}s. "
                     "Test result is UNCERTAIN — run with --skip-tests / --allow-failed-gates to proceed."
@@ -434,27 +449,27 @@ class DotNetAdapter(BaseAdapter):
         # 1. Code Style / Modern C# Syntax
         if any(f in ("style", "format", "all") for f in normalized):
             msg = _run_format(
-                ["dotnet", "format", "style", "--severity", "warn"],
+                ["dotnet", "format", "style", "--severity", "warn", "--no-restore"],
                 "Applied modern C# code style fixes via 'dotnet format style'",
-                60,
+                45,
             )
             applied.append(msg)
 
         # 2. Whitespace and Layout Modernization
         if any(f in ("whitespace", "all") for f in normalized):
             msg = _run_format(
-                ["dotnet", "format", "whitespace"],
+                ["dotnet", "format", "whitespace", "--no-restore"],
                 "Formatted whitespace layout via 'dotnet format whitespace'",
-                45,
+                30,
             )
             applied.append(msg)
 
         # 3. Roslyn Analyzers and Deprecation Fixes
         if any(f in ("analyzers", "fixes", "all") for f in normalized):
             msg = _run_format(
-                ["dotnet", "format", "analyzers", "--severity", "warn"],
+                ["dotnet", "format", "analyzers", "--severity", "warn", "--no-restore"],
                 "Applied Roslyn analyzer deprecation code fixes via 'dotnet format analyzers'",
-                90,
+                60,
             )
             applied.append(msg)
 

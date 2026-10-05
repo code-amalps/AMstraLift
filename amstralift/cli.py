@@ -119,6 +119,14 @@ def run(
             help="Automatically discover and safely remediate known direct dependency CVEs during migration.",
         ),
     ] = True,
+    offline: Annotated[
+        bool,
+        typer.Option(
+            "--offline",
+            "--corporate-safe",
+            help="Run in corporate/offline safe mode (skips external CVE lookups).",
+        ),
+    ] = False,
 ):
     """Run full two-stage upgrade workflow on a target repository."""
     repo_str = str(repo)
@@ -201,7 +209,7 @@ def run(
                 output_branch=output_branch,
                 draft_on_fail=draft_on_fail,
                 modernize=modernize_list,
-                remediate_cves=remediate_cves,
+                remediate_cves=remediate_cves and not offline,
             )
 
         console.print("[bold green]✔ Upgrade workflow completed successfully![/bold green]\n")

@@ -4,13 +4,29 @@ Handles Python package discovery via PyPI JSON API, pyproject.toml / requirement
 updates, runtime governance evaluation, dependency tiering, and test execution.
 """
 
+import logging
+import os
 import re
 import shutil
 import subprocess
+import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
+
+logger = logging.getLogger("amstralift.adapters.python")
+
+
+def get_python_execution_env(repo_path: Path) -> dict[str, str]:
+    """Return environment dictionary with local .venv prioritized in PATH if present."""
+    env = os.environ.copy()
+    scripts_dir = repo_path / (".venv/Scripts" if sys.platform == "win32" else ".venv/bin")
+    if scripts_dir.exists():
+        env["PATH"] = str(scripts_dir) + os.pathsep + env.get("PATH", "")
+        env["VIRTUAL_ENV"] = str(repo_path / ".venv")
+    return env
 
 from amstralift.adapters.base import BaseAdapter
 from amstralift.core.workspace import safe_rglob
@@ -233,7 +249,34 @@ class PythonAdapter(BaseAdapter):
             ("lint", "ruff check ." if shutil.which("ruff") else None, False),
         ]
 
-        for gate_name, cmd, is_required in gates:
+    def run_build_and_tests(
+        self,
+        repo_path: Path,
+        timeout_seconds: float = 300.0,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> GateSummary:
+        """Execute test gate (pytest/unittest) and optional lint gate."""
+        results: list[GateResult] = []
+        env = get_python_execution_env(repo_path)
+        pytest_bin = "pytest"
+        if (repo_path / ".venv/Scripts/pytest.exe").exists():
+            pytest_bin = str(repo_path / ".venv/Scripts/pytest.exe")
+        elif (repo_path / ".venv/bin/pytest").exists():
+            pytest_bin = str(repo_path / ".venv/bin/pytest")
+
+        test_cmd = None
+        if (repo_path / "tests").exists() or any(repo_path.glob("test_*.py")):
+            if shutil.which(pytest_bin) or shutil.which("pytest", path=env.get("PATH")):
+                test_cmd = pytest_bin
+            else:
+                test_cmd = "python -m unittest discover"
+
+        gates = [
+            ("test", test_cmd, True),
+            ("lint", "ruff check ." if shutil.which("ruff", path=env.get("PATH")) else None, False),
+        ]
+
+        for i, (gate_name, cmd, is_required) in enumerate(gates):
             if not cmd:
                 status = GateStatus.REQUIRED_SKIPPED if is_required else GateStatus.OPTIONAL_PASSED
                 results.append(
@@ -247,6 +290,9 @@ class PythonAdapter(BaseAdapter):
                 )
                 continue
 
+            if progress_callback:
+                progress_callback(f"↳ [Gate {i+1}/{len(gates)}] Executing {gate_name} ('{cmd}')...")
+
             start_t = time.time()
             try:
                 proc = subprocess.run(
@@ -258,14 +304,19 @@ class PythonAdapter(BaseAdapter):
                     encoding="utf-8",
                     errors="replace",
                     timeout=timeout_seconds,
+                    env=env,
                 )
                 duration = time.time() - start_t
                 stdout = proc.stdout or ""
                 stderr = proc.stderr or ""
                 if proc.returncode == 0:
                     status = GateStatus.REQUIRED_PASSED if is_required else GateStatus.OPTIONAL_PASSED
+                    if progress_callback:
+                        progress_callback(f"  ✔ Gate '{gate_name}' passed ({duration:.1f}s)")
                 else:
                     status = GateStatus.REQUIRED_FAILED if is_required else GateStatus.OPTIONAL_FAILED
+                    if progress_callback:
+                        progress_callback(f"  ✖ Gate '{gate_name}' failed with exit code {proc.returncode} ({duration:.1f}s)")
 
                 results.append(
                     GateResult(
@@ -280,6 +331,8 @@ class PythonAdapter(BaseAdapter):
                 )
             except subprocess.TimeoutExpired:
                 duration = time.time() - start_t
+                if progress_callback:
+                    progress_callback(f"  ⚠ Gate '{gate_name}' timed out after {duration:.0f}s")
                 timeout_note = (
                     f"Python {gate_name} timed out after {duration:.0f}s. "
                     "Test result is UNCERTAIN — run with --skip-tests / --allow-failed-gates to proceed."
@@ -344,43 +397,50 @@ class PythonAdapter(BaseAdapter):
 
         applied = []
         normalized = [f.strip().lower() for f in modernize_flags]
+        env = get_python_execution_env(repo_path)
+
+        def _run_format(cmd: list[str], success_msg: str, timeout_secs: int = 60) -> str:
+            cmd_display = " ".join(cmd)
+            try:
+                res = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True, timeout=timeout_secs, env=env)
+                if res.returncode == 0:
+                    return success_msg
+                else:
+                    return f"{cmd[0]} returned exit code {res.returncode}"
+            except subprocess.TimeoutExpired:
+                logger.warning("'%s' timed out after %ds; skipping non-critical modernization", cmd_display, timeout_secs)
+                return f"Skipped '{cmd_display}' (timed out after {timeout_secs}s; upgrade preserved)"
+            except Exception as e:
+                logger.warning("'%s' failed: %s; skipping non-critical modernization", cmd_display, e)
+                return f"Skipped '{cmd_display}' ({e})"
 
         # 1. Modern Syntax Upgrades via Ruff / pyupgrade
         if any(f in ("syntax", "upgrade", "ruff", "all") for f in normalized):
-            if shutil.which("ruff"):
-                res = subprocess.run(
+            if shutil.which("ruff", path=env.get("PATH")):
+                msg = _run_format(
                     ["ruff", "check", "--select", "UP", "--fix", "."],
-                    cwd=repo_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
+                    "Applied modern Python syntax upgrades via Ruff (UP rules: union types, built-in generics)",
+                    60,
                 )
-                if res.returncode == 0:
-                    applied.append("Applied modern Python syntax upgrades via Ruff (UP rules: union types, built-in generics)")
-                else:
-                    applied.append(f"Ruff syntax check returned exit code {res.returncode}")
-            elif shutil.which("pyupgrade"):
+                applied.append(msg)
+            elif shutil.which("pyupgrade", path=env.get("PATH")):
                 py_files = [str(p) for p in safe_rglob(repo_path, "*.py")]
-                res = subprocess.run(
-                    ["pyupgrade", "--py311-plus", "--exit-zero-even-if-changed", *py_files],
-                    cwd=repo_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                if res.returncode == 0:
-                    applied.append("Upgraded Python syntax to Python 3.11+ via pyupgrade")
+                if py_files:
+                    msg = _run_format(
+                        ["pyupgrade", "--py311-plus", "--exit-zero-even-if-changed", *py_files],
+                        "Upgraded Python syntax to Python 3.11+ via pyupgrade",
+                        60,
+                    )
+                    applied.append(msg)
 
         # 2. Modern Code Formatting
         if any(f in ("format", "black", "all") for f in normalized):
-            if shutil.which("ruff"):
-                res = subprocess.run(["ruff", "format", "."], cwd=repo_path, capture_output=True, text=True, timeout=60)
-                if res.returncode == 0:
-                    applied.append("Formatted code using modern Ruff formatter")
-            elif shutil.which("black"):
-                res = subprocess.run(["black", "."], cwd=repo_path, capture_output=True, text=True, timeout=60)
-                if res.returncode == 0:
-                    applied.append("Formatted code using Black formatter")
+            if shutil.which("ruff", path=env.get("PATH")):
+                msg = _run_format(["ruff", "format", "."], "Formatted code using modern Ruff formatter", 60)
+                applied.append(msg)
+            elif shutil.which("black", path=env.get("PATH")):
+                msg = _run_format(["black", "."], "Formatted code using Black formatter", 60)
+                applied.append(msg)
 
         return applied
 

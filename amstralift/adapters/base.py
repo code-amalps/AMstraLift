@@ -26,6 +26,9 @@ def get_node_execution_env() -> dict[str, str]:
 
 
 
+from collections.abc import Callable
+
+
 class BaseAdapter(ABC):
     """Abstract interface each ecosystem adapter must implement."""
 
@@ -51,7 +54,12 @@ class BaseAdapter(ABC):
         pass
 
     @abstractmethod
-    def run_build_and_tests(self, repo_path: Path, timeout_seconds: float = 300.0) -> GateSummary:
+    def run_build_and_tests(
+        self,
+        repo_path: Path,
+        timeout_seconds: float = 300.0,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> GateSummary:
         """Execute build and test gates declared in the repository."""
         pass
 

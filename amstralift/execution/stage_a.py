@@ -191,7 +191,21 @@ def run_stage_a(
 
     # 3. Run declared build and test gates
     _notify(5, 5, 80, "⚡ Executing build and test verification gates...")
-    gate_summary = adapter.run_build_and_tests(workspace_path, timeout_seconds=test_timeout)
+    def _gate_progress(msg: str):
+        if progress_callback:
+            try:
+                progress_callback(85, msg)
+            except Exception:
+                pass
+
+    try:
+        gate_summary = adapter.run_build_and_tests(
+            workspace_path,
+            timeout_seconds=test_timeout,
+            progress_callback=_gate_progress,
+        )
+    except TypeError:
+        gate_summary = adapter.run_build_and_tests(workspace_path, timeout_seconds=test_timeout)
 
     # 4. Generate unified git patch
     if progress_callback:

@@ -522,7 +522,17 @@ class AMstraLiftGUI:
             font=("Segoe UI", 9),
             cursor="hand2",
         )
-        self.chk_allow_fail.pack(side=tk.LEFT)
+        self.chk_allow_fail.pack(side=tk.LEFT, padx=(0, 16))
+
+        self.corporate_safe_var = tk.BooleanVar(value=False)
+        self.chk_corp_safe = tk.Checkbutton(
+            chk_sub,
+            text="Corporate / Offline Safe Mode (skip external CVE lookups)",
+            variable=self.corporate_safe_var,
+            font=("Segoe UI", 9),
+            cursor="hand2",
+        )
+        self.chk_corp_safe.pack(side=tk.LEFT)
 
         # Action Buttons
         action_frame = tk.Frame(self.upgrade_card)
@@ -808,6 +818,7 @@ class AMstraLiftGUI:
             self.chk_cve,
             self.chk_dry,
             self.chk_allow_fail,
+            self.chk_corp_safe,
             self.chk_audit_safe_only,
             self.chk_audit_allow_major,
         ):
@@ -1083,7 +1094,8 @@ class AMstraLiftGUI:
         mod_val = self.upgrade_mod_var.get().strip()
         mod_param = None if mod_val == "none" else mod_val
         inc = self.incremental_var.get()
-        cve = self.remediate_cves_var.get()
+        corp_safe = self.corporate_safe_var.get()
+        cve = self.remediate_cves_var.get() and not corp_safe
         dry = self.dry_run_var.get()
         allow_fail = self.allow_failed_gates_var.get()
 
@@ -1103,7 +1115,10 @@ class AMstraLiftGUI:
 
                 orchestrator = UpgradeOrchestrator(incremental=inc)
                 print(f"Starting AMstraLift upgrade on: {repo_path_str}")
-                print(f"Incremental: {inc} | Remediate CVEs: {cve} | Modernizations: {mod_param}\n")
+                print(f"Incremental: {inc} | Remediate CVEs: {cve} | Modernizations: {mod_param}")
+                if corp_safe:
+                    print("Corporate / Offline Safe Mode: Active (external CVE lookups skipped)")
+                print()
 
                 base_b = self.base_branch_var.get().strip() or None
                 out_b = self.output_branch_var.get().strip() or None

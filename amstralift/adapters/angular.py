@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -1371,7 +1372,12 @@ class AngularAdapter(BaseAdapter):
 
         return applied
 
-    def run_build_and_tests(self, repo_path: Path, timeout_seconds: float = 300.0) -> GateSummary:
+    def run_build_and_tests(
+        self,
+        repo_path: Path,
+        timeout_seconds: float = 300.0,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> GateSummary:
         """Execute build and test gates declared in package.json.
 
         Handles Angular-specific test runner quirks:
@@ -1492,7 +1498,10 @@ class AngularAdapter(BaseAdapter):
             else:
                 cmd = f"npm run {gate_name}" if has_npm else script_cmd
 
-            print(f"   ↳ Executing verification gate: '{gate_name}' ({cmd})...", flush=True)
+            gate_msg = f"↳ Executing verification gate: '{gate_name}' ({cmd})..."
+            if progress_callback:
+                progress_callback(gate_msg)
+            print(f"   {gate_msg}", flush=True)
 
             try:
                 check_cancelled()
@@ -1513,7 +1522,10 @@ class AngularAdapter(BaseAdapter):
                 stderr = proc.stderr or ""
                 if proc.returncode == 0:
                     status = GateStatus.REQUIRED_PASSED if is_required else GateStatus.OPTIONAL_PASSED
-                    print(f"   ✔ Gate '{gate_name}' passed ({duration:.1f}s)", flush=True)
+                    pass_msg = f"✔ Gate '{gate_name}' passed ({duration:.1f}s)"
+                    if progress_callback:
+                        progress_callback(f"  {pass_msg}")
+                    print(f"   {pass_msg}", flush=True)
                 else:
                     # Detect TypeScript module-resolution compilation errors in test gate output.
                     # These indicate a post-upgrade environment setup issue (missing type declarations,
