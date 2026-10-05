@@ -76,7 +76,10 @@ def _remove_node_modules(repo_path: Path) -> None:
             else:
                 node_modules.unlink()
         elif node_modules.is_dir():
-            shutil.rmtree(node_modules, onexc=_handle_remove_readonly)
+            try:
+                shutil.rmtree(node_modules, onexc=_handle_remove_readonly)
+            except TypeError:
+                shutil.rmtree(node_modules, onerror=_handle_remove_readonly)
         else:
             node_modules.unlink()
     except Exception as exc:

@@ -6,6 +6,7 @@ Enforces Angular LTS governance policy when configured.
 """
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger("amstralift.adapters.angular")
 
 from amstralift.adapters.base import BaseAdapter, get_node_execution_env
 from amstralift.core.cancellation import (
@@ -1815,23 +1818,48 @@ class AngularAdapter(BaseAdapter):
                 return
 
             has_npm = shutil.which("npm", path=gate_env.get("PATH")) is not None
+            bin_ext = ".cmd" if sys.platform == "win32" else ""
+            local_ng = repo_path / "node_modules" / ".bin" / f"ng{bin_ext}"
+
             for lib_name in lib_names:
                 print(f"   ↳ Pre-building workspace library '{lib_name}' for dependent applications...", flush=True)
-                build_cmd = f"npm exec -- ng build {lib_name}" if has_npm else f"npx ng build {lib_name}"
-                res = run_cancellable_subprocess(
-                    build_cmd,
-                    shell=True,
-                    cwd=repo_path,
-                    env=gate_env,
-                    capture_output=True,
-                    text=True,
-                    timeout=180.0,
-                )
-                if res.returncode == 0:
-                    print(f"   ✔ Workspace library '{lib_name}' built successfully.", flush=True)
+
+                commands_to_try: list[str] = []
+                if local_ng.exists():
+                    commands_to_try.append(f'"{local_ng}" build {lib_name}')
+                if has_npm:
+                    commands_to_try.append(f"npx --no-install ng build {lib_name}")
+                    commands_to_try.append(f"npx ng build {lib_name}")
+                    commands_to_try.append(f"npm exec -- ng build {lib_name}")
                 else:
-                    err = (res.stderr or res.stdout or "").strip()
-                    logger.warning(f"Could not pre-build library '{lib_name}': {err[:300]}")
+                    commands_to_try.append(f"ng build {lib_name}")
+
+                built_successfully = False
+                last_err = ""
+
+                for cmd in commands_to_try:
+                    try:
+                        res = run_cancellable_subprocess(
+                            cmd,
+                            shell=True,
+                            cwd=repo_path,
+                            env=gate_env,
+                            capture_output=True,
+                            text=True,
+                            timeout=180.0,
+                        )
+                        if res.returncode == 0:
+                            built_successfully = True
+                            print(f"   ✔ Workspace library '{lib_name}' built successfully.", flush=True)
+                            break
+                        else:
+                            last_err = (res.stderr or res.stdout or "").strip()
+                    except Exception as run_err:
+                        last_err = str(run_err)
+
+                if not built_successfully:
+                    logger.warning(f"Could not pre-build library '{lib_name}': {last_err[:300]}")
+                    print(f"   ⚠ Pre-building library '{lib_name}' was not completed by automated runner; continuing to verification gates.", flush=True)
         except Exception as e:
             logger.warning(f"Failed to check workspace libraries: {e}")
 
