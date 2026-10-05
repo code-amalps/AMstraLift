@@ -49,6 +49,28 @@ class RemediationPlanGenerator:
                 all_fixed.update(f.all_fixed_versions)
 
             if not all_fixed:
+                # Fallback: check if latest stable GA version can be fetched from ecosystem registry
+                try:
+                    eco = report.ecosystem.lower()
+                    if eco in ("dotnet", "nuget"):
+                        from amstralift.adapters.dotnet import DotNetAdapter
+                        latest_ver = DotNetAdapter().fetch_latest_version(pkg)
+                        if latest_ver and latest_ver != current_ver:
+                            all_fixed.add(latest_ver)
+                    elif eco in ("angular", "react", "npm"):
+                        from amstralift.adapters.react import ReactAdapter
+                        latest_ver = ReactAdapter().fetch_latest_version(pkg)
+                        if latest_ver and latest_ver != current_ver:
+                            all_fixed.add(latest_ver)
+                    elif eco in ("python", "pypi"):
+                        from amstralift.adapters.python import PythonAdapter
+                        latest_ver = PythonAdapter().fetch_latest_version(pkg)
+                        if latest_ver and latest_ver != current_ver:
+                            all_fixed.add(latest_ver)
+                except Exception:
+                    pass
+
+            if not all_fixed:
                 unresolved.extend(findings)
                 advisories.append(
                     f"No upstream patch available for {pkg} ({current_ver}) affecting {', '.join(all_cves)}."

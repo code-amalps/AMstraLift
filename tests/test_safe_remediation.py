@@ -67,6 +67,36 @@ def test_remediation_plan_generator_direct_and_transitive():
     assert "express" in qs_item.introduced_by
 
 
+def test_remediation_plan_generator_uses_registry_fallback_when_advisory_lacks_fixed_version():
+    """Verify that when finding has empty fixed_version, plan generator fetches latest GA from registry."""
+    report = AuditReport(
+        repo_path="/test",
+        ecosystem="dotnet",
+        scanned_packages_count=1,
+        findings=[
+            VulnerabilityFinding(
+                cve_id="NUGET-ADVISORY-1234",
+                package_name="Npgsql",
+                ecosystem="NuGet",
+                current_version="6.0.5",
+                severity=VulnerabilitySeverity.HIGH,
+                fixed_version="",
+                all_fixed_versions=[],
+                is_direct=True,
+                introduced_by=[],
+                summary="High severity vulnerability without explicit fixed version metadata",
+            ),
+        ],
+    )
+
+    with patch("amstralift.adapters.dotnet.DotNetAdapter.fetch_latest_version", return_value="8.0.5"):
+        plan = RemediationPlanGenerator.generate_plan(report)
+        assert len(plan.items) == 1
+        item = plan.items[0]
+        assert item.package_name == "Npgsql"
+        assert item.target_version == "8.0.5"
+
+
 def test_npm_overrides_application(tmp_path: Path):
     """Verify RemediationEngine injects 'overrides' in package.json for transitive fixes."""
     pkg_json = tmp_path / "package.json"
