@@ -584,6 +584,11 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
             imports_to_add.append("FontAwesomeModule")
             top_imports["FontAwesomeModule"] = "@fortawesome/angular-fontawesome"
 
+        # Check AG Grid
+        if "<ag-grid-angular" in combined_text:
+            imports_to_add.append("AgGridAngular")
+            top_imports["AgGridAngular"] = "ag-grid-angular"
+
         # Check child components from registry
         for sel, info in registry.items():
             if info["path"] != comp_file and re.search(rf"<{re.escape(sel)}[\s>/]", active_template):
@@ -609,6 +614,9 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
         if existing_imp_match:
             existing_imports = [x.strip() for x in existing_imp_match.group(1).split(",") if x.strip()]
             cleaned_existing = [x for x in existing_imports if len(x) > 1 and x not in ("R", "D")]
+            if "<ag-grid-angular" in combined_text and "AgGridModule" in cleaned_existing:
+                cleaned_existing = ["AgGridAngular" if x == "AgGridModule" else x for x in cleaned_existing]
+                top_imports["AgGridAngular"] = "ag-grid-angular"
             had_r = len(cleaned_existing) != len(existing_imports)
             missing_imps = [x for x in unique_needed if x not in cleaned_existing]
             if missing_imps or had_r:
@@ -693,4 +701,264 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
     module_notes = modernize_ngmodules_with_standalone_components(repo_path, standalone_classes)
     applied.extend(module_notes)
 
+    # 5. Sanitize importProvidersFrom calls across workspace (prevent NG0800)
+    provider_notes = sanitize_import_providers_from(repo_path)
+    applied.extend(provider_notes)
+
+    return applied
+
+
+def _find_matching_paren(text: str, open_idx: int) -> int:
+    """Find index of closing paren matching text[open_idx], respecting quotes and comments."""
+    depth = 0
+    in_str = None
+    i = open_idx
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if in_str:
+            if c == in_str and text[i - 1] != "\\":
+                in_str = None
+        elif c in ('"', "'", "`"):
+            in_str = c
+        elif c == "/" and i + 1 < n and text[i + 1] == "/":
+            eol = text.find("\n", i + 2)
+            if eol == -1:
+                break
+            i = eol
+            continue
+        elif c == "/" and i + 1 < n and text[i + 1] == "*":
+            end_comment = text.find("*/", i + 2)
+            if end_comment == -1:
+                break
+            i = end_comment + 1
+            continue
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def _split_top_level_args(inner_args: str) -> list[str]:
+    """Split comma-separated arguments at top level (depth 0 of (), [], {})."""
+    args = []
+    current: list[str] = []
+    depth = 0
+    in_str = None
+    i = 0
+    n = len(inner_args)
+
+    while i < n:
+        c = inner_args[i]
+        if in_str:
+            if c == in_str and inner_args[i - 1] != "\\":
+                in_str = None
+            current.append(c)
+        elif c in ('"', "'", "`"):
+            in_str = c
+            current.append(c)
+        elif c == "/" and i + 1 < n and inner_args[i + 1] == "/":
+            eol = inner_args.find("\n", i + 2)
+            if eol == -1:
+                current.append(inner_args[i:])
+                break
+            current.append(inner_args[i:eol])
+            i = eol - 1
+        elif c == "/" and i + 1 < n and inner_args[i + 1] == "*":
+            end_comment = inner_args.find("*/", i + 2)
+            if end_comment == -1:
+                current.append(inner_args[i:])
+                break
+            current.append(inner_args[i:end_comment + 2])
+            i = end_comment + 1
+        elif c in "([{":
+            depth += 1
+            current.append(c)
+        elif c in ")]}":
+            depth -= 1
+            current.append(c)
+        elif c == "," and depth == 0:
+            arg = "".join(current).strip()
+            if arg:
+                args.append(arg)
+            current = []
+        else:
+            current.append(c)
+        i += 1
+
+    last_arg = "".join(current).strip()
+    if last_arg:
+        args.append(last_arg)
+
+    return args
+
+
+def _clean_unused_symbol_from_imports(content: str, symbol: str) -> str:
+    """Remove symbol from named import statements if it is not referenced elsewhere."""
+    lines = content.splitlines()
+    non_import_code = "\n".join(
+        line for line in lines if not re.match(r"^\s*import\s+", line)
+    )
+    if re.search(rf"\b{re.escape(symbol)}\b", non_import_code):
+        return content
+
+    # Find import { ..., symbol, ... } from '...'
+    pattern = re.compile(
+        r"(?m)^([ \t]*import\s*\{)([^}]+)(\}\s*from\s*['\"][^'\"]+['\"];?[ \t]*\r?\n?)"
+    )
+
+    def _replace_import(m: re.Match) -> str:
+        prefix = m.group(1)
+        raw_symbols = m.group(2)
+        suffix = m.group(3)
+        parts = [s.strip() for s in raw_symbols.split(",") if s.strip()]
+        new_parts = [
+            s for s in parts
+            if s != symbol and not s.startswith(f"{symbol} as ") and not s.endswith(f" as {symbol}")
+        ]
+        if not new_parts:
+            return ""
+        if len(parts) == len(new_parts):
+            return m.group(0)
+        return f"{prefix} {', '.join(new_parts)} {suffix}"
+
+    updated = pattern.sub(_replace_import, content)
+    updated = re.sub(r"\n{3,}", "\n\n", updated)
+    return updated
+
+
+def sanitize_import_providers_from_content(content: str) -> tuple[str, bool]:
+    """Purge standalone components and AgGridModule from importProvidersFrom calls."""
+    if "importProvidersFrom" not in content:
+        return content, False
+
+    pattern = re.compile(r"\bimportProvidersFrom\s*\(")
+    matches = list(pattern.finditer(content))
+    if not matches:
+        return content, False
+
+    modified = False
+    purged_symbols: set[str] = set()
+
+    for m in reversed(matches):
+        start_call = m.start()
+        open_paren = m.end() - 1
+        close_paren = _find_matching_paren(content, open_paren)
+        if close_paren == -1:
+            continue
+
+        args_str = content[open_paren + 1:close_paren]
+        raw_args = _split_top_level_args(args_str)
+
+        retained_args: list[str] = []
+        call_changed = False
+
+        for arg in raw_args:
+            clean_arg = re.sub(r"/\*[\s\S]*?\*/", "", arg).strip()
+            clean_arg = re.sub(r"(?m)//.*$", "", clean_arg).strip()
+
+            base_ident = clean_arg.split(".")[0].split("(")[0].strip()
+            is_ag_grid = base_ident in ("AgGridModule", "AgGridAngular")
+            is_standalone_comp = (
+                base_ident.endswith(("Component", "Directive", "Pipe"))
+                and not base_ident.endswith("Module")
+                and len(base_ident) > 4
+            )
+
+            if is_ag_grid or is_standalone_comp:
+                call_changed = True
+                purged_symbols.add(base_ident)
+            else:
+                retained_args.append(arg)
+
+        if not call_changed:
+            continue
+
+        modified = True
+        if retained_args:
+            if "\n" in args_str:
+                indent = "      "
+                inner_formatted = "\n" + ",\n".join(indent + a.strip() for a in retained_args) + "\n    "
+                replacement = f"importProvidersFrom({inner_formatted})"
+            else:
+                replacement = f"importProvidersFrom({', '.join(a.strip() for a in retained_args)})"
+            content = content[:start_call] + replacement + content[close_paren + 1:]
+        else:
+            pre = content[:start_call]
+            post = content[close_paren + 1:]
+
+            post_l = post.lstrip(" \t")
+            if post_l.startswith(","):
+                post = post_l[1:]
+            else:
+                pre_r = pre.rstrip(" \t\r\n")
+                if pre_r.endswith(","):
+                    comma_idx = pre.rfind(",")
+                    pre = pre[:comma_idx]
+
+            content = pre + post
+            purged_symbols.add("importProvidersFrom")
+
+    if modified:
+        content = re.sub(r"\[\s*,", "[", content)
+        content = re.sub(r",\s*\]", "\n  ]", content)
+        content = re.sub(r"\[\s*\n\s*\]", "[]", content)
+
+        for sym in purged_symbols:
+            content = _clean_unused_symbol_from_imports(content, sym)
+
+    return content, modified
+
+
+def sanitize_import_providers_from(repo_path: Path) -> list[str]:
+    """Sanitize importProvidersFrom calls across the workspace.
+
+    Removes standalone components (like AgGridAngular, AgGridModule, or any *Component)
+    from importProvidersFrom(...) to prevent NG0800 runtime errors
+    ('Importing providers supports NgModule or ModuleWithProviders but got a standalone component').
+    If importProvidersFrom becomes empty, it is removed, and unused top-level imports are cleaned up.
+    """
+    applied = []
+    modified_count = 0
+
+    for ts_file in safe_rglob(repo_path, "*.ts"):
+        f_name = ts_file.name
+        f_posix = ts_file.as_posix()
+        if (
+            f_name.endswith(".spec.ts")
+            or f_name.endswith(".test.ts")
+            or f_name.endswith(".d.ts")
+            or ".d-" in f_name
+            or ".cache" in f_posix
+            or "/dist/" in f_posix
+            or "/out-tsc/" in f_posix
+            or "/node_modules/" in f_posix
+            or "/.angular/" in f_posix
+        ):
+            continue
+
+        try:
+            content = ts_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        if "importProvidersFrom" not in content:
+            continue
+
+        new_content, modified = sanitize_import_providers_from_content(content)
+        if modified:
+            try:
+                ts_file.write_text(new_content, encoding="utf-8")
+                modified_count += 1
+            except Exception:
+                pass
+
+    if modified_count > 0:
+        applied.append(
+            f"Sanitized {modified_count} file(s) removing standalone components/AgGridModule from importProvidersFrom (prevents NG0800 runtime error)"
+        )
     return applied

@@ -1587,6 +1587,114 @@ def test_compatibility_selector_rejects_path_to_regexp_global_override():
     assert "path-to-regexp" in res.rationale
 
 
+def test_sanitize_import_providers_from_purges_aggrid_and_standalone_components(tmp_path: Path):
+    """Verify that sanitize_import_providers_from purges AgGridModule and standalone components to prevent NG0800."""
+    from amstralift.adapters.angular_standalone import sanitize_import_providers_from
+
+    main_ts = tmp_path / "src" / "main.ts"
+    main_ts.parent.mkdir(parents=True, exist_ok=True)
+    main_ts.write_text(
+        """import { enableProdMode, importProvidersFrom } from '@angular/core';
+import { bootstrapApplication } from '@angular/platform-browser';
+import { BrowserAnimationsModule } from '@angular/platform-browser/animations';
+import { HttpClientModule } from '@angular/common/http';
+import { AgGridModule } from 'ag-grid-angular';
+import { HeaderComponent } from './app/header.component';
+import { AppRoutingModule } from './app/app-routing.module';
+import { AppComponent } from './app/app.component';
+
+bootstrapApplication(AppComponent, {
+  providers: [
+    importProvidersFrom(
+      BrowserAnimationsModule,
+      HttpClientModule,
+      AgGridModule,
+      HeaderComponent,
+      AppRoutingModule
+    )
+  ]
+}).catch(err => console.error(err));
+""",
+        encoding="utf-8",
+    )
+
+    notes = sanitize_import_providers_from(tmp_path)
+    assert len(notes) > 0
+    assert "NG0800" in notes[0]
+
+    updated = main_ts.read_text(encoding="utf-8")
+    assert "AgGridModule" not in updated
+    assert "HeaderComponent" not in updated
+    assert "BrowserAnimationsModule" in updated
+    assert "HttpClientModule" in updated
+    assert "AppRoutingModule" in updated
+    assert "importProvidersFrom" in updated
+    assert "from 'ag-grid-angular'" not in updated
+    assert "from './app/header.component'" not in updated
+
+
+def test_sanitize_import_providers_from_removes_empty_call(tmp_path: Path):
+    """Verify that when importProvidersFrom only had AgGridModule, the call and import are completely removed."""
+    from amstralift.adapters.angular_standalone import sanitize_import_providers_from
+
+    cfg_ts = tmp_path / "src" / "app" / "app.config.ts"
+    cfg_ts.parent.mkdir(parents=True, exist_ok=True)
+    cfg_ts.write_text(
+        """import { ApplicationConfig, importProvidersFrom } from '@angular/core';
+import { provideRouter } from '@angular/router';
+import { AgGridModule } from 'ag-grid-angular';
+
+export const appConfig: ApplicationConfig = {
+  providers: [
+    provideRouter([]),
+    importProvidersFrom(AgGridModule)
+  ]
+};
+""",
+        encoding="utf-8",
+    )
+
+    notes = sanitize_import_providers_from(tmp_path)
+    assert len(notes) > 0
+
+    updated = cfg_ts.read_text(encoding="utf-8")
+    assert "AgGridModule" not in updated
+    assert "importProvidersFrom" not in updated
+    assert "ApplicationConfig" in updated
+    assert "provideRouter([])" in updated
+    assert "from 'ag-grid-angular'" not in updated
+
+
+def test_modernize_angular_standalone_components_injects_aggrid(tmp_path: Path):
+    """Verify that modernize_angular_standalone_components injects AgGridAngular into components using ag-grid-angular."""
+    from amstralift.adapters.angular_standalone import modernize_angular_standalone_components
+
+    src_dir = tmp_path / "src" / "app"
+    src_dir.mkdir(parents=True, exist_ok=True)
+
+    grid_comp = src_dir / "grid.component.ts"
+    grid_comp.write_text(
+        """import { Component } from '@angular/core';
+
+@Component({
+  selector: 'app-grid',
+  template: `<ag-grid-angular class="ag-theme-alpine" [rowData]="[]"></ag-grid-angular>`,
+  styleUrls: ['./grid.component.scss']
+})
+export class GridComponent {}
+""",
+        encoding="utf-8",
+    )
+
+    notes = modernize_angular_standalone_components(tmp_path)
+    assert len(notes) > 0
+
+    updated = grid_comp.read_text(encoding="utf-8")
+    assert "standalone: true" in updated
+    assert "AgGridAngular" in updated
+    assert "import { AgGridAngular } from 'ag-grid-angular';" in updated
+
+
 
 
 

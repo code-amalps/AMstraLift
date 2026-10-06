@@ -1114,6 +1114,13 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
     if test_bootstrap_count > 0:
         applied.append(f"Modernized {test_bootstrap_count} test bootstrap file(s) removing obsolete 'require.context' for Angular 15+ test runner")
 
+    # Sanitize importProvidersFrom calls across workspace (purges AgGridModule/standalone components to prevent NG0800)
+    try:
+        from amstralift.adapters.angular_standalone import sanitize_import_providers_from
+        applied.extend(sanitize_import_providers_from(repo_path))
+    except Exception:
+        pass
+
     return applied
 
 
@@ -1532,6 +1539,7 @@ class AngularAdapter(BaseAdapter):
         from amstralift.adapters.angular_standalone import (
             modernize_angular_material_templates,
             modernize_angular_standalone_components,
+            sanitize_import_providers_from,
         )
 
         applied.extend(modernize_angular_material_templates(repo_path))
@@ -1630,6 +1638,7 @@ class AngularAdapter(BaseAdapter):
                 # Always apply AST/regex standalone component modernizer to guarantee all components
                 # receive complete imports, schemas, standalone: true, and module declarations updated
                 applied.extend(modernize_angular_standalone_components(repo_path))
+                applied.extend(sanitize_import_providers_from(repo_path))
             else:
                 applied.append(f"Skipped standalone migration: requires Angular 15+ (current is v{major or 'unknown'})")
 
