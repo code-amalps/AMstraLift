@@ -426,20 +426,39 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
         except Exception:
             continue
 
-        # Purge any bogus declaration chunk imports (e.g. from '@angular/cdk/overlay.d-BdoMyOhX' or '.d-*')
-        sanitized = re.sub(
-            r"(?m)^import\s*\{[^}]*\}\s*from\s*['\"][^'\"]*overlay\.d-[^'\"]*['\"];?\s*\n?",
-            "",
-            content,
+        # Purge any bogus declaration chunk imports (e.g. from '@angular/material/date-adapter.d-CtKXiXkO' or '@angular/cdk/overlay.d-BdoMyOhX')
+        content_sanitized = False
+        if ".d-" in content:
+            chunk_import_pattern = re.compile(
+                r"(?m)^import\s*(?:type\s+)?\{([^}]+)\}\s*from\s*['\"][^'\"]*\.d-[A-Za-z0-9_-]+[^'\"]*['\"];?\s*\n?"
+            )
+            c_matches = list(chunk_import_pattern.finditer(content))
+            if c_matches:
+                for cm in reversed(c_matches):
+                    symbols = [s.strip() for s in cm.group(1).split(",") if s.strip()]
+                    type_fallbacks = []
+                    for sym in symbols:
+                        clean_sym = sym.split()[-1]
+                        rest_of_code = content[:cm.start()] + content[cm.end():]
+                        if re.search(rf"\b{re.escape(clean_sym)}\b", rest_of_code):
+                            type_fallbacks.append(f"type {clean_sym} = any;")
+                    replacement = ("\n".join(type_fallbacks) + "\n") if type_fallbacks else ""
+                    content = content[:cm.start()] + replacement + content[cm.end():]
+                    content_sanitized = True
+
+            generic_chunk_pattern = re.compile(
+                r"(?m)^import\s+[^;]*from\s*['\"][^'\"]*\.d-[A-Za-z0-9_-]+[^'\"]*['\"];?\s*\n?"
+            )
+            if generic_chunk_pattern.search(content):
+                content = generic_chunk_pattern.sub("", content)
+                content_sanitized = True
+
+        single_letter_pattern = re.compile(
+            r"(?m)^import\s*\{\s*[A-Z]\s*\}\s*from\s*['\"][^'\"]*['\"];?\s*\n?"
         )
-        sanitized = re.sub(
-            r"(?m)^import\s*\{\s*R\s*\}\s*from\s*['\"][^'\"]*['\"];?\s*\n?",
-            "",
-            sanitized,
-        )
-        content_sanitized = (sanitized != content)
-        if content_sanitized:
-            content = sanitized
+        if single_letter_pattern.search(content):
+            content = single_letter_pattern.sub("", content)
+            content_sanitized = True
 
         if "@Component" not in content:
             if content_sanitized:
@@ -589,7 +608,7 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
 
         if existing_imp_match:
             existing_imports = [x.strip() for x in existing_imp_match.group(1).split(",") if x.strip()]
-            cleaned_existing = [x for x in existing_imports if x != "R"]
+            cleaned_existing = [x for x in existing_imports if len(x) > 1 and x not in ("R", "D")]
             had_r = len(cleaned_existing) != len(existing_imports)
             missing_imps = [x for x in unique_needed if x not in cleaned_existing]
             if missing_imps or had_r:

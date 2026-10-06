@@ -990,21 +990,38 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
                 modified = True
                 test_bootstrap_count += 1
 
-        # 7. Clean up bogus declaration chunk imports (e.g. from '@angular/cdk/overlay.d-BdoMyOhX' or '.d-*')
-        if ".d-" in content or "overlay.d" in content or "import { R }" in content or "import { R," in content:
-            new_content = re.sub(
-                r"(?m)^import\s*\{[^}]*\}\s*from\s*['\"][^'\"]*overlay\.d-[^'\"]*['\"];?\s*\n?",
-                "",
-                content,
+        # 7. Clean up bogus declaration chunk imports (e.g. from '@angular/material/date-adapter.d-CtKXiXkO' or '@angular/cdk/overlay.d-BdoMyOhX')
+        if ".d-" in content:
+            chunk_import_pattern = re.compile(
+                r"(?m)^import\s*(?:type\s+)?\{([^}]+)\}\s*from\s*['\"][^'\"]*\.d-[A-Za-z0-9_-]+[^'\"]*['\"];?\s*\n?"
             )
-            new_content = re.sub(
-                r"(?m)^import\s*\{\s*R\s*\}\s*from\s*['\"][^'\"]*['\"];?\s*\n?",
-                "",
-                new_content,
+            c_matches = list(chunk_import_pattern.finditer(content))
+            if c_matches:
+                for cm in reversed(c_matches):
+                    symbols = [s.strip() for s in cm.group(1).split(",") if s.strip()]
+                    type_fallbacks = []
+                    for sym in symbols:
+                        clean_sym = sym.split()[-1]
+                        rest_of_code = content[:cm.start()] + content[cm.end():]
+                        if re.search(rf"\b{re.escape(clean_sym)}\b", rest_of_code):
+                            type_fallbacks.append(f"type {clean_sym} = any;")
+                    replacement = ("\n".join(type_fallbacks) + "\n") if type_fallbacks else ""
+                    content = content[:cm.start()] + replacement + content[cm.end():]
+                    modified = True
+
+            generic_chunk_pattern = re.compile(
+                r"(?m)^import\s+[^;]*from\s*['\"][^'\"]*\.d-[A-Za-z0-9_-]+[^'\"]*['\"];?\s*\n?"
             )
-            if new_content != content:
-                content = new_content
+            if generic_chunk_pattern.search(content):
+                content = generic_chunk_pattern.sub("", content)
                 modified = True
+
+        single_letter_pattern = re.compile(
+            r"(?m)^import\s*\{\s*[A-Z]\s*\}\s*from\s*['\"][^'\"]*['\"];?\s*\n?"
+        )
+        if single_letter_pattern.search(content):
+            content = single_letter_pattern.sub("", content)
+            modified = True
 
         # 8. Clean up accidental double commas in @Component decorators (e.g. styleUrls: [...],,)
         if ",," in content:

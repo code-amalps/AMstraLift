@@ -940,6 +940,43 @@ export class R {}
     assert "R" not in [x.strip() for x in re.search(r"imports:\s*\[(.*?)\]", txt2).group(1).split(",")]
 
 
+def test_modernize_angular_purges_date_adapter_chunk_import(tmp_path: Path):
+    """Verify generic .d-<hash> imports (like date-adapter.d-CtKXiXkO) are purged and type fallbacks provided."""
+    from amstralift.adapters.angular import _modernize_angular_source_files
+
+    comp_file = tmp_path / "delete-risk-score.component.ts"
+    comp_file.write_text("""import { Component } from '@angular/core';
+import { D } from '@angular/material/date-adapter.d-CtKXiXkO';
+import { DateAdapter } from '@angular/material/core';
+
+@Component({
+  selector: 'app-delete-risk-score',
+  template: ''
+})
+export class DeleteRiskScoreComponent {
+  constructor(private adapter: DateAdapter<D>) {}
+}
+""", encoding="utf-8")
+
+    unused_file = tmp_path / "unused-chunk.component.ts"
+    unused_file.write_text("""import { Component } from '@angular/core';
+import { D } from '@angular/material/date-adapter.d-CtKXiXkO';
+
+@Component({ selector: 'app-unused', template: '' })
+export class UnusedChunkComponent {}
+""", encoding="utf-8")
+
+    _modernize_angular_source_files(tmp_path, target_major=19)
+
+    txt = comp_file.read_text(encoding="utf-8")
+    assert "date-adapter.d-CtKXiXkO" not in txt
+    assert "type D = any;" in txt
+
+    unused_txt = unused_file.read_text(encoding="utf-8")
+    assert "date-adapter.d-CtKXiXkO" not in unused_txt
+    assert "type D" not in unused_txt
+
+
 def test_modernize_angular_builder_19_plus(tmp_path: Path):
     """Verify Angular 19+ upgrades preserve/heal devkit builders when @angular/build is not present."""
     from amstralift.adapters.angular import _modernize_angular_workspace_json, _align_angular_ecosystem_dependencies
