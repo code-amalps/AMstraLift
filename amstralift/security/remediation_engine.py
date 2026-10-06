@@ -42,6 +42,25 @@ class RemediationEngine:
         except Exception:
             return []
 
+        # Clean up problematic native binary & incompatible multi-major routing overrides if present
+        if "overrides" in pkg_data and isinstance(pkg_data["overrides"], dict):
+            for bad_key in list(pkg_data["overrides"].keys()):
+                if bad_key in ("esbuild", "path-to-regexp") or bad_key.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                    del pkg_data["overrides"][bad_key]
+                    has_changes = True
+            for parent_k, parent_v in list(pkg_data["overrides"].items()):
+                if isinstance(parent_v, dict):
+                    for bad_k in list(parent_v.keys()):
+                        if bad_k in ("esbuild", "path-to-regexp") or bad_k.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                            del parent_v[bad_k]
+                            has_changes = True
+                    if not parent_v:
+                        del pkg_data["overrides"][parent_k]
+                        has_changes = True
+            if not pkg_data["overrides"]:
+                del pkg_data["overrides"]
+                has_changes = True
+
         has_changes = False
         for item in plan.items:
             pkg = item.package_name
@@ -61,9 +80,12 @@ class RemediationEngine:
                     has_changes = True
             else:
                 # Transitive remediation via npm overrides
-                # Native binary packages (like esbuild) have strict platform-binary equality checks
-                # and are managed by the framework/build toolchain; overriding them breaks install scripts.
-                if pkg == "esbuild" or pkg.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                # Native binary packages (like esbuild) and multi-major routing packages (like path-to-regexp)
+                # break if globally overridden because different sub-dependencies require conflicting major branches.
+                if (
+                    pkg in ("esbuild", "path-to-regexp")
+                    or pkg.startswith(("@esbuild/", "@swc/", "@rollup/"))
+                ):
                     continue
                 pkg_data.setdefault("overrides", {})[pkg] = target_v
                 has_changes = True

@@ -46,6 +46,20 @@ class CompatibilityAwareVersionSelector:
         project_context: dict[str, Any] | None = None,
     ) -> VersionSelectionResult:
         """Select the safest, most compatible secure version."""
+        # Multi-major incompatible routing packages (path-to-regexp) must not be forced via overrides
+        if package_name == "path-to-regexp" and ecosystem.lower() in ("npm", "yarn", "node"):
+            return VersionSelectionResult(
+                target_version=None,
+                is_major_bump=False,
+                rationale="path-to-regexp has mutually incompatible major version branches (0.1.x vs 6.x vs 8.x) required simultaneously by Express and dev-server router. Global override causes fatal 'TypeError: pathRegexp.match is not a function'.",
+                breaking_risks=["Breaks router/webpack dev-server and Express runtime"],
+                is_compatible=False,
+                advisory=(
+                    f"Transitive override skipped for {package_name} to preserve dev server routing stability. "
+                    "Sub-dependencies in the workspace require conflicting major branches (0.1.x vs 6.x)."
+                ),
+            )
+
         if not fixed_versions:
             return VersionSelectionResult(
                 target_version=None,

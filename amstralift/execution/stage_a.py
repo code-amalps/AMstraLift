@@ -125,9 +125,12 @@ def run_stage_a(
                                 parents.add(change.parent_package)
                             if parents and any(p in existing_names for p in parents):
                                 continue
-                        # Native binary packages have strict platform-binary equality checks
-                        # and are managed by the build toolchain; overriding them breaks install scripts.
-                        if change.package_name == "esbuild" or change.package_name.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                        # Native binary packages and multi-major routing packages (like path-to-regexp)
+                        # break if globally overridden; skip them to maintain install scripts and runtime routing.
+                        if (
+                            change.package_name in ("esbuild", "path-to-regexp")
+                            or change.package_name.startswith(("@esbuild/", "@swc/", "@rollup/"))
+                        ):
                             continue
                         candidates.append(change)
                         existing_names.add(change.package_name)

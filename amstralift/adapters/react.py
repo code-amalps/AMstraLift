@@ -205,15 +205,15 @@ class ReactAdapter(BaseAdapter):
         pkg_file = repo_path / "package.json"
         data = json.loads(pkg_file.read_text(encoding="utf-8"))
 
-        # Clean up problematic native binary overrides if present
+        # Clean up problematic native binary & incompatible multi-major routing overrides if present
         if "overrides" in data and isinstance(data["overrides"], dict):
             for bad_key in list(data["overrides"].keys()):
-                if bad_key == "esbuild" or bad_key.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                if bad_key in ("esbuild", "path-to-regexp") or bad_key.startswith(("@esbuild/", "@swc/", "@rollup/")):
                     del data["overrides"][bad_key]
             for parent_k, parent_v in list(data["overrides"].items()):
                 if isinstance(parent_v, dict):
                     for bad_k in list(parent_v.keys()):
-                        if bad_k == "esbuild" or bad_k.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                        if bad_k in ("esbuild", "path-to-regexp") or bad_k.startswith(("@esbuild/", "@swc/", "@rollup/")):
                             del parent_v[bad_k]
                     if not parent_v:
                         del data["overrides"][parent_k]
@@ -222,9 +222,12 @@ class ReactAdapter(BaseAdapter):
 
         for change in changes:
             if change.change_type == "transitive":
-                # Native binary packages (like esbuild) have strict platform-binary equality checks
-                # and are managed by the framework/build toolchain; overriding them breaks install scripts.
-                if change.package_name == "esbuild" or change.package_name.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                # Native binary packages (like esbuild) and multi-major routing packages (like path-to-regexp)
+                # break if globally overridden because different sub-dependencies require conflicting major branches.
+                if (
+                    change.package_name in ("esbuild", "path-to-regexp")
+                    or change.package_name.startswith(("@esbuild/", "@swc/", "@rollup/"))
+                ):
                     continue
 
                 clean_target = change.to_version if change.to_version.startswith(("^", "~")) else f"^{change.to_version}"

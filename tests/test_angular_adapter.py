@@ -1513,6 +1513,81 @@ export class AppComponent implements OnInit {}
     assert "imports: [CommonModule]" in content
 
 
+def test_align_angular_ecosystem_dependencies_purges_path_to_regexp_override(tmp_path: Path):
+    """Verify that path-to-regexp in overrides is automatically cleaned up to prevent dev-server crash."""
+    from amstralift.adapters.angular import _align_angular_ecosystem_dependencies
+
+    pkg_file = tmp_path / "package.json"
+    pkg_file.write_text(
+        json.dumps(
+            {
+                "dependencies": {"@angular/core": "^19.0.0"},
+                "overrides": {
+                    "path-to-regexp": "^0.1.10",
+                    "foo": "^1.0.0",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _align_angular_ecosystem_dependencies(tmp_path, target_major=19)
+
+    data = json.loads(pkg_file.read_text(encoding="utf-8"))
+    assert "path-to-regexp" not in data.get("overrides", {})
+    assert data["overrides"]["foo"] == "^1.0.0"
+
+
+def test_apply_upgrade_skips_path_to_regexp_transitive_override(tmp_path: Path):
+    """Verify that apply_upgrade never adds path-to-regexp to overrides."""
+    from amstralift.adapters.angular import AngularAdapter
+    from amstralift.core.models import DependencyChange, DependencyTier
+
+    pkg_file = tmp_path / "package.json"
+    pkg_file.write_text(
+        json.dumps(
+            {
+                "dependencies": {"@angular/core": "^19.0.0"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    adapter = AngularAdapter()
+    changes = [
+        DependencyChange(
+            package_name="path-to-regexp",
+            from_version="0.1.7",
+            to_version="0.1.10",
+            ecosystem="angular",
+            tier=DependencyTier.TIER_1_SAFE,
+            change_type="transitive",
+            cve_id="CVE-2024-45296",
+        )
+    ]
+
+    adapter.apply_upgrade(tmp_path, changes)
+
+    data = json.loads(pkg_file.read_text(encoding="utf-8"))
+    assert "path-to-regexp" not in data.get("overrides", {})
+
+
+def test_compatibility_selector_rejects_path_to_regexp_global_override():
+    """Verify that CompatibilityAwareVersionSelector marks path-to-regexp as incompatible for global override."""
+    from amstralift.security.compatibility_selector import CompatibilityAwareVersionSelector
+
+    res = CompatibilityAwareVersionSelector.select_version(
+        package_name="path-to-regexp",
+        current_version="0.1.7",
+        fixed_versions=["0.1.10", "8.0.0"],
+        ecosystem="npm",
+    )
+    assert res.is_compatible is False
+    assert res.target_version is None
+    assert "path-to-regexp" in res.rationale
+
+
+
 
 
 

@@ -193,8 +193,28 @@ def _align_angular_ecosystem_dependencies(repo_path: Path, target_major: int | N
         if maj is not None and maj > 19:
             del dev_deps["@angular/build"]
             modified = True
-        elif "@angular-devkit/build-angular" in dev_deps and not (repo_path / "node_modules" / "@angular" / "build").exists():
+        elif target_major is not None and target_major < 18:
             del dev_deps["@angular/build"]
+            modified = True
+
+    # Clean up problematic native binary & incompatible multi-major routing overrides if present
+    # (e.g. path-to-regexp causes 'TypeError: pathRegexp.match is not a function' in dev-server)
+    if "overrides" in data and isinstance(data["overrides"], dict):
+        for bad_key in list(data["overrides"].keys()):
+            if bad_key in ("esbuild", "path-to-regexp") or bad_key.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                del data["overrides"][bad_key]
+                modified = True
+        for parent_k, parent_v in list(data["overrides"].items()):
+            if isinstance(parent_v, dict):
+                for bad_k in list(parent_v.keys()):
+                    if bad_k in ("esbuild", "path-to-regexp") or bad_k.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                        del parent_v[bad_k]
+                        modified = True
+                if not parent_v:
+                    del data["overrides"][parent_k]
+                    modified = True
+        if not data["overrides"]:
+            del data["overrides"]
             modified = True
 
     # Ensure @types/node is present in devDependencies for Node type resolution (TS2591)
@@ -1379,15 +1399,15 @@ class AngularAdapter(BaseAdapter):
         pkg_file = repo_path / "package.json"
         data = json.loads(pkg_file.read_text(encoding="utf-8"))
 
-        # Clean up problematic native binary overrides if present
+        # Clean up problematic native binary & incompatible multi-major routing overrides if present
         if "overrides" in data and isinstance(data["overrides"], dict):
             for bad_key in list(data["overrides"].keys()):
-                if bad_key == "esbuild" or bad_key.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                if bad_key in ("esbuild", "path-to-regexp") or bad_key.startswith(("@esbuild/", "@swc/", "@rollup/")):
                     del data["overrides"][bad_key]
             for parent_k, parent_v in list(data["overrides"].items()):
                 if isinstance(parent_v, dict):
                     for bad_k in list(parent_v.keys()):
-                        if bad_k == "esbuild" or bad_k.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                        if bad_k in ("esbuild", "path-to-regexp") or bad_k.startswith(("@esbuild/", "@swc/", "@rollup/")):
                             del parent_v[bad_k]
                     if not parent_v:
                         del data["overrides"][parent_k]
@@ -1396,9 +1416,12 @@ class AngularAdapter(BaseAdapter):
 
         for change in changes:
             if change.change_type == "transitive":
-                # Native binary packages (like esbuild) have strict platform-binary equality checks
-                # and are managed by the framework/build toolchain; overriding them breaks install scripts.
-                if change.package_name == "esbuild" or change.package_name.startswith(("@esbuild/", "@swc/", "@rollup/")):
+                # Native binary packages (like esbuild) and multi-major routing packages (like path-to-regexp)
+                # break if globally overridden because different sub-dependencies require conflicting major branches.
+                if (
+                    change.package_name in ("esbuild", "path-to-regexp")
+                    or change.package_name.startswith(("@esbuild/", "@swc/", "@rollup/"))
+                ):
                     continue
 
                 clean_target = change.to_version if change.to_version.startswith(("^", "~")) else f"^{change.to_version}"
