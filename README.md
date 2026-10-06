@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="amstralift/assets/logo.png" alt="AMstraLift Logo" width="620" />
+</p>
+
 # 🚀 AMstraLift
 
 > **Automated dependency and framework upgrade engine with a cryptographically bound trust boundary.**
@@ -5,8 +9,8 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Built with Python](https://img.shields.io/badge/Built_with-Python_3.11+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-74%20Passed-brightgreen.svg)]()
-[![Release](https://img.shields.io/badge/Release-v0.1.16-informational.svg)](https://github.com/code-amalps/AMstraLift/releases)
+[![Tests](https://img.shields.io/badge/Tests-265%2B%20Passed-brightgreen.svg)]()
+[![Release](https://img.shields.io/badge/Release-v0.1.17-informational.svg)](https://github.com/code-amalps/AMstraLift/releases)
 [![Architect](https://img.shields.io/badge/Architect-Amal%20P%20S-black.svg)](https://github.com/code-amalps)
 
 AMstraLift is an enterprise-grade automated modernization engine that safely upgrades frameworks and remediates security vulnerabilities (CVEs) across **Angular, React, .NET, and Python** codebases.
