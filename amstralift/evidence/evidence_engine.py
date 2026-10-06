@@ -187,6 +187,7 @@ def compute_canonical_evidence_payload(bundle: EvidenceBundle) -> bytes:
             "tests": bundle.verification.tests,
             "post_rescan": bundle.verification.post_rescan,
             "manifest_diff": bundle.verification.manifest_diff,
+            "gate_6_semantic_diff": bundle.verification.gate_6_semantic_diff,
         },
     }
     return json.dumps(payload, sort_keys=True).encode("utf-8")

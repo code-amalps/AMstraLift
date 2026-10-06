@@ -64,12 +64,13 @@ def render_markdown_report(bundle: EvidenceBundle) -> str:
         f"  Post-upgrade CVEs              {v.post_cves_count:>6,}",
         f"  Vulnerabilities Resolved       {v.cves_resolved:>6,}",
         "",
-        "5-Gate Sandboxed Verification:",
+        "6-Gate Sandboxed Verification & Contract Boundary:",
         f"  Gate 1: Clean Install          {v.clean_install.upper():>6}",
         f"  Gate 2: Project Build          {v.build.upper():>6} ({v.build_duration_seconds:.1f}s)",
         f"  Gate 3: Test Suite             {v.tests.upper():>6} ({v.tests_passed}/{v.tests_run} passed)",
         f"  Gate 4: Post-Rescan            {v.post_rescan.upper():>6}",
         f"  Gate 5: Manifest Diff          {v.manifest_diff.upper():>6}",
+        f"  Gate 6: Semantic / Contract    {v.gate_6_semantic_diff.upper():>6}",
         "```",
         "",
         "---",
@@ -230,12 +231,13 @@ def render_html_report(bundle: EvidenceBundle) -> str:
         </div>
 
         <div class="card" style="margin-top:24px;">
-            <h3 style="margin-top:0;">🧪 5-Gate Sandbox Verification</h3>
+            <h3 style="margin-top:0;">🧪 6-Gate Verification & Contract Boundary</h3>
             <div class="gate"><span>Gate 1: Clean Install</span><span class="gate-pass">{v.clean_install.upper()}</span></div>
             <div class="gate"><span>Gate 2: Project Build</span><span class="gate-pass">{v.build.upper()} ({v.build_duration_seconds:.1f}s)</span></div>
             <div class="gate"><span>Gate 3: Test Suite</span><span class="gate-pass">{v.tests.upper()} ({v.tests_passed}/{v.tests_run} passed)</span></div>
             <div class="gate"><span>Gate 4: Post-Upgrade Rescan</span><span class="gate-pass">{v.post_rescan.upper()} (0 new CVEs)</span></div>
-            <div class="gate" style="border-bottom:none;"><span>Gate 5: Signed Manifest Diff</span><span class="gate-pass">{v.manifest_diff.upper()}</span></div>
+            <div class="gate"><span>Gate 5: Signed Manifest Diff</span><span class="gate-pass">{v.manifest_diff.upper()}</span></div>
+            <div class="gate" style="border-bottom:none;"><span>Gate 6: Semantic & Contract Diff</span><span class="gate-pass">{v.gate_6_semantic_diff.upper()}</span></div>
         </div>
 
         {refusals_html}

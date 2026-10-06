@@ -117,6 +117,9 @@ class GateVerificationRecord(BaseModel):
     tests: Literal["passed", "failed", "skipped", "uncertain"] = "passed"
     post_rescan: Literal["passed", "failed", "skipped", "uncertain"] = "passed"
     manifest_diff: Literal["passed", "failed", "skipped", "uncertain"] = "passed"
+    gate_6_semantic_diff: Literal["passed", "passed_with_expected_changes", "failed", "skipped"] = "passed"
+    semantic_violations: list[str] = Field(default_factory=list)
+    expected_changes: list[str] = Field(default_factory=list)
 
     build_duration_seconds: float = 0.0
     tests_run: int = 0
@@ -137,6 +140,7 @@ class GateVerificationRecord(BaseModel):
             and self.tests in ("passed", "skipped")
             and self.post_rescan == "passed"
             and self.manifest_diff == "passed"
+            and self.gate_6_semantic_diff in ("passed", "passed_with_expected_changes", "skipped")
         )
 
 
