@@ -4,7 +4,7 @@ requires-python = ">=3.11"
 
 [[package]]
 name = "amstralift"
-version = "0.1.8"
+version = "0.1.17"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

@@ -17,7 +17,7 @@ from amstralift.adapters.python import PythonAdapter
 from amstralift.adapters.react import ReactAdapter
 from amstralift.core.cancellation import CancellableScope, CancellationToken, check_cancelled
 from amstralift.core.crypto import sign_bundle
-from amstralift.core.models import DependencyChange, PullRequestProposal, SignedAdvisoryBundle
+from amstralift.core.models import DependencyChange, MonorepoTopology, PullRequestProposal, SignedAdvisoryBundle
 from amstralift.core.workspace import prepare_stage_a_workspace, run_git
 from amstralift.execution.stage_a import run_stage_a
 from amstralift.execution.stage_b import run_stage_b
@@ -60,17 +60,44 @@ class UpgradeOrchestrator:
             )
         return self.adapters[name]
 
-    def auto_detect_ecosystem(self, repo_path: Path) -> str:
-        """Automatically identify the repository ecosystem."""
+    def auto_detect_ecosystem(self, repo_path: Path, subproject: str | None = None) -> str:
+        """Automatically identify the repository or subproject ecosystem."""
+        if subproject:
+            target_path = (repo_path / subproject).resolve()
+            for name, adapter in self.adapters.items():
+                if adapter.detect(target_path):
+                    return name
+            raise OrchestrationError(f"Unable to auto-detect a supported ecosystem for subproject at {target_path}")
+
+        # Check monorepo topology for multi-project ambiguity
+        from amstralift.core.monorepo import MonorepoScanner
+        topo = MonorepoScanner.discover(repo_path)
+        if len(topo.projects) > 1:
+            options = ", ".join(f"'{p.rel_path}' ({p.ecosystem})" for p in topo.projects)
+            raise OrchestrationError(
+                f"Polyglot monorepo detected with {len(topo.projects)} projects: {options}. "
+                f"Please specify which project to upgrade using --project <path> (e.g., --project {topo.projects[0].rel_path})."
+            )
+        elif len(topo.projects) == 1:
+            return topo.projects[0].ecosystem
+
+        # Fallback to direct adapter detection on root repo_path
         for name, adapter in self.adapters.items():
             if adapter.detect(repo_path):
                 return name
+
         raise OrchestrationError(f"Unable to auto-detect a supported ecosystem for repository at {repo_path}")
+
+    def discover_monorepo(self, repo_path: Path) -> MonorepoTopology:
+        """Discover all projects and ecosystems in a monorepo or standard repository."""
+        from amstralift.core.monorepo import MonorepoScanner
+        return MonorepoScanner.discover(repo_path)
 
     def run_upgrade(
         self,
         repo_path: Path,
         ecosystem: str | None = None,
+        subproject: str | None = None,
         target_branch: str = "main",
         dry_run: bool = False,
         publish: bool = False,
@@ -95,16 +122,20 @@ class UpgradeOrchestrator:
         if cancellation_token:
             cancellation_token.check_cancelled()
 
-        ecosystem_name = ecosystem or self.auto_detect_ecosystem(repo_path)
+        target_project_path = (repo_path / subproject).resolve() if subproject else repo_path
+        if subproject and not target_project_path.exists():
+            raise OrchestrationError(f"Subproject path '{subproject}' does not exist inside {repo_path}")
+
+        ecosystem_name = ecosystem or self.auto_detect_ecosystem(repo_path, subproject=subproject)
         adapter = self.get_adapter(ecosystem_name)
         if incremental is not None:
             self.incremental = incremental
             if hasattr(adapter, "incremental"):
                 adapter.incremental = incremental
 
-        if not adapter.detect(repo_path):
+        if not adapter.detect(target_project_path):
             raise OrchestrationError(
-                f"Repository at {repo_path} is not recognized as a valid {ecosystem_name} project."
+                f"Project at {target_project_path} is not recognized as a valid {ecosystem_name} project."
             )
 
         # Provider and remote setup if publishing requested
@@ -152,6 +183,7 @@ class UpgradeOrchestrator:
                     remediate_cves=remediate_cves,
                     progress_callback=progress_callback,
                     cancellation_token=cancellation_token,
+                    subproject=subproject,
                 )
 
                 if cancellation_token:

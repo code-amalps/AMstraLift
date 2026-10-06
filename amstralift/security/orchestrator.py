@@ -44,6 +44,7 @@ class SecurityOrchestrator:
         self,
         repo_path: Path,
         ecosystem: str | None = None,
+        subproject: str | None = None,
         mode: str = "audit",  # "audit", "preview", "apply"
         target_branch: str | None = None,
         dry_run: bool = False,
@@ -60,14 +61,16 @@ class SecurityOrchestrator:
         with CancellableScope(cancellation_token):
             check_cancelled(cancellation_token)
             repo_path = repo_path.resolve()
-            effective_ecosystem = ecosystem or self.upgrade_orchestrator.auto_detect_ecosystem(repo_path)
+            target_project_path = (repo_path / subproject).resolve() if subproject else repo_path
+            effective_ecosystem = ecosystem or self.upgrade_orchestrator.auto_detect_ecosystem(repo_path, subproject=subproject)
             effective_branch = target_branch or get_active_branch(repo_path)
 
             # 1. Discover all direct & transitive dependencies with introduction chains
             if progress_callback:
                 progress_callback(10, "Discovering dependencies & parsing manifests...")
-            print(f"   ↳ Analyzing dependency graph across {effective_ecosystem} project...", flush=True)
-            deps = DependencyGraphAnalyzer.analyze(repo_path, effective_ecosystem)
+            proj_desc = f" ({subproject})" if subproject else ""
+            print(f"   ↳ Analyzing dependency graph across {effective_ecosystem}{proj_desc} project...", flush=True)
+            deps = DependencyGraphAnalyzer.analyze(repo_path, effective_ecosystem, subproject=subproject)
             print(f"   ↳ Discovered {len(deps)} direct & transitive packages across manifests & lockfiles.", flush=True)
             check_cancelled(cancellation_token)
 
@@ -77,7 +80,7 @@ class SecurityOrchestrator:
             report = self.scanner.scan_discovered_dependencies(
                 deps,
                 ecosystem=effective_ecosystem,
-                repo_path=str(repo_path),
+                repo_path=str(target_project_path),
                 governance_manager=self.governance,
                 progress_callback=lambda msg: print(f"   {msg}", flush=True),
             )
@@ -215,11 +218,13 @@ class SecurityOrchestrator:
                 )
                 check_cancelled(cancellation_token)
 
+                sandbox_target = (sandbox_dir / subproject).resolve() if subproject else sandbox_dir
+
                 # 6. Apply minimal direct and transitive dependency changes inside sandbox
                 if progress_callback:
                     progress_callback(65, "Applying security updates to sandbox manifests & lockfiles...")
                 print(f"   ↳ Applying {len(plan.items)} updates to sandbox...", flush=True)
-                _modified_files = RemediationEngine.apply_plan(sandbox_dir, effective_ecosystem, plan)
+                _modified_files = RemediationEngine.apply_plan(sandbox_target, effective_ecosystem, plan)
                 check_cancelled(cancellation_token)
 
                 # 7. Execute the 5 Verification Gates
@@ -232,7 +237,7 @@ class SecurityOrchestrator:
                     rescan_report,
                     uncertainty_warning,
                 ) = VerificationEngine.execute_gates(
-                    workspace_path=sandbox_dir,
+                    workspace_path=sandbox_target,
                     ecosystem=effective_ecosystem,
                     plan=plan,
                     scanner=self.scanner,
@@ -263,6 +268,7 @@ class SecurityOrchestrator:
                 signed_bundle, pr_proposal = self.upgrade_orchestrator.run_upgrade(
                     repo_path=repo_path,
                     ecosystem=effective_ecosystem,
+                    subproject=subproject,
                     target_branch=effective_branch,
                     dry_run=dry_run,
                     publish=publish,

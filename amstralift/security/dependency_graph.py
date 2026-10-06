@@ -14,15 +14,33 @@ class DependencyGraphAnalyzer:
     """Extracts normalized dependency graphs across Angular, React, .NET, and Python."""
 
     @classmethod
-    def analyze(cls, repo_path: Path, ecosystem: str) -> list[DiscoveredDependency]:
-        """Discover all direct and transitive dependencies with their introduction chains."""
+    def analyze(cls, repo_path: Path, ecosystem: str, subproject: str | None = None) -> list[DiscoveredDependency]:
+        """Discover all direct and transitive dependencies with their introduction chains.
+
+        Supports monorepo subprojects (e.g. client/ or server/) and automatic sub-project discovery.
+        """
+        target_path = (repo_path / subproject).resolve() if subproject else repo_path
         eco = ecosystem.lower().strip()
         if eco in ("angular", "react", "npm"):
-            return cls.analyze_npm(repo_path, eco)
+            res = cls.analyze_npm(target_path, eco)
+            if not res and not subproject:
+                from amstralift.core.monorepo import MonorepoScanner
+                topo = MonorepoScanner.discover(repo_path)
+                for p in topo.projects:
+                    if p.ecosystem in ("angular", "react"):
+                        res.extend(cls.analyze_npm(Path(p.abs_path), p.ecosystem))
+            return res
         elif eco in ("dotnet", "nuget"):
-            return cls.analyze_dotnet(repo_path)
+            return cls.analyze_dotnet(target_path)
         elif eco in ("python", "pypi"):
-            return cls.analyze_python(repo_path)
+            res = cls.analyze_python(target_path)
+            if not res and not subproject:
+                from amstralift.core.monorepo import MonorepoScanner
+                topo = MonorepoScanner.discover(repo_path)
+                for p in topo.projects:
+                    if p.ecosystem == "python":
+                        res.extend(cls.analyze_python(Path(p.abs_path)))
+            return res
         return []
 
     @classmethod

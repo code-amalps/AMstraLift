@@ -37,6 +37,7 @@ class DependencyChange(BaseModel):
     rationale: str | None = None
     parent_package: str | None = None
     introduced_by: list[str] = Field(default_factory=list)
+    project_path: str = "."  # relative path within repository (e.g. 'client' or '.')
 
 
 class GateStatus(str, Enum):
@@ -189,4 +190,24 @@ class PullRequestProposal(BaseModel):
     remote_pr_number: int | None = None
     remote_pr_url: str | None = None
     publish_status: str = "LOCAL_ONLY"
+
+
+class DiscoveredProject(BaseModel):
+    """An individual software project discovered in a repository or monorepo."""
+
+    name: str                                  # Display name (e.g. 'frontend' or 'MyApi')
+    rel_path: str                              # Relative directory from repo root (e.g. 'client' or '.')
+    abs_path: str                              # Absolute filesystem path
+    ecosystem: str                             # 'angular', 'react', 'dotnet', 'python'
+    framework_version: str | None = None       # e.g. '17.2.0', 'net8.0', '3.11'
+    manifest_file: str                         # e.g. 'package.json', 'Api.csproj', 'pyproject.toml'
+
+
+class MonorepoTopology(BaseModel):
+    """Topology of discovered projects across single-project repos or polyglot monorepos."""
+
+    is_monorepo: bool                          # True if repo contains multiple projects or sub-projects
+    projects: list[DiscoveredProject]          # All detected projects
+    ecosystems: list[str]                      # Unique list of ecosystems present
+
 

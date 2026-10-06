@@ -65,11 +65,15 @@ def run_stage_a(
     remediate_cves: bool = True,
     progress_callback: Optional[Callable[[int, str], None]] = None,
     cancellation_token: Optional[CancellationToken] = None,
+    subproject: str | None = None,
 ) -> UnsignedAdvisoryBundle:
     """Execute Stage A inside the sanitized workspace."""
     run_id = run_id or f"run_{uuid4().hex[:12]}"
+    target_project_dir = (workspace_path / subproject).resolve() if subproject else workspace_path
     base_commit_sha = get_head_commit(workspace_path)
-    lockfiles_before = _capture_lockfile_hashes(workspace_path)
+    lockfiles_before = _capture_lockfile_hashes(target_project_dir)
+    if subproject:
+        lockfiles_before.update(_capture_lockfile_hashes(workspace_path))
 
     def _notify(step: int, total: int, pct: int, msg: str):
         if cancellation_token:
@@ -83,7 +87,7 @@ def run_stage_a(
 
     # 1. Discover upgrade candidates or use explicit changes
     _notify(1, 5, 10, "🔍 Analyzing repository and discovering dependencies...")
-    candidates = explicit_changes if explicit_changes is not None else adapter.discover_candidates(workspace_path)
+    candidates = explicit_changes if explicit_changes is not None else adapter.discover_candidates(target_project_dir)
     print(f"   ↳ Discovered {len(candidates)} upgradable dependency candidate(s).", flush=True)
 
     # 1b. Auto-discover direct and transitive dependencies with CVEs and add safe non-breaking remediation
@@ -96,14 +100,14 @@ def run_stage_a(
             from amstralift.security.plan_generator import RemediationPlanGenerator
 
             print(f"   ↳ Analyzing dependency tree across workspace ({adapter.name})...", flush=True)
-            all_deps = DependencyGraphAnalyzer.analyze(workspace_path, adapter.name)
+            all_deps = DependencyGraphAnalyzer.analyze(target_project_dir, adapter.name)
             if all_deps:
                 print(f"   ↳ Discovered {len(all_deps)} direct & transitive packages.", flush=True)
                 scanner = OSVClient()
                 audit_report = scanner.scan_discovered_dependencies(
                     all_deps,
                     ecosystem=adapter.name,
-                    repo_path=str(workspace_path),
+                    repo_path=str(target_project_dir),
                     progress_callback=lambda msg: print(f"   {msg}", flush=True),
                 )
                 if audit_report.findings:
@@ -142,7 +146,7 @@ def run_stage_a(
 
     # 2. Apply upgrades to manifests/lockfiles
     _notify(3, 5, 45, "📦 Applying version updates to manifests and regenerating lockfiles...")
-    adapter.apply_upgrade(workspace_path, candidates)
+    adapter.apply_upgrade(target_project_dir, candidates)
 
     # 2a. Post-upgrade transitive CVE remediation pass
     _notify(4, 5, 65, "🛡️ Running post-upgrade CVE checks and framework modernizations...")
@@ -152,13 +156,13 @@ def run_stage_a(
             from amstralift.security.osv_client import OSVClient
             from amstralift.security.plan_generator import RemediationPlanGenerator
 
-            post_deps = DependencyGraphAnalyzer.analyze(workspace_path, adapter.name)
+            post_deps = DependencyGraphAnalyzer.analyze(target_project_dir, adapter.name)
             if post_deps:
                 scanner = OSVClient()
                 post_report = scanner.scan_discovered_dependencies(
                     post_deps,
                     ecosystem=adapter.name,
-                    repo_path=str(workspace_path),
+                    repo_path=str(target_project_dir),
                 )
                 if post_report.findings:
                     post_plan = RemediationPlanGenerator.generate_plan(post_report)
@@ -182,7 +186,7 @@ def run_stage_a(
                         existing_names.add(change.package_name)
 
                     if clean_post_changes:
-                        adapter.apply_upgrade(workspace_path, clean_post_changes)
+                        adapter.apply_upgrade(target_project_dir, clean_post_changes)
                         candidates.extend(clean_post_changes)
         except Exception as e:
             logger.warning("Post-upgrade CVE remediation pass skipped: %s", e)
@@ -190,7 +194,7 @@ def run_stage_a(
     # 2b. Apply optional ecosystem modernizations (e.g. control-flow, standalone)
     applied_modernizations: list[str] = []
     if modernize:
-        applied_modernizations = adapter.apply_modernizations(workspace_path, modernize)
+        applied_modernizations = adapter.apply_modernizations(target_project_dir, modernize)
 
     # 3. Run declared build and test gates
     _notify(5, 5, 80, "⚡ Executing build and test verification gates...")
@@ -203,12 +207,17 @@ def run_stage_a(
 
     try:
         gate_summary = adapter.run_build_and_tests(
-            workspace_path,
+            target_project_dir,
             timeout_seconds=test_timeout,
             progress_callback=_gate_progress,
         )
     except TypeError:
-        gate_summary = adapter.run_build_and_tests(workspace_path, timeout_seconds=test_timeout)
+        gate_summary = adapter.run_build_and_tests(target_project_dir, timeout_seconds=test_timeout)
+
+    # Tag candidates with subproject path if applicable
+    if subproject:
+        for c in candidates:
+            c.project_path = subproject
 
     # 4. Generate unified git patch
     if progress_callback:
@@ -222,7 +231,9 @@ def run_stage_a(
         raise StageAExecutionError("Upgrade resulted in an empty patch.")
 
     patch_sha256 = compute_sha256(patch)
-    lockfiles_after = _capture_lockfile_hashes(workspace_path)
+    lockfiles_after = _capture_lockfile_hashes(target_project_dir)
+    if subproject:
+        lockfiles_after.update(_capture_lockfile_hashes(workspace_path))
 
     # 5. Security & Migration diff classification
     touched_paths = validate_patch_security(patch)
@@ -246,6 +257,7 @@ def run_stage_a(
         modernizations=applied_modernizations,
         advisory_notes=[
             f"Ecosystem: {adapter.name}",
+            *( [f"Subproject: {subproject}"] if subproject else [] ),
             f"Touched files: {len(touched_paths)}",
             f"Migration risk: {migration.risk_level}",
         ],

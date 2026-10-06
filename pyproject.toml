@@ -1,6 +1,6 @@
 [project]
 name = "amstralift"
-version = "0.1.16"
+version = "0.1.17"
 description = "Automated dependency and framework upgrade engine with a cryptographically bound trust boundary."
 readme = "README.md"
 authors = [

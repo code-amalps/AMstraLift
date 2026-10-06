@@ -24,7 +24,7 @@ def suppress_console_for_gui() -> None:
 
         # If user passed explicit CLI subcommands (run, audit, etc.), do not suppress console
         args = [a.lower() for a in sys.argv[1:]]
-        cli_commands = {"run", "audit", "version", "--help", "-h", "governance", "report", "package", "pack"}
+        cli_commands = {"run", "audit", "projects", "topology", "version", "--help", "-h", "governance", "report", "package", "pack"}
         if any(a in cli_commands for a in args):
             return
 
@@ -128,6 +128,14 @@ def gui():
 def run(
     repo: Annotated[Path, typer.Option("--repo", "-r", help="Path to target repository.")] = Path("."),
     ecosystem: Annotated[str | None, typer.Option("--ecosystem", "-e", help="Target ecosystem (angular, python, dotnet, react). Auto-detected if omitted.")] = None,
+    project: Annotated[
+        str | None,
+        typer.Option(
+            "--project",
+            "-p",
+            help="Relative subproject path within a monorepo (e.g. 'client', 'server', 'frontend', 'backend').",
+        ),
+    ] = None,
     branch: Annotated[str | None, typer.Option("--branch", "-b", help="Target base branch name (defaults to active branch).")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Simulate without modifying git branch/commit.")] = False,
     publish: Annotated[bool, typer.Option("--publish", help="Push branch and open reviewable PR on remote Git provider.")] = False,
@@ -237,7 +245,8 @@ def run(
     if not effective_branch:
         active = get_active_branch(repo)
         # Check if active branch has project manifests in Git tree
-        manifest_names = ("package.json", "pyproject.toml", "requirements.txt")
+        prefix = f"{project}/" if project else ""
+        manifest_names = (f"{prefix}package.json", f"{prefix}pyproject.toml", f"{prefix}requirements.txt")
         has_manifest = any(
             run_git(["cat-file", "-e", f"{active}:{m}"], cwd=repo).returncode == 0
             for m in manifest_names
@@ -255,10 +264,11 @@ def run(
         effective_branch = active
 
     eco_str = ecosystem or "auto-detect"
+    proj_str = f" | Subproject: [yellow]{project}[/yellow]" if project else ""
     console.print(
         Panel.fit(
             f"[bold blue]AMstraLift[/bold blue] - Initiating upgrade for [cyan]{repo.resolve()}[/cyan] ({eco_str})\n"
-            f"[dim]Branch: {effective_branch} | Publish: {publish} | Dry-run: {dry_run}[/dim]",
+            f"[dim]Branch: {effective_branch} | Publish: {publish} | Dry-run: {dry_run}{proj_str}[/dim]",
             border_style="blue",
         )
     )
@@ -272,6 +282,7 @@ def run(
             signed_bundle, pr_proposal = orchestrator.run_upgrade(
                 repo_path=repo,
                 ecosystem=ecosystem,
+                subproject=project,
                 target_branch=effective_branch,
                 dry_run=dry_run,
                 publish=publish,
@@ -447,10 +458,59 @@ def init_ci(
         raise typer.Exit(code=1) from e
 
 
+@app.command("projects")
+@app.command("topology")
+def projects(
+    repo: Annotated[Path, typer.Option("--repo", "-r", help="Target repository directory.")] = Path("."),
+    depth: Annotated[int, typer.Option("--depth", "-d", help="Maximum directory scan depth.")] = 3,
+):
+    """Discover and display all projects in a monorepo or polyglot repository."""
+    if not repo.exists() or not repo.is_dir():
+        console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {repo.resolve()}")
+        raise typer.Exit(code=1)
+
+    from amstralift.core.monorepo import MonorepoScanner
+
+    topo = MonorepoScanner.discover(repo, max_depth=depth)
+    if not topo.projects:
+        console.print(f"[yellow]No recognized projects (Angular, React, .NET, Python) found in {repo.resolve()}[/yellow]")
+        raise typer.Exit(code=0)
+
+    title = f"Monorepo Topology ({len(topo.projects)} projects discovered)" if topo.is_monorepo else "Repository Project Topology"
+    table = Table(
+        title=title,
+        header_style="bold cyan",
+        border_style="dim",
+    )
+    table.add_column("Project Name", style="bold")
+    table.add_column("Ecosystem", style="green")
+    table.add_column("Framework Version", style="yellow")
+    table.add_column("Subproject Path", style="cyan")
+    table.add_column("Manifest File", style="dim")
+
+    for p in topo.projects:
+        fw = p.framework_version or "latest"
+        table.add_row(
+            p.name,
+            p.ecosystem.upper(),
+            fw,
+            p.rel_path,
+            p.manifest_file,
+        )
+
+    console.print(table)
+    if topo.is_monorepo:
+        console.print(
+            f"\n[bold green]✔ Polyglot Monorepo detected![/bold green] Ecosystems: [cyan]{', '.join(topo.ecosystems)}[/cyan]\n"
+            f"[dim]To target a specific project, run: [/dim][bold cyan]amstralift run --project <path>[/bold cyan] [dim]or [/dim][bold cyan]amstralift audit --project <path>[/bold cyan]"
+        )
+
+
 @app.command()
 def audit(
     repo: Annotated[Path, typer.Option("--repo", "-r", help="Target repository directory to audit.")] = Path("."),
     ecosystem: Annotated[str | None, typer.Option("--ecosystem", "-e", help="Ecosystem override: 'angular', 'react', 'dotnet', 'python'.")] = None,
+    project: Annotated[str | None, typer.Option("--project", help="Relative subproject path within a monorepo (e.g. 'client', 'server', 'frontend', 'backend').")] = None,
     mode: Annotated[str, typer.Option("--mode", "-m", help="Remediation mode: 'audit' (scan only), 'preview' (plan only), or 'apply' (sandbox remediation).")] = "audit",
     fix: Annotated[bool, typer.Option("--fix", help="Alias for --mode apply.")] = False,
     allow_major: Annotated[bool, typer.Option("--allow-major", help="Allow applying breaking major version upgrades during remediation.")] = False,
@@ -481,6 +541,7 @@ def audit(
             result = orchestrator.run_remediation(
                 repo_path=repo,
                 ecosystem=ecosystem,
+                subproject=project,
                 mode=effective_mode,
                 target_branch=branch,
                 dry_run=dry_run,

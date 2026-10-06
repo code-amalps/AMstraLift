@@ -113,25 +113,31 @@ amstralift gui
 ```
 *Opens the responsive desktop interface with Dark/Light themes, real-time terminal log stream, visual progress bar, and Quick Actions (Open in VS Code, Git Status).*
 
-### 2. Preview Vulnerability Fixes (Safe Mode)
+### 2. Discover Polyglot Monorepos
 ```bash
-amstralift audit --repo ./my-angular-app --mode preview
+amstralift projects --repo ./my-enterprise-repo
+```
+*Recursively maps multi-project topologies across Angular frontends, ASP.NET Core backends, React portals, and Python microservices in a single repository.*
+
+### 3. Preview Vulnerabilities in Subprojects
+```bash
+amstralift audit --repo ./my-enterprise-repo --project client --mode preview
 ```
 *Queries OSV.dev, maps direct and transitive dependency trees, computes a compatibility-aware plan, and renders a rich terminal dashboard without modifying any files.*
 
-### 3. Apply Verified Security Patches
+### 4. Apply Verified Security Patches
 ```bash
-amstralift audit --repo ./my-angular-app --mode apply --target-branch main
+amstralift audit --repo ./my-enterprise-repo --project client --mode apply --target-branch main
 ```
 *Applies fixes in an isolated sandbox, runs build and test gates, rescans for secondary CVEs, cryptographically signs the bundle, and commits a verified patch branch.*
 
-### 4. Full Framework Modernization & Upgrade
+### 5. Full Framework Modernization & Upgrade
 ```bash
-amstralift run --repo ./my-angular-app --ecosystem angular --dry-run
+amstralift run --repo ./my-enterprise-repo --project client --dry-run
 ```
 *Runs two-stage modernization with automated AST codemods (standalone components, control flow, build ordering) and outputs a signed PR proposal bundle.*
 
-### 5. Launch Headless REST API with Swagger
+### 6. Launch Headless REST API with Swagger
 ```bash
 amstralift serve --host 127.0.0.1 --port 8000
 ```
@@ -143,9 +149,10 @@ amstralift serve --host 127.0.0.1 --port 8000
 
 | Command | Description | Example |
 | :--- | :--- | :--- |
-| `amstralift gui` | Launches interactive desktop GUI | `amstralift gui` |
-| `amstralift audit` | Scans and remediates dependencies & CVEs | `amstralift audit --repo . --mode apply` |
-| `amstralift run` | Executes full two-stage framework upgrade | `amstralift run --repo . --ecosystem angular` |
+| `amstralift gui` | Launches interactive desktop GUI with monorepo project selector | `amstralift gui` |
+| `amstralift projects` | Discovers monorepo topology across Angular, React, .NET, Python | `amstralift projects --repo .` |
+| `amstralift audit` | Scans and remediates dependencies & CVEs (supports `--project`) | `amstralift audit --repo . --project client --mode apply` |
+| `amstralift run` | Executes full two-stage framework upgrade (supports `--project`) | `amstralift run --repo . --project client` |
 | `amstralift serve` | Starts REST API server with Swagger UI | `amstralift serve --port 8000` |
 | `amstralift init-ci` | Generates turnkey GitHub Actions CI workflow | `amstralift init-ci --repo .` |
 | `amstralift version` | Displays version and author attribution | `amstralift version` |
@@ -168,19 +175,20 @@ Every upgrade and security remediation must pass five strict gates in an isolate
 
 ## 🧪 Comprehensive Test Suite
 
-AMstraLift is backed by an automated test suite verifying adapters, trust boundaries, AST transforms, and remediation logic:
+AMstraLift is backed by an automated test suite verifying adapters, trust boundaries, AST transforms, monorepo scanners, and remediation logic:
 
 ```bash
 uv run pytest -v
 ```
 
-All **74 core tests** execute and pass in under 20 seconds:
+All **265+ comprehensive tests** execute and pass cleanly:
 ```text
-tests/test_cli.py ............. PASSED [ 17%]
-tests/test_safe_remediation.py ............... PASSED [ 37%]
-tests/test_angular_adapter.py .......................................... PASSED [100%]
+tests/test_monorepo.py ....... PASSED
+tests/test_cli.py ............. PASSED
+tests/test_safe_remediation.py ............... PASSED
+tests/test_angular_adapter.py .......................................... PASSED
 
-============================= 74 passed in 18.69s =============================
+============================= 265 passed, 1 warning in 368s =============================
 ```
 
 ---

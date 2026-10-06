@@ -539,6 +539,18 @@ class AMstraLiftGUI:
         self.output_entry = tk.Entry(config_grid, textvariable=self.output_branch_var, width=17, font=("Segoe UI", 9), bd=1, relief=tk.SOLID)
         self.output_entry.grid(row=1, column=3, sticky=tk.W, padx=8, pady=3, ipady=2)
 
+        # Row 2: Subproject (for Monorepos)
+        tk.Label(config_grid, text="Subproject:", font=("Segoe UI", 9)).grid(row=2, column=0, sticky=tk.W, pady=3)
+        self.upgrade_subproject_var = tk.StringVar(value="(Root / Auto)")
+        self.upgrade_subproject_combo = ttk.Combobox(
+            config_grid,
+            textvariable=self.upgrade_subproject_var,
+            values=["(Root / Auto)"],
+            state="readonly",
+            width=35,
+        )
+        self.upgrade_subproject_combo.grid(row=2, column=1, columnspan=3, sticky=tk.W, padx=8, pady=3)
+
         # Checkboxes
         chk_frame = tk.Frame(self.upgrade_card)
         chk_frame.pack(fill=tk.X, pady=(2, 8))
@@ -656,6 +668,20 @@ class AMstraLiftGUI:
             command=lambda: self._browse_directory(self.audit_repo_var),
         )
         self.browse_audit_btn.pack(side=tk.RIGHT)
+
+        # Subproject Row (for Monorepos)
+        audit_sub_row = tk.Frame(self.audit_card)
+        audit_sub_row.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(audit_sub_row, text="Subproject:", font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(0, 8))
+        self.audit_subproject_var = tk.StringVar(value="(Root / Auto)")
+        self.audit_subproject_combo = ttk.Combobox(
+            audit_sub_row,
+            textvariable=self.audit_subproject_var,
+            values=["(Root / Auto)"],
+            state="readonly",
+            width=35,
+        )
+        self.audit_subproject_combo.pack(side=tk.LEFT)
 
         # Audit Mode Radios
         mode_box = tk.Frame(self.audit_card)
@@ -820,6 +846,30 @@ class AMstraLiftGUI:
         self.upgrade_repo_var.set(initial_repo)
         self.audit_repo_var.set(initial_repo)
         self.last_target_repo = initial_repo
+        self._scan_for_monorepo(initial_repo)
+
+    def _scan_for_monorepo(self, repo_dir: str):
+        """Detect monorepo subprojects and populate dropdowns."""
+        try:
+            from amstralift.core.monorepo import MonorepoScanner
+            p = Path(repo_dir)
+            if not p.is_dir():
+                return
+            topo = MonorepoScanner.discover(p)
+            if topo.is_monorepo:
+                options = [f"{proj.rel_path} ({proj.ecosystem})" for proj in topo.projects]
+                vals = ["(Root / Auto)", *options]
+                self.upgrade_subproject_combo["values"] = vals
+                self.audit_subproject_combo["values"] = vals
+                self.upgrade_subproject_combo.set(options[0])
+                self.audit_subproject_combo.set(options[0])
+            else:
+                self.upgrade_subproject_combo["values"] = ["(Root / Auto)"]
+                self.audit_subproject_combo["values"] = ["(Root / Auto)"]
+                self.upgrade_subproject_combo.set("(Root / Auto)")
+                self.audit_subproject_combo.set("(Root / Auto)")
+        except Exception:
+            pass
 
     def _record_recent_repo(self, path: str):
         norm = str(Path(path).resolve())
@@ -839,6 +889,7 @@ class AMstraLiftGUI:
             self._record_recent_repo(norm)
             self.upgrade_repo_var.set(norm)
             self.audit_repo_var.set(norm)
+            self._scan_for_monorepo(norm)
 
     def _toggle_theme(self):
         self.current_theme = "light" if self.current_theme == "dark" else "dark"
@@ -1213,6 +1264,13 @@ class AMstraLiftGUI:
                             break
                     effective_branch = active or "main"
 
+                sub_raw = self.upgrade_subproject_var.get().strip()
+                subproject = None
+                if sub_raw and sub_raw != "(Root / Auto)":
+                    subproject = sub_raw.split(" (")[0].strip()
+                if subproject:
+                    print(f"Target Subproject: {subproject}")
+
                 def _progress_cb(pct: int, msg: str):
                     self.root.after(0, lambda: self.status_var.set(msg))
                     self.root.after(0, lambda: self.progress_bar.configure(value=pct))
@@ -1220,6 +1278,7 @@ class AMstraLiftGUI:
                 bundle, proposal = orchestrator.run_upgrade(
                     repo_path=Path(repo_path_str),
                     ecosystem=eco_param,
+                    subproject=subproject,
                     target_branch=effective_branch,
                     output_branch=out_b,
                     dry_run=dry,
@@ -1299,14 +1358,19 @@ class AMstraLiftGUI:
                 console = Console(file=redirector, force_terminal=True, color_system=None)
                 orchestrator = SecurityOrchestrator()
 
-                check_cancelled(self.cancellation_token)
-                print(f"Scanning dependencies in: {repo_path_str} (Mode: {mode})...\n")
+                sub_raw = self.audit_subproject_var.get().strip()
+                subproject = None
+                if sub_raw and sub_raw != "(Root / Auto)":
+                    subproject = sub_raw.split(" (")[0].strip()
+                proj_msg = f" (Subproject: {subproject})" if subproject else ""
+                print(f"Scanning dependencies in: {repo_path_str}{proj_msg} (Mode: {mode})...\n")
                 def _audit_progress_cb(pct: int, msg: str):
                     self.root.after(0, lambda: self.status_var.set(msg))
                     self.root.after(0, lambda: self.progress_bar.configure(value=pct))
 
                 result = orchestrator.run_remediation(
                     repo_path=Path(repo_path_str),
+                    subproject=subproject,
                     mode=mode,
                     allow_major=allow_major,
                     safe_only=safe_only,
