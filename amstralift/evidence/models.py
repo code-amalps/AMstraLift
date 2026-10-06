@@ -77,6 +77,38 @@ class RefusalRecord(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class TransformationDecision(str, Enum):
+    """Terminal decision for a candidate transformation."""
+
+    APPLIED = "APPLIED"
+    REFUSED = "REFUSED"
+
+
+class TransformationResult(BaseModel):
+    """Canonical unified result bridging candidate evaluation, execution, and evidence."""
+
+    id: str = Field(default_factory=lambda: f"res_{uuid4().hex[:8]}")
+    adapter: str
+    rule_id: str
+    file_path: str
+    decision: TransformationDecision
+    transformation_record: TransformationRecord | None = None
+    refusal_record: RefusalRecord | None = None
+    ast_nodes_changed: int = 0
+    files_modified: int = 0
+    is_deterministic: bool = True
+    evidence_id: str | None = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @property
+    def is_applied(self) -> bool:
+        return self.decision == TransformationDecision.APPLIED
+
+    @property
+    def is_refused(self) -> bool:
+        return self.decision == TransformationDecision.REFUSED
+
+
 class GateVerificationRecord(BaseModel):
     """Aggregated status across the 5 sandboxed verification gates."""
 

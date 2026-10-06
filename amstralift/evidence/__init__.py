@@ -18,13 +18,20 @@ from amstralift.evidence.models import (
     GateVerificationRecord,
     RefusalCategory,
     RefusalRecord,
+    TransformationDecision,
     TransformationRecord,
+    TransformationResult,
     TransformationStatus,
+)
+from amstralift.evidence.pipeline import (
+    CandidateTransformation,
+    TransformationDecisionPipeline,
 )
 from amstralift.evidence.refusal_engine import RefusalEngine
 from amstralift.evidence.reporter import render_html_report, render_markdown_report
 
 __all__ = [
+    "CandidateTransformation",
     "CryptographicAttestation",
     "EvidenceBundle",
     "EvidenceEngine",
@@ -32,7 +39,10 @@ __all__ = [
     "RefusalCategory",
     "RefusalEngine",
     "RefusalRecord",
+    "TransformationDecision",
+    "TransformationDecisionPipeline",
     "TransformationRecord",
+    "TransformationResult",
     "TransformationStatus",
     "compute_canonical_evidence_payload",
     "render_html_report",
