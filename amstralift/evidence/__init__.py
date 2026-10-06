@@ -7,7 +7,11 @@ Provides the foundational trust architecture:
 - Reporter (Markdown and standalone HTML evidence reports)
 """
 
-from amstralift.evidence.evidence_engine import EvidenceEngine
+from amstralift.evidence.evidence_engine import (
+    EvidenceEngine,
+    compute_canonical_evidence_payload,
+    verify_bundle_attestation,
+)
 from amstralift.evidence.models import (
     CryptographicAttestation,
     EvidenceBundle,
@@ -30,6 +34,8 @@ __all__ = [
     "RefusalRecord",
     "TransformationRecord",
     "TransformationStatus",
+    "compute_canonical_evidence_payload",
     "render_html_report",
     "render_markdown_report",
+    "verify_bundle_attestation",
 ]

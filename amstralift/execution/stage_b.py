@@ -281,6 +281,22 @@ def run_stage_b(
             ]
         )
 
+    if getattr(bundle, "refusals", None):
+        body_lines.extend(
+            [
+                "### ⚠️ Deliberately Refused Transformations (Safe Fallback):",
+                "> **Trust Guarantee:** AMstraLift strictly refused unsafe automation. Source code for each file below was left 100% untouched.",
+                "",
+                "| Rule | Target File | Category | Refusal Reason |",
+                "|---|---|---|---|",
+                *[
+                    f"| `{r.get('rule_id', '')}` | `{r.get('file_path', '')}` | `{r.get('category', '')}` | {r.get('reason', '')} |"
+                    for r in bundle.refusals
+                ],
+                "",
+            ]
+        )
+
     body_lines.extend(
         [
             "### 🛡️ Build & Test Evidence (Stage A):",

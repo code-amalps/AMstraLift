@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, computed_field
@@ -131,6 +131,8 @@ class UnsignedAdvisoryBundle(BaseModel):
     migration: MigrationClassification = Field(default_factory=MigrationClassification)
     advisory_notes: list[str] = Field(default_factory=list)
     modernizations: list[str] = Field(default_factory=list)
+    # Refused transformations where source was left 100% untouched
+    refusals: list[dict[str, Any]] = Field(default_factory=list)
     # Modernizations that Stage A could not apply (require live node_modules) — Stage B runs these
     # on the real repo after the patch is committed.
     pending_modernizations: list[str] = Field(default_factory=list)

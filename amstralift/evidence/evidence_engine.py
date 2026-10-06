@@ -133,27 +133,7 @@ class EvidenceEngine:
         """Cryptographically sign the canonical EvidenceBundle with HMAC-SHA256."""
         import hmac
 
-        # Build canonical payload for signing
-        payload = {
-            "schema_version": self.bundle.schema_version,
-            "bundle_id": self.bundle.bundle_id,
-            "run_id": self.bundle.run_id,
-            "repo_name": self.bundle.repo_name,
-            "ecosystem": self.bundle.ecosystem,
-            "overall_status": self.bundle.overall_status,
-            "files_analyzed": self.bundle.files_analyzed,
-            "files_modified": self.bundle.files_modified,
-            "applied_count": len(self.bundle.transformations_applied),
-            "refused_count": len(self.bundle.transformations_refused),
-            "verification": {
-                "clean_install": self.bundle.verification.clean_install,
-                "build": self.bundle.verification.build,
-                "tests": self.bundle.verification.tests,
-                "post_rescan": self.bundle.verification.post_rescan,
-                "manifest_diff": self.bundle.verification.manifest_diff,
-            },
-        }
-        canonical_bytes = json.dumps(payload, sort_keys=True).encode("utf-8")
+        canonical_bytes = compute_canonical_evidence_payload(self.bundle)
         payload_hash = compute_sha256(canonical_bytes)
         signature = hmac.new(secret_key, canonical_bytes, "sha256").hexdigest()
 
@@ -166,6 +146,10 @@ class EvidenceEngine:
         )
         self.bundle.attestation = attestation
         return attestation
+
+    def verify_attestation(self, secret_key: bytes) -> bool:
+        """Verify the cryptographic attestation of this engine's active bundle."""
+        return verify_bundle_attestation(self.bundle, secret_key)
 
     # ── Export & Serialization ───────────────────────────────────────────────
 
@@ -180,3 +164,52 @@ class EvidenceEngine:
         target.write_text(self.to_json(), encoding="utf-8")
         logger.info("Saved evidence bundle to %s", target)
         return target
+
+
+def compute_canonical_evidence_payload(bundle: EvidenceBundle) -> bytes:
+    """Build deterministic byte representation of bundle metadata for signing and verification."""
+    payload = {
+        "schema_version": bundle.schema_version,
+        "bundle_id": bundle.bundle_id,
+        "run_id": bundle.run_id,
+        "repo_name": bundle.repo_name,
+        "ecosystem": bundle.ecosystem,
+        "overall_status": bundle.overall_status,
+        "files_analyzed": bundle.files_analyzed,
+        "files_modified": bundle.files_modified,
+        "applied_count": len(bundle.transformations_applied),
+        "refused_count": len(bundle.transformations_refused),
+        "applied_ids": sorted(t.id for t in bundle.transformations_applied),
+        "refused_ids": sorted(r.id for r in bundle.transformations_refused),
+        "verification": {
+            "clean_install": bundle.verification.clean_install,
+            "build": bundle.verification.build,
+            "tests": bundle.verification.tests,
+            "post_rescan": bundle.verification.post_rescan,
+            "manifest_diff": bundle.verification.manifest_diff,
+        },
+    }
+    return json.dumps(payload, sort_keys=True).encode("utf-8")
+
+
+def verify_bundle_attestation(bundle: EvidenceBundle, secret_key: bytes) -> bool:
+    """Verify cryptographic authenticity and tamper-resistance of an EvidenceBundle.
+
+    Returns True if and only if:
+    1. An attestation block is present.
+    2. The canonical payload SHA-256 matches payload_sha256.
+    3. The HMAC-SHA256 signature matches with constant-time equality.
+    """
+    import hmac
+
+    if not bundle.attestation:
+        return False
+
+    canonical_bytes = compute_canonical_evidence_payload(bundle)
+    expected_hash = compute_sha256(canonical_bytes)
+
+    if not hmac.compare_digest(expected_hash, bundle.attestation.payload_sha256):
+        return False
+
+    expected_sig = hmac.new(secret_key, canonical_bytes, "sha256").hexdigest()
+    return hmac.compare_digest(expected_sig, bundle.attestation.bundle_signature)
