@@ -150,6 +150,20 @@ class RemediationEngine:
                 except Exception:
                     pass
 
+        # If Angular project, modernize scripts and workspace JSON (orders libraries first for multi-project builds)
+        if (repo_path / "angular.json").exists():
+            try:
+                from amstralift.adapters.angular import (
+                    _modernize_angular_workspace_json,
+                    _modernize_angular_scripts,
+                )
+                _modernize_angular_workspace_json(repo_path)
+                modernized_scripts = _modernize_angular_scripts(repo_path)
+                if modernized_scripts and "package.json" not in modified_files:
+                    modified_files.append("package.json")
+            except Exception:
+                pass
+
         return modified_files
 
     @classmethod

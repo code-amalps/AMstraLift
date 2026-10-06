@@ -209,8 +209,32 @@ class VerificationEngine:
         eco = ecosystem.lower().strip()
 
         if eco in ("angular", "react", "npm"):
-            cmd = "npm run build" if shutil.which("npm") else "npm test"
-            env = get_node_execution_env()
+            env = get_node_execution_env(workspace_path)
+            if (workspace_path / "angular.json").exists():
+                from amstralift.adapters.angular import (
+                    AngularAdapter,
+                    _modernize_angular_workspace_json,
+                    _modernize_angular_scripts,
+                )
+                _modernize_angular_workspace_json(workspace_path)
+                _modernize_angular_scripts(workspace_path)
+                adapter = AngularAdapter()
+                adapter._build_workspace_libraries(workspace_path, env)
+
+                pkg_json = workspace_path / "package.json"
+                scripts = {}
+                if pkg_json.exists():
+                    try:
+                        scripts = json.loads(pkg_json.read_text(encoding="utf-8")).get("scripts", {})
+                    except Exception:
+                        pass
+                raw_build = scripts.get("build")
+                resolved_cmd = adapter._resolve_angular_build_command(
+                    raw_build, workspace_path, has_npm=bool(shutil.which("npm"))
+                )
+                cmd = resolved_cmd or ("npm run build" if shutil.which("npm") else "npm test")
+            else:
+                cmd = "npm run build" if shutil.which("npm") else "npm test"
         elif eco in ("dotnet", "nuget"):
             cmd = "dotnet build"
             env = None
@@ -261,8 +285,67 @@ class VerificationEngine:
                     0,
                     True,
                 )
-            cmd = "npm test"
-            env = get_node_execution_env()
+            env = get_node_execution_env(workspace_path)
+            if (workspace_path / "angular.json").exists():
+                from amstralift.adapters.angular import AngularAdapter
+                adapter = AngularAdapter()
+                pkg_json = workspace_path / "package.json"
+                scripts = {}
+                if pkg_json.exists():
+                    try:
+                        scripts = json.loads(pkg_json.read_text(encoding="utf-8")).get("scripts", {})
+                    except Exception:
+                        pass
+                raw_test = scripts.get("test")
+                if not raw_test:
+                    return (
+                        GateResult(
+                            name="test",
+                            command="npm test",
+                            status=GateStatus.REQUIRED_SKIPPED,
+                            exit_code=0,
+                            stdout="Script 'test' not defined in package.json",
+                        ),
+                        0,
+                        True,
+                    )
+                resolved_test = adapter._resolve_angular_test_command(
+                    raw_test, workspace_path, has_npm=True
+                )
+                if not resolved_test:
+                    return (
+                        GateResult(
+                            name="test",
+                            command="npm test",
+                            status=GateStatus.REQUIRED_SKIPPED,
+                            exit_code=0,
+                            stdout="Angular workspace has no configured test target in angular.json",
+                        ),
+                        0,
+                        True,
+                    )
+                cmd = resolved_test
+            else:
+                pkg_json = workspace_path / "package.json"
+                scripts = {}
+                if pkg_json.exists():
+                    try:
+                        scripts = json.loads(pkg_json.read_text(encoding="utf-8")).get("scripts", {})
+                    except Exception:
+                        pass
+                if "test" not in scripts:
+                    return (
+                        GateResult(
+                            name="test",
+                            command="npm test",
+                            status=GateStatus.REQUIRED_SKIPPED,
+                            exit_code=0,
+                            stdout="Script 'test' not defined in package.json",
+                        ),
+                        0,
+                        True,
+                    )
+                cmd = "npm test"
         elif eco in ("dotnet", "nuget"):
             if not shutil.which("dotnet"):
                 return (

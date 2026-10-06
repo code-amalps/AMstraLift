@@ -753,5 +753,46 @@ def test_orchestrator_passes_allow_failed_gates_for_unverified_no_tests(tmp_path
         assert "[UNVERIFIED - NO TESTS]" in proposal.title
 
 
+def test_verification_engine_angular_multiproject_build_gate(tmp_path):
+    """Verify Gate 2 build in VerificationEngine modernizes multi-project scripts and pre-builds libraries."""
+    angular_json = {
+        "projects": {
+            "core-ui": {
+                "projectType": "library",
+                "root": "projects/core-ui",
+            },
+            "web-app": {
+                "projectType": "application",
+                "root": "projects/web-app",
+            },
+        }
+    }
+    (tmp_path / "angular.json").write_text(json.dumps(angular_json), encoding="utf-8")
+
+    pkg_json = {
+        "name": "multi-angular",
+        "scripts": {
+            "build": "ng build",
+        },
+    }
+    (tmp_path / "package.json").write_text(json.dumps(pkg_json), encoding="utf-8")
+
+    with patch("subprocess.run") as mock_run, \
+         patch("amstralift.adapters.angular.run_cancellable_subprocess") as mock_cancellable:
+        mock_run.return_value = MagicMock(returncode=0, stdout="Build OK", stderr="")
+        mock_cancellable.return_value = MagicMock(returncode=0, stdout="Prebuild OK", stderr="")
+        res = VerificationEngine._run_gate_2_build(tmp_path, "angular")
+
+        # Check that package.json was modernized with library-first ordering
+        saved_pkg = json.loads((tmp_path / "package.json").read_text(encoding="utf-8"))
+        build_script = saved_pkg["scripts"]["build"]
+        assert "core-ui" in build_script
+        assert "web-app" in build_script
+        # Verify library appears before application
+        assert build_script.index("core-ui") < build_script.index("web-app")
+        assert res.status == GateStatus.REQUIRED_PASSED
+
+
+
 
 

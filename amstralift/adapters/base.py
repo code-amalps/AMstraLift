@@ -8,20 +8,24 @@ from pathlib import Path
 from amstralift.core.models import DependencyChange, GateSummary
 
 
-def get_node_execution_env() -> dict[str, str]:
-    """Return an environment dictionary augmented with common Node.js and npm paths."""
+def get_node_execution_env(workspace_path: Path | None = None) -> dict[str, str]:
+    """Return an environment dictionary augmented with common Node.js, npm, and workspace paths."""
     env = os.environ.copy()
+    current_paths = env.get("PATH", "").split(os.pathsep)
+    if workspace_path:
+        local_bin = str(Path(workspace_path) / "node_modules" / ".bin")
+        if os.path.exists(local_bin) and local_bin not in current_paths:
+            current_paths.insert(0, local_bin)
     if sys.platform == "win32":
         extra_paths = [
             r"C:\Program Files\nodejs",
             os.path.expandvars(r"%APPDATA%\npm"),
             r"C:\Program Files (x86)\nodejs",
         ]
-        current_paths = env.get("PATH", "").split(os.pathsep)
         for ep in extra_paths:
             if os.path.exists(ep) and ep not in current_paths:
                 current_paths.append(ep)
-        env["PATH"] = os.pathsep.join(current_paths)
+    env["PATH"] = os.pathsep.join(current_paths)
     return env
 
 

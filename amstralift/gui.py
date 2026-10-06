@@ -824,7 +824,7 @@ class AMstraLiftGUI:
         self.last_target_repo = norm
 
     def _browse_directory(self, target_var: tk.StringVar):
-        selected = filedialog.askdirectory(initialdir=target_var.get() or ".")
+        selected = filedialog.askdirectory(parent=self.root, initialdir=target_var.get() or ".")
         if selected:
             norm = str(Path(selected).resolve())
             target_var.set(norm)
@@ -1024,6 +1024,7 @@ class AMstraLiftGUI:
 
     def _save_log_to_file(self):
         target = filedialog.asksaveasfilename(
+            parent=self.root,
             defaultextension=".log",
             filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
             title="Save AMstraLift Execution Log",
@@ -1033,7 +1034,7 @@ class AMstraLiftGUI:
                 Path(target).write_text(self.log_text.get("1.0", tk.END), encoding="utf-8")
                 self.status_var.set(f"💾 Log saved to {Path(target).name}")
             except Exception as exc:
-                messagebox.showerror("Save Failed", f"Could not save log file: {exc}")
+                messagebox.showerror("Save Failed", f"Could not save log file: {exc}", parent=self.root)
 
     def _open_project_folder(self):
         repo = self.last_target_repo
@@ -1046,7 +1047,7 @@ class AMstraLiftGUI:
                 else:
                     subprocess.Popen(["xdg-open", repo])
             except Exception as exc:
-                messagebox.showerror("Error", f"Failed to open directory: {exc}")
+                messagebox.showerror("Error", f"Failed to open directory: {exc}", parent=self.root)
 
     def _open_in_vscode(self):
         repo = self.last_target_repo
@@ -1057,11 +1058,12 @@ class AMstraLiftGUI:
                     subprocess.Popen([code_cmd, repo], shell=sys.platform == "win32")
                     self.status_var.set("💻 Opened repository in VS Code.")
                 except Exception as exc:
-                    messagebox.showerror("Error", f"Failed to open VS Code: {exc}")
+                    messagebox.showerror("Error", f"Failed to open VS Code: {exc}", parent=self.root)
             else:
                 messagebox.showinfo(
                     "VS Code Not Found",
                     "The 'code' command was not found in your system PATH.",
+                    parent=self.root,
                 )
 
     def _show_git_status(self):
@@ -1152,7 +1154,7 @@ class AMstraLiftGUI:
     def _execute_upgrade(self):
         repo_path_str = self.upgrade_repo_var.get().strip()
         if not repo_path_str or not Path(repo_path_str).exists():
-            messagebox.showerror("Invalid Directory", "Please select a valid local repository directory.")
+            messagebox.showerror("Invalid Directory", "Please select a valid local repository directory.", parent=self.root)
             return
 
         self._record_recent_repo(repo_path_str)
@@ -1235,6 +1237,7 @@ class AMstraLiftGUI:
                 self.root.after(0, lambda b=branch_msg, s=status_msg, c=changes_count: messagebox.showinfo(
                     "Upgrade Complete",
                     f"AMstraLift completed successfully!\n\nTarget Branch: {b}\nStatus: {s}\nChanges: {c}",
+                    parent=self.root,
                 ))
             except OperationCancelledError:
                 print("\n[ABORTED] Operation stopped by user.", file=sys.stderr)
@@ -1243,12 +1246,12 @@ class AMstraLiftGUI:
                 info_msg = str(ne)
                 print(f"\n[Info] {info_msg}")
                 self.root.after(0, lambda: self._set_running_state(False, "Repository already up to date.", 100))
-                self.root.after(0, lambda m=info_msg: messagebox.showinfo("Up to Date", m))
+                self.root.after(0, lambda m=info_msg: messagebox.showinfo("Up to Date", m, parent=self.root))
             except Exception as exc:
                 err_msg = str(exc)
                 print(f"\n[Error] Upgrade failed: {err_msg}", file=sys.stderr)
                 self.root.after(0, lambda m=err_msg: self._set_running_state(False, f"Failed: {m}", 0))
-                self.root.after(0, lambda m=err_msg: messagebox.showerror("Upgrade Failed", f"An error occurred during upgrade:\n\n{m}"))
+                self.root.after(0, lambda m=err_msg: messagebox.showerror("Upgrade Failed", f"An error occurred during upgrade:\n\n{m}", parent=self.root))
             finally:
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
@@ -1258,7 +1261,7 @@ class AMstraLiftGUI:
     def _execute_audit(self):
         repo_path_str = self.audit_repo_var.get().strip()
         if not repo_path_str or not Path(repo_path_str).exists():
-            messagebox.showerror("Invalid Directory", "Please select a valid local repository directory.")
+            messagebox.showerror("Invalid Directory", "Please select a valid local repository directory.", parent=self.root)
             return
 
         self._record_recent_repo(repo_path_str)
@@ -1316,9 +1319,9 @@ class AMstraLiftGUI:
                         )
                         if result.plan and result.plan.advisories:
                             msg += f"\n\nAdvisories ({len(result.plan.advisories)}):\n" + "\n".join(f"• {a}" for a in result.plan.advisories[:3])
-                        self.root.after(0, lambda: messagebox.showinfo("Remediation Complete", msg))
+                        self.root.after(0, lambda: messagebox.showinfo("Remediation Complete", msg, parent=self.root))
                     else:
-                        self.root.after(0, lambda: messagebox.showwarning("Remediation Halted", f"Security remediation halted:\n\n{result.error_message}"))
+                        self.root.after(0, lambda: messagebox.showwarning("Remediation Halted", f"Security remediation halted:\n\n{result.error_message}", parent=self.root))
 
                 status_msg = f"✔ Remediation complete: {result.branch_name}" if (mode == "apply" and result.remediation_successful) else f"✔ Audit complete: {len(result.report.findings)} CVE(s) found."
                 self.root.after(0, lambda s=status_msg: self._set_running_state(False, s, 100))
@@ -1329,7 +1332,7 @@ class AMstraLiftGUI:
                 err_msg = str(exc)
                 print(f"\n[Error] Audit failed: {err_msg}", file=sys.stderr)
                 self.root.after(0, lambda m=err_msg: self._set_running_state(False, f"Audit error: {m}", 0))
-                self.root.after(0, lambda m=err_msg: messagebox.showerror("Audit Error", m))
+                self.root.after(0, lambda m=err_msg: messagebox.showerror("Audit Error", m, parent=self.root))
             finally:
                 sys.stdout = old_stdout
                 sys.stderr = old_stderr
