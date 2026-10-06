@@ -17,8 +17,6 @@ AMstraLift is an enterprise-grade automated modernization engine that safely upg
 
 Unlike tools that blindly bump version strings and leave you with broken builds, AMstraLift performs **automated AST code healing**, executes a **strict 5-gate sandboxed verification**, cryptographically signs every change bundle, and delivers a clean, compiling pull request. **Zero AI in execution. No auto-merge, ever.**
 
-> 🗺️ **Looking for what's next?** Check out the **[Full Strategic Roadmap & Milestone Plan](ROADMAP.md)** for a deep dive into implemented capabilities and upcoming development goals.
-
 ---
 
 ## 🧸 Explain Like I'm 5 (What is AMstraLift?)
