@@ -941,9 +941,10 @@ export class R {}
 
 
 def test_modernize_angular_builder_19_plus(tmp_path: Path):
-    """Verify Angular 19+ upgrades modernize builders to @angular/build and dev-server."""
+    """Verify Angular 19+ upgrades preserve/heal devkit builders when @angular/build is not present."""
     from amstralift.adapters.angular import _modernize_angular_workspace_json, _align_angular_ecosystem_dependencies
 
+    # 1. Existing @angular-devkit/build-angular:browser is preserved and not forcibly rewritten
     angular_json = tmp_path / "angular.json"
     angular_json.write_text(json.dumps({
         "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
@@ -975,7 +976,8 @@ def test_modernize_angular_builder_19_plus(tmp_path: Path):
         "name": "my-app",
         "dependencies": {},
         "devDependencies": {
-            "@angular/cli": "^19.0.0"
+            "@angular/cli": "^19.0.0",
+            "@angular-devkit/build-angular": "^19.0.0"
         }
     }), encoding="utf-8")
 
@@ -986,18 +988,69 @@ def test_modernize_angular_builder_19_plus(tmp_path: Path):
     build_arch = updated_ws["projects"]["my-app"]["architect"]["build"]
     serve_arch = updated_ws["projects"]["my-app"]["architect"]["serve"]
 
-    assert build_arch["builder"] == "@angular/build:application"
-    assert "browser" in build_arch["options"]
-    assert build_arch["options"]["browser"] == "src/main.ts"
-    assert "main" not in build_arch["options"]
-    assert isinstance(build_arch["options"]["polyfills"], list)
-
-    assert serve_arch["builder"] == "@angular/build:dev-server"
+    assert build_arch["builder"] == "@angular-devkit/build-angular:browser"
+    assert build_arch["options"]["main"] == "src/main.ts"
+    assert serve_arch["builder"] == "@angular-devkit/build-angular:dev-server"
     assert serve_arch["options"]["buildTarget"] == "my-app:build"
-    assert "browserTarget" not in serve_arch["options"]
 
-    updated_pkg = json.loads(pkg_json.read_text(encoding="utf-8"))
-    assert "@angular/build" in updated_pkg["devDependencies"]
+    # 2. Heals @angular/build:application back to devkit when @angular/build is not installed
+    angular_json.write_text(json.dumps({
+        "version": 1,
+        "projects": {
+            "my-app": {
+                "architect": {
+                    "build": {
+                        "builder": "@angular/build:application",
+                        "options": {
+                            "browser": "src/main.ts"
+                        }
+                    },
+                    "serve": {
+                        "builder": "@angular/build:dev-server",
+                        "options": {
+                            "buildTarget": "my-app:build"
+                        }
+                    }
+                }
+            }
+        }
+    }), encoding="utf-8")
+
+    _modernize_angular_workspace_json(tmp_path, target_major=19)
+    healed_ws = json.loads(angular_json.read_text(encoding="utf-8"))
+    assert healed_ws["projects"]["my-app"]["architect"]["build"]["builder"] == "@angular-devkit/build-angular:browser"
+    assert healed_ws["projects"]["my-app"]["architect"]["build"]["options"]["main"] == "src/main.ts"
+    assert healed_ws["projects"]["my-app"]["architect"]["serve"]["builder"] == "@angular-devkit/build-angular:dev-server"
+
+
+def test_modernize_angular_scripts_cross_platform(tmp_path: Path):
+    """Verify package.json Unix cp commands and openssl workarounds are modernized for cross-platform execution."""
+    from amstralift.adapters.angular import _modernize_angular_scripts
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(json.dumps({
+        "name": "my-app",
+        "scripts": {
+            "copy": "cp projects/rtcm-angular-lib/src/lib/rtcm-styles/rtcm-core-styles.scss dist/rtcm-angular-lib/",
+            "copy:dir": "cp -r projects/assets dist/assets",
+            "copy:wildcard": "cp projects/core-services/src/assets/i18n/* dist/core-services/assets/i18n/",
+            "legacy": "node --openssl-legacy-provider ./node_modules/@angular/cli/bin/ng build"
+        }
+    }), encoding="utf-8")
+
+    applied = _modernize_angular_scripts(tmp_path)
+    assert len(applied) == 4
+
+    updated = json.loads(pkg_json.read_text(encoding="utf-8"))
+    scripts = updated["scripts"]
+
+    assert "require('fs').cpSync" in scripts["copy"]
+    assert "rtcm-core-styles.scss" in scripts["copy"]
+    assert "dist/rtcm-angular-lib/rtcm-core-styles.scss" in scripts["copy"]
+    assert "cpSync('projects/assets', 'dist/assets'" in scripts["copy:dir"]
+    assert "cpSync('projects/core-services/src/assets/i18n', 'dist/core-services/assets/i18n'" in scripts["copy:wildcard"]
+    assert "--openssl-legacy-provider" not in scripts["legacy"]
+    assert scripts["legacy"] == "ng build"
 
 
 def test_angular_apply_upgrade_transitive_overrides(tmp_path: Path):

@@ -185,14 +185,17 @@ def _align_angular_ecosystem_dependencies(repo_path: Path, target_major: int | N
                 modified = True
                 applied.append(f"Aligned {pkg} to {rec_ver} for Angular {target_major} compatibility")
 
-    # For Angular 19+, ensure @angular/build is in devDependencies
-    if target_major is None or target_major >= 19:
-        dev_deps = data.setdefault("devDependencies", {})
-        if "@angular/build" not in dev_deps:
-            target_v = dev_deps.get("@angular/cli") or dev_deps.get("@angular-devkit/build-angular") or (f"^{target_major}.0.0" if target_major else "^19.0.0")
-            dev_deps["@angular/build"] = target_v
+    # Clean up non-existent or invalid @angular/build versions in devDependencies
+    dev_deps = data.get("devDependencies", {})
+    if "@angular/build" in dev_deps:
+        v = str(dev_deps.get("@angular/build", ""))
+        maj = extract_major_version(v)
+        if maj is not None and maj > 19:
+            del dev_deps["@angular/build"]
             modified = True
-            applied.append(f"Added @angular/build ({target_v}) for modern Angular build system")
+        elif "@angular-devkit/build-angular" in dev_deps and not (repo_path / "node_modules" / "@angular" / "build").exists():
+            del dev_deps["@angular/build"]
+            modified = True
 
     # For Angular 14+, remove retired TSLint ecosystem tooling if modern ESLint is present
     if target_major is None or target_major >= 14:
@@ -304,39 +307,57 @@ def _modernize_angular_workspace_json(repo_path: Path, target_major: int | None 
                 continue
             architect = proj_info.get("architect", {})
 
-            # For Angular 19+, migrate builders from deprecated devkit Webpack to modern @angular/build
-            if target_major is None or target_major >= 19:
-                build_target = architect.get("build", {})
-                if isinstance(build_target, dict):
-                    cur_b = build_target.get("builder", "")
-                    if cur_b in ("@angular-devkit/build-angular:browser", "@angular-devkit/build-angular:application"):
-                        build_target["builder"] = "@angular/build:application"
-                        changed = True
-                        opts = build_target.get("options", {})
-                        if "main" in opts:
-                            opts["browser"] = opts.pop("main")
-                            changed = True
-                        if isinstance(opts.get("polyfills"), str):
-                            opts["polyfills"] = [opts["polyfills"]]
-                            changed = True
+            # If workspace references '@angular/build:*' but '@angular/build' is not installed in node_modules,
+            # or if the workspace relies on '@angular-devkit/build-angular', heal builders back to '@angular-devkit/build-angular'
+            # to prevent fatal CLI error: "Could not find the '@angular/build:application' builder's node package."
+            pkg_data_deps: dict[str, str] = {}
+            if (repo_path / "package.json").exists():
+                try:
+                    p_data = json.loads((repo_path / "package.json").read_text(encoding="utf-8"))
+                    pkg_data_deps = {**p_data.get("dependencies", {}), **p_data.get("devDependencies", {})}
+                except Exception:
+                    pass
 
-                serve_target = architect.get("serve", {})
-                if isinstance(serve_target, dict):
-                    cur_sb = serve_target.get("builder", "")
-                    if cur_sb in ("@angular-devkit/build-angular:dev-server", "@angular-devkit/build-angular:application"):
-                        serve_target["builder"] = "@angular/build:dev-server"
+            has_angular_build = (
+                "@angular/build" in pkg_data_deps
+                and (repo_path / "node_modules" / "@angular" / "build").exists()
+            )
+
+            build_target = architect.get("build", {})
+            if isinstance(build_target, dict):
+                cur_b = build_target.get("builder", "")
+                if cur_b == "@angular/build:application" and not has_angular_build:
+                    build_target["builder"] = "@angular-devkit/build-angular:browser"
+                    changed = True
+                    cur_b = "@angular-devkit/build-angular:browser"
+
+                if cur_b == "@angular-devkit/build-angular:browser":
+                    opts = build_target.get("options", {})
+                    if "browser" in opts and "main" not in opts:
+                        opts["main"] = opts.pop("browser")
                         changed = True
-                    s_opts = serve_target.get("options", {})
-                    if isinstance(s_opts, dict) and "browserTarget" in s_opts:
+
+            serve_target = architect.get("serve", {})
+            if isinstance(serve_target, dict):
+                cur_sb = serve_target.get("builder", "")
+                if cur_sb == "@angular/build:dev-server" and not has_angular_build:
+                    serve_target["builder"] = "@angular-devkit/build-angular:dev-server"
+                    changed = True
+                s_opts = serve_target.get("options", {})
+                if isinstance(s_opts, dict):
+                    if (target_major is None or target_major >= 17) and "browserTarget" in s_opts:
                         s_opts["buildTarget"] = s_opts.pop("browserTarget")
                         changed = True
-
-                extract_target = architect.get("extract-i18n", {})
-                if isinstance(extract_target, dict):
-                    cur_eb = extract_target.get("builder", "")
-                    if cur_eb == "@angular-devkit/build-angular:extract-i18n":
-                        extract_target["builder"] = "@angular/build:extract-i18n"
+                    elif (target_major and target_major < 17) and "buildTarget" in s_opts:
+                        s_opts["browserTarget"] = s_opts.pop("buildTarget")
                         changed = True
+
+            extract_target = architect.get("extract-i18n", {})
+            if isinstance(extract_target, dict):
+                cur_eb = extract_target.get("builder", "")
+                if cur_eb == "@angular/build:extract-i18n" and not has_angular_build:
+                    extract_target["builder"] = "@angular-devkit/build-angular:extract-i18n"
+                    changed = True
 
             # For Angular 17+, adjust legacy restrictive initial bundle budgets for modern esbuild bundles
             if target_major is None or target_major >= 17:
@@ -399,6 +420,76 @@ def _modernize_angular_gitignore(repo_path: Path) -> None:
             gitignore.write_text(updated, encoding="utf-8")
     except Exception:
         pass
+
+
+def _modernize_angular_scripts(repo_path: Path) -> list[str]:
+    """Modernize package.json scripts for cross-platform and modern Angular execution.
+
+    - Replaces Unix-only 'cp' commands with cross-platform Node.js 'fs.cpSync'
+      so scripts run on Windows cmd.exe without "'cp' is not recognized".
+    - Cleans up obsolete '--openssl-legacy-provider' flags.
+    """
+    pkg_file = repo_path / "package.json"
+    if not pkg_file.exists():
+        return []
+
+    try:
+        data = json.loads(pkg_file.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    scripts = data.get("scripts", {})
+    if not isinstance(scripts, dict):
+        return []
+
+    applied = []
+    modified = False
+
+    for script_key, script_val in list(scripts.items()):
+        if not isinstance(script_val, str):
+            continue
+
+        orig = script_val
+        val = script_val
+
+        # 1. Clean up obsolete --openssl-legacy-provider
+        if "--openssl-legacy-provider" in val:
+            val = re.sub(r"node\s+--openssl-legacy-provider\s+\S*ng(\.js)?", "ng", val)
+            val = val.replace("--openssl-legacy-provider", "").strip()
+
+        # 2. Modernize Unix 'cp' to cross-platform Node fs.cpSync
+        cp_matches = list(re.finditer(r"(?:^|(?<=&&)\s*|(?<=;)\s*)cp\s+(?:-[a-zA-Z]+\s+)*([^\s;&]+)\s+([^\s;&]+)", val))
+        if cp_matches:
+            for cm in reversed(cp_matches):
+                src = cm.group(1).replace("\\", "/").strip("\"'")
+                dest = cm.group(2).replace("\\", "/").strip("\"'")
+
+                # Handle wildcard directory copy e.g. src/* -> dest/
+                if src.endswith("/*"):
+                    src = src[:-2]
+
+                # If copying a specific file into a directory destination, append the filename
+                # so Node fs.cpSync does not fail with ERR_FS_CP_NON_DIR_TO_DIR
+                target_dest = dest.rstrip("/")
+                src_name = Path(src).name
+                if Path(src).suffix and (dest.endswith("/") or not Path(dest).suffix) and src_name:
+                    target_dest = f"{target_dest}/{src_name}"
+
+                replacement = f'node -e "require(\'fs\').cpSync(\'{src}\', \'{target_dest}\', {{recursive: true, force: true}})"'
+                val = val[:cm.start()] + replacement + val[cm.end():]
+
+        if val != orig:
+            scripts[script_key] = val
+            modified = True
+            applied.append(f"Modernized script '{script_key}' for cross-platform execution")
+
+    if modified:
+        try:
+            pkg_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    return applied
 
 
 def _modernize_angular_tsconfig(repo_path: Path, target_major: int | None = None) -> list[str]:
@@ -1264,18 +1355,19 @@ class AngularAdapter(BaseAdapter):
         if target_major_int is not None and "version" in data and isinstance(data["version"], str):
             cur_app_ver = data["version"].strip()
             cur_app_major = extract_major_version(cur_app_ver)
-            if cur_app_major is not None and cur_app_major < target_major_int:
+            if cur_app_major is not None and (cur_app_major < target_major_int or cur_app_major > 19):
                 data["version"] = f"{target_major_int}.0.0"
 
         pkg_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
-        # Modernize angular ecosystem dependencies, workspace schema, tsconfig, stylesheets, source files
+        # Modernize angular ecosystem dependencies, workspace schema, tsconfig, stylesheets, source files, scripts
         _align_angular_ecosystem_dependencies(repo_path, target_major=target_major_int)
         _modernize_angular_workspace_json(repo_path, target_major=target_major_int)
         _modernize_angular_tsconfig(repo_path, target_major=target_major_int)
         _modernize_angular_stylesheets(repo_path)
         _modernize_angular_source_files(repo_path, target_major=target_major_int)
         _modernize_angular_libraries(repo_path, target_major=target_major_int)
+        _modernize_angular_scripts(repo_path)
         _modernize_angular_gitignore(repo_path)
 
         # Update package-lock.json accurately using npm_lockfile
@@ -1320,6 +1412,7 @@ class AngularAdapter(BaseAdapter):
         _modernize_angular_tsconfig(repo_path, target_major=major)
         _modernize_angular_stylesheets(repo_path, target_major=major)
         _modernize_angular_source_files(repo_path, target_major=major)
+        applied.extend(_modernize_angular_scripts(repo_path))
         _modernize_angular_gitignore(repo_path)
 
         from amstralift.adapters.angular_standalone import (
@@ -1504,6 +1597,10 @@ class AngularAdapter(BaseAdapter):
                 stale_lock.unlink(missing_ok=True)
             except Exception:
                 pass
+
+        # Ensure workspace JSON and scripts are modernized/healed before running gates
+        _modernize_angular_workspace_json(repo_path, target_major=core_major)
+        _modernize_angular_scripts(repo_path)
 
         # If workspace has library projects, pre-build them so dependent applications compile cleanly
         self._build_workspace_libraries(repo_path, gate_env)
