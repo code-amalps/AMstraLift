@@ -23,7 +23,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from typing import Any, Optional
 
-from amstralift import __version__
+from amstralift import __author__, __license__, __version__
 from amstralift.core.cancellation import (
     CancellationToken,
     OperationCancelledError,
@@ -162,7 +162,7 @@ class AMstraLiftGUI:
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title(f"AMstraLift v{__version__} - Upgrade & Security Engine")
+        self.root.title(f"AMstraLift v{__version__} - Engineered by {__author__} ({__license__})")
         self.root.geometry("920x760")
         self.root.minsize(800, 620)
 
@@ -260,6 +260,14 @@ class AMstraLiftGUI:
             relief=tk.FLAT,
         )
         self.version_badge.pack(side=tk.LEFT, padx=(8, 0))
+
+        self.author_badge = tk.Label(
+            header_left,
+            text=f"by {__author__} • {__license__}",
+            font=("Segoe UI", 9),
+            padx=4,
+        )
+        self.author_badge.pack(side=tk.LEFT, padx=(8, 0))
 
         # Header Right: Theme Switcher
         self.theme_btn = tk.Button(
@@ -849,6 +857,8 @@ class AMstraLiftGUI:
         if getattr(self, "logo_lbl", None):
             self.logo_lbl.configure(bg=colors["bg_main"])
         self.version_badge.configure(bg=colors["btn_primary"], fg="#ffffff")
+        if getattr(self, "author_badge", None):
+            self.author_badge.configure(bg=colors["bg_main"], fg=colors["fg_muted"])
 
         self.theme_btn.configure(
             text="☀️ Light Mode" if is_dark else "🌙 Dark Mode",

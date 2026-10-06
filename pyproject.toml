@@ -3,7 +3,20 @@ name = "amstralift"
 version = "0.1.16"
 description = "Automated dependency and framework upgrade engine with a cryptographically bound trust boundary."
 readme = "README.md"
+authors = [
+    { name = "Amal P S" }
+]
+license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.11"
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Security",
+]
 dependencies = [
     "pydantic>=2.7.0",
     "typer>=0.12.0",

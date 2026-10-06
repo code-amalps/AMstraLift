@@ -546,10 +546,10 @@ def serve(
 
 @app.command()
 def version():
-    """Display AMstraLift version."""
-    from amstralift import __version__
+    """Display AMstraLift version and author attribution."""
+    from amstralift import __author__, __license__, __version__
 
-    console.print(f"AMstraLift v{__version__}")
+    console.print(f"AMstraLift v{__version__} — Engineered by {__author__} ({__license__})")
 
 
 if __name__ == "__main__":

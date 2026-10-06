@@ -1,6 +1,7 @@
 # AMstraLift
 
-> **Upgrade safely. Modernize confidently.**
+> **Upgrade safely. Modernize confidently.**  
+> *Architected & Engineered by Amal P S • Free Software under GNU AGPLv3*
 
 AMstraLift is an automated dependency and framework upgrade engine built around an explicit, cryptographically bound trust boundary. Zero AI in execution. No auto-merge, ever, for any tier.
 
@@ -334,3 +335,16 @@ uv run ruff format .
 - [x] **Log & Bundle Scrubbing**: Tokens and basic auth credentials are fully scrubbed (`[REDACTED_TOKEN]`) from exceptions, bundles, and CLI outputs.
 - [x] **Scheduled CI Concurrency**: Workflows enforce `cancel-in-progress: false` to protect running Stage B publisher operations.
 - [x] **Standalone Binary Packaging**: Single-file `.exe` distribution tested for portability.
+
+---
+
+## ⚖️ License & Author Attribution
+
+AMstraLift is architected and engineered by **Amal P S** and released under the **GNU Affero General Public License v3 (AGPL-3.0)**.
+
+- **100% Free for Developers**: Individual software engineers, open-source maintainers, researchers, and students are free to use, run, inspect, and evaluate AMstraLift completely free of charge. No subscriptions, paywalls, or feature limits.
+- **Corporate & Network Copyleft**: In accordance with the AGPL-3.0, any party deploying AMstraLift or modified versions thereof over a computer network (including internal corporate networks, CI/CD runners, or cloud APIs) must make the complete source code publicly available under AGPL-3.0.
+- **Section 7(b) Mandatory Attribution**: All copies, forks, distributions, and interactive user interfaces (CLI outputs, GUI headers, and window titles) must retain the original author attribution: **"Engineered by Amal P S"** and the AMstraLift copyright notice. Uncredited rebranding or closed-source proprietary encapsulation is strictly prohibited.
+
+See the full [`LICENSE`](LICENSE) file for complete legal terms.
+
