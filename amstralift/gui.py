@@ -178,10 +178,59 @@ class AMstraLiftGUI:
         self.timer_id: Optional[str] = None
         self.last_target_repo: Optional[str] = None
 
+        self._apply_window_icon()
         self._create_widgets()
         self._set_defaults()
         self._apply_theme(self.current_theme)
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
+
+    def _apply_window_icon(self) -> None:
+        """Apply official AMstraLift branding icon to root window and dialogs."""
+        self._icon_img = None
+        self._header_logo_img = None
+        try:
+            base_dir = Path(__file__).parent
+            meipass = getattr(sys, "_MEIPASS", None)
+            candidate_dirs = [
+                Path(meipass) / "amstralift" / "assets" if meipass else None,
+                Path(meipass) if meipass else None,
+                base_dir / "assets",
+                base_dir,
+            ]
+
+            ico_path = None
+            png_32_path = None
+            png_64_path = None
+            for d in candidate_dirs:
+                if d and (d / "icon.ico").exists() and not ico_path:
+                    ico_path = d / "icon.ico"
+                if d and (d / "icon_32.png").exists() and not png_32_path:
+                    png_32_path = d / "icon_32.png"
+                if d and (d / "icon_64.png").exists() and not png_64_path:
+                    png_64_path = d / "icon_64.png"
+
+            if ico_path and ico_path.exists():
+                try:
+                    self.root.iconbitmap(str(ico_path))
+                except Exception:
+                    pass
+
+            icon_for_photo = png_32_path or png_64_path
+            if icon_for_photo and icon_for_photo.exists():
+                try:
+                    self._icon_img = tk.PhotoImage(file=str(icon_for_photo))
+                    # Setting default=True replaces the Tk feather in ALL modal messageboxes and toplevel dialogs
+                    self.root.iconphoto(True, self._icon_img)
+                except Exception:
+                    pass
+
+            if png_32_path and png_32_path.exists():
+                try:
+                    self._header_logo_img = tk.PhotoImage(file=str(png_32_path))
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug("Failed to set window icon: %s", e)
 
     def _create_widgets(self):
         # ── Header ──────────────────────────────────────────────────────────
@@ -190,6 +239,10 @@ class AMstraLiftGUI:
 
         header_left = tk.Frame(self.header_frame)
         header_left.pack(side=tk.LEFT)
+
+        if getattr(self, "_header_logo_img", None):
+            self.logo_lbl = tk.Label(header_left, image=self._header_logo_img)
+            self.logo_lbl.pack(side=tk.LEFT, padx=(0, 8))
 
         self.title_lbl = tk.Label(
             header_left,
@@ -793,6 +846,8 @@ class AMstraLiftGUI:
         self.header_frame.configure(bg=colors["bg_main"])
         self.header_frame.winfo_children()[0].configure(bg=colors["bg_main"])
         self.title_lbl.configure(bg=colors["bg_main"], fg=colors["fg_text"])
+        if getattr(self, "logo_lbl", None):
+            self.logo_lbl.configure(bg=colors["bg_main"])
         self.version_badge.configure(bg=colors["btn_primary"], fg="#ffffff")
 
         self.theme_btn.configure(

@@ -1,6 +1,6 @@
 [project]
 name = "amstralift"
-version = "0.1.14"
+version = "0.1.15"
 description = "Automated dependency and framework upgrade engine with a cryptographically bound trust boundary."
 readme = "README.md"
 requires-python = ">=3.11"

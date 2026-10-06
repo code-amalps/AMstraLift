@@ -520,6 +520,58 @@ def _modernize_angular_scripts(repo_path: Path) -> list[str]:
             modified = True
             applied.append(f"Modernized script '{script_key}' for cross-platform execution")
 
+    # 4. Modernize multi-project build scripts so libraries build first and bare "ng build" specifies projects
+    angular_json = repo_path / "angular.json"
+    angular_projects: dict[str, Any] = {}
+    default_proj: str | None = None
+    if angular_json.exists():
+        try:
+            workspace_data = json.loads(angular_json.read_text(encoding="utf-8"))
+            if isinstance(workspace_data, dict):
+                angular_projects = workspace_data.get("projects", {})
+                default_proj = workspace_data.get("defaultProject")
+        except Exception:
+            pass
+
+    libraries = [
+        name for name, p in angular_projects.items()
+        if isinstance(p, dict) and p.get("projectType", "").lower() == "library"
+    ]
+    applications = [
+        name for name, p in angular_projects.items()
+        if isinstance(p, dict) and p.get("projectType", "").lower() == "application"
+    ]
+    if default_proj and default_proj in applications:
+        applications.remove(default_proj)
+        applications.insert(0, default_proj)
+
+    if len(angular_projects) > 1 and (libraries or applications):
+        for script_key, script_val in list(scripts.items()):
+            if not isinstance(script_val, str):
+                continue
+            if re.search(r"(?:^|(?<=&&)\s*|(?<=;)\s*)ng\s+(?:build|b)(?:\s+--[\w-]+(?:=\S+)?)*\s*(?:$|&&|;)", script_val):
+                cfg_match = re.search(r"(--(?:configuration|c)[=\s]\S+)", script_val)
+                flags = f" {cfg_match.group(1).strip()}" if cfg_match else ""
+
+                ordered_targets = libraries + applications
+                ordered_cmds = [
+                    f"ng build {t}{flags if t in applications else ''}"
+                    for t in ordered_targets
+                ]
+                replacement_build = " && ".join(ordered_cmds)
+                new_val = re.sub(
+                    r"(?:^|(?<=&&)\s*|(?<=;)\s*)ng\s+(?:build|b)(?:\s+--[\w-]+(?:=\S+)?)*\s*(?=$|&&|;)",
+                    replacement_build,
+                    script_val,
+                )
+                if new_val != script_val:
+                    scripts[script_key] = new_val
+                    modified = True
+                    applied.append(
+                        f"Modernized multi-project build script '{script_key}' (libraries build first: "
+                        f"{', '.join(libraries) if libraries else 'none'} -> {', '.join(applications)})"
+                    )
+
     if modified:
         try:
             pkg_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -1702,16 +1754,33 @@ class AngularAdapter(BaseAdapter):
 
         has_npm = shutil.which("npm", path=gate_env.get("PATH")) is not None
 
+        # Ensure workspace JSON and scripts are modernized/healed before running gates
+        _modernize_angular_workspace_json(repo_path, target_major=core_major)
+        _modernize_angular_scripts(repo_path)
+
+        # Reload package.json scripts after modernization
+        try:
+            data = json.loads(pkg_file.read_text(encoding="utf-8"))
+            scripts = data.get("scripts", {})
+        except Exception:
+            pass
+
         # ── Resolve test command with watch-mode and headless fixes ──────────
         raw_test_script = scripts.get("test", "")
         resolved_test_cmd = self._resolve_angular_test_command(
             raw_test_script, repo_path, has_npm
         )
 
+        # ── Resolve build command with multi-project library-first ordering ──
+        raw_build_script = scripts.get("build")
+        resolved_build_cmd = self._resolve_angular_build_command(
+            raw_build_script, repo_path, has_npm
+        )
+
         # Define gates in priority order
         gates = [
             ("test", resolved_test_cmd, True),
-            ("build", scripts.get("build"), True),
+            ("build", resolved_build_cmd, True),
             ("lint", scripts.get("lint"), False),
         ]
 
@@ -1722,10 +1791,6 @@ class AngularAdapter(BaseAdapter):
                 stale_lock.unlink(missing_ok=True)
             except Exception:
                 pass
-
-        # Ensure workspace JSON and scripts are modernized/healed before running gates
-        _modernize_angular_workspace_json(repo_path, target_major=core_major)
-        _modernize_angular_scripts(repo_path)
 
         # If workspace has library projects, pre-build them so dependent applications compile cleanly
         self._build_workspace_libraries(repo_path, gate_env)
@@ -1769,7 +1834,7 @@ class AngularAdapter(BaseAdapter):
                 continue
 
             start_t = time.time()
-            if gate_name == "test":
+            if gate_name in ("test", "build"):
                 cmd = script_cmd
             else:
                 cmd = f"npm run {gate_name}" if has_npm else script_cmd
@@ -2046,6 +2111,61 @@ class AngularAdapter(BaseAdapter):
                 return f"{effective_script} {flag_str}" if flag_str else effective_script
 
         return "npm run test" if has_npm else raw_test_script
+
+    def _resolve_angular_build_command(
+        self,
+        raw_build_script: str | None,
+        repo_path: Path,
+        has_npm: bool,
+    ) -> str | None:
+        """Resolve build command for Angular workspaces, ordering libraries before applications in multi-project setups."""
+        if not raw_build_script:
+            return None
+
+        angular_json = repo_path / "angular.json"
+        if not angular_json.exists():
+            return "npm run build" if has_npm else raw_build_script
+
+        try:
+            workspace = json.loads(angular_json.read_text(encoding="utf-8"))
+            projects = workspace.get("projects", {})
+            if not isinstance(projects, dict) or len(projects) <= 1:
+                return "npm run build" if has_npm else raw_build_script
+
+            libraries: list[str] = [
+                name for name, p in projects.items()
+                if isinstance(p, dict) and p.get("projectType", "").lower() == "library"
+            ]
+            applications: list[str] = [
+                name for name, p in projects.items()
+                if isinstance(p, dict) and p.get("projectType", "").lower() == "application"
+            ]
+
+            is_bare_ng_build = bool(re.search(r"(?:^|(?<=&&)\s*|(?<=;)\s*)ng\s+(?:build|b)(?:\s+--[\w-]+(?:=\S+)?)*\s*(?:$|&&|;)", raw_build_script.strip()))
+            missing_libs = [lib for lib in libraries if lib not in raw_build_script]
+
+            if is_bare_ng_build or missing_libs:
+                default_proj = workspace.get("defaultProject")
+                if default_proj and default_proj in applications:
+                    applications.remove(default_proj)
+                    applications.insert(0, default_proj)
+
+                cfg_match = re.search(r"(--(?:configuration|c)[=\s]\S+)", raw_build_script)
+                flags = f" {cfg_match.group(1).strip()}" if cfg_match else ""
+
+                ordered_targets = libraries + applications
+                if not ordered_targets:
+                    return "npm run build" if has_npm else raw_build_script
+
+                cmds = [
+                    f"ng build {t}{flags if t in applications else ''}"
+                    for t in ordered_targets
+                ]
+                return " && ".join(cmds)
+
+            return "npm run build" if has_npm else raw_build_script
+        except Exception:
+            return "npm run build" if has_npm else raw_build_script
 
     def _build_workspace_libraries(self, repo_path: Path, gate_env: dict[str, str]) -> None:
         """Pre-build any library projects in the workspace so dependent applications can resolve them."""

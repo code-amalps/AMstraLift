@@ -1695,6 +1695,73 @@ export class GridComponent {}
     assert "import { AgGridAngular } from 'ag-grid-angular';" in updated
 
 
+def test_modernize_angular_scripts_orders_libraries_before_applications_in_multiproject(tmp_path: Path):
+    """Verify that _modernize_angular_scripts updates bare 'ng build' to build libraries first in multi-project setups."""
+    from amstralift.adapters.angular import _modernize_angular_scripts
+
+    angular_json = tmp_path / "angular.json"
+    angular_json.write_text(
+        json.dumps(
+            {
+                "projects": {
+                    "rtcm-angular-boilerplate": {"projectType": "application"},
+                    "rtcm-angular-lib": {"projectType": "library"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(
+        json.dumps(
+            {
+                "name": "rtcm-angular",
+                "scripts": {
+                    "build": "ng build",
+                    "build:prod": "ng build --prod",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    applied = _modernize_angular_scripts(tmp_path)
+    assert len(applied) > 0
+
+    data = json.loads(pkg_json.read_text(encoding="utf-8"))
+    build_script = data["scripts"]["build"]
+    # Library must build first!
+    assert "ng build rtcm-angular-lib && ng build rtcm-angular-boilerplate" == build_script
+
+    prod_script = data["scripts"]["build:prod"]
+    assert "ng build rtcm-angular-lib && ng build rtcm-angular-boilerplate --configuration=production" == prod_script
+
+
+def test_resolve_angular_build_command_orders_libraries_first(tmp_path: Path):
+    """Verify that _resolve_angular_build_command resolves bare build script to build libraries first."""
+    from amstralift.adapters.angular import AngularAdapter
+
+    angular_json = tmp_path / "angular.json"
+    angular_json.write_text(
+        json.dumps(
+            {
+                "projects": {
+                    "my-app": {"projectType": "application"},
+                    "my-core-lib": {"projectType": "library"},
+                    "my-ui-lib": {"projectType": "library"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    adapter = AngularAdapter()
+    resolved = adapter._resolve_angular_build_command("ng build", tmp_path, has_npm=False)
+    assert resolved is not None
+    assert resolved.startswith("ng build my-core-lib && ng build my-ui-lib && ng build my-app")
+
+
 
 
 
