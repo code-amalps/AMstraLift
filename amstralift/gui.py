@@ -181,6 +181,7 @@ class AMstraLiftGUI:
         self._create_widgets()
         self._set_defaults()
         self._apply_theme(self.current_theme)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
 
     def _create_widgets(self):
         # ── Header ──────────────────────────────────────────────────────────
@@ -1070,6 +1071,18 @@ class AMstraLiftGUI:
             self.open_code_btn.configure(state="normal")
             self.git_status_btn.configure(state="normal")
 
+    def _on_window_close(self):
+        if self.is_running:
+            if not messagebox.askyesno(
+                "Exit Confirmation",
+                "An operation is currently in progress. Are you sure you want to exit and abort?",
+                parent=self.root,
+            ):
+                return
+            self.cancellation_token.cancel()
+        self.root.destroy()
+        sys.exit(0)
+
     def _abort_execution(self):
         if not self.is_running:
             return
@@ -1271,6 +1284,13 @@ class AMstraLiftGUI:
 
 def launch_gui():
     """Entry point to launch the AMstraLift Tkinter GUI."""
+    if sys.platform == "win32":
+        try:
+            from amstralift.cli import suppress_console_for_gui
+            suppress_console_for_gui()
+        except Exception:
+            pass
+
     root = tk.Tk()
     app = AMstraLiftGUI(root)
     root.mainloop()

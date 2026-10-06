@@ -4,6 +4,80 @@ import sys
 from pathlib import Path
 from typing import Annotated
 
+
+def suppress_console_for_gui() -> None:
+    """Suppress the Windows console window when AMstraLift is running in desktop GUI mode.
+
+    If the executable was launched by double-clicking in File Explorer, a desktop shortcut,
+    or the Start Menu, Windows automatically allocates a console window because the PE header
+    specifies the console subsystem. This function hides that console window immediately so
+    that only the graphical application window appears on screen.
+
+    If AMstraLift was launched from an interactive terminal (CMD, PowerShell, Git Bash), the
+    terminal is preserved so command output and logs remain visible.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        # If user passed explicit CLI subcommands (run, audit, etc.), do not suppress console
+        args = [a.lower() for a in sys.argv[1:]]
+        cli_commands = {"run", "audit", "version", "--help", "-h", "governance", "report", "package", "pack"}
+        if any(a in cli_commands for a in args):
+            return
+
+        is_gui = len(args) == 0 or any(a in ("gui", "--gui") for a in args)
+        if not is_gui:
+            return
+
+        kernel32 = ctypes.windll.kernel32
+        hwnd = kernel32.GetConsoleWindow()
+        if not hwnd:
+            return
+
+        # Check processes attached to this console
+        pids = (wintypes.DWORD * 32)()
+        count = kernel32.GetConsoleProcessList(pids, 32)
+        if count <= 2:
+            # Dedicated console allocated by Windows for this process; hide it immediately
+            ctypes.windll.user32.ShowWindow(hwnd, 0)  # 0 = SW_HIDE
+            return
+
+        # Check if any attached process is an interactive shell
+        interactive_shells = {
+            "cmd.exe", "powershell.exe", "pwsh.exe", "bash.exe",
+            "zsh.exe", "sh.exe", "wt.exe", "windowsterminal.exe",
+        }
+        has_interactive_shell = False
+        process_query_limited = 0x1000
+        current_pid = kernel32.GetCurrentProcessId()
+        for i in range(count):
+            pid = pids[i]
+            if pid == current_pid:
+                continue
+            h_proc = kernel32.OpenProcess(process_query_limited, False, pid)
+            if h_proc:
+                buf = ctypes.create_unicode_buffer(260)
+                size = wintypes.DWORD(260)
+                if kernel32.QueryFullProcessImageNameW(h_proc, 0, buf, ctypes.byref(size)):
+                    proc_name = buf.value.split("\\")[-1].lower()
+                    if proc_name in interactive_shells:
+                        has_interactive_shell = True
+                kernel32.CloseHandle(h_proc)
+            if has_interactive_shell:
+                break
+
+        if not has_interactive_shell:
+            ctypes.windll.user32.ShowWindow(hwnd, 0)
+    except Exception:
+        pass
+
+
+# Run early console suppression before loading heavy dependencies
+suppress_console_for_gui()
+
 import typer
 from rich.console import Console
 from rich.panel import Panel

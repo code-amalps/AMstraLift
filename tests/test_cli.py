@@ -149,3 +149,28 @@ def test_cli_audit_options_forwarding(tmp_path: Path, monkeypatch):
     assert captured_kwargs.get("allow_major") is True
     assert captured_kwargs.get("safe_only") is True
 
+
+def test_suppress_console_skips_cli_commands(monkeypatch):
+    from amstralift.cli import suppress_console_for_gui
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["amstralift", "run", "--repo", "."])
+    suppress_console_for_gui()
+
+
+def test_suppress_console_skips_help(monkeypatch):
+    from amstralift.cli import suppress_console_for_gui
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["amstralift", "--help"])
+    suppress_console_for_gui()
+
+
+def test_suppress_console_gui_invocation_safe(monkeypatch):
+    from amstralift.cli import suppress_console_for_gui
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["amstralift"])
+    suppress_console_for_gui()
+
+
