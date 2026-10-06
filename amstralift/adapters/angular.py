@@ -197,6 +197,11 @@ def _align_angular_ecosystem_dependencies(repo_path: Path, target_major: int | N
             del dev_deps["@angular/build"]
             modified = True
 
+    # Ensure @types/node is present in devDependencies for Node type resolution (TS2591)
+    if "@types/node" not in dev_deps:
+        dev_deps["@types/node"] = "^20.11.0"
+        modified = True
+
     # For Angular 14+, remove retired TSLint ecosystem tooling if modern ESLint is present
     if target_major is None or target_major >= 14:
         dev_deps = data.get("devDependencies", {})
@@ -457,7 +462,19 @@ def _modernize_angular_scripts(repo_path: Path) -> list[str]:
             val = re.sub(r"node\s+--openssl-legacy-provider\s+\S*ng(\.js)?", "ng", val)
             val = val.replace("--openssl-legacy-provider", "").strip()
 
-        # 2. Modernize Unix 'cp' to cross-platform Node fs.cpSync
+        # 2. Clean up obsolete Angular CLI flags removed in Angular 17+ (e.g. --build-optimizer)
+        val = re.sub(r"--build-optimizer(=[^\s;&]+)?\s*", "", val)
+        val = re.sub(r"--buildOptimizer(=[^\s;&]+)?\s*", "", val)
+        val = re.sub(r"--vendor-chunk(=[^\s;&]+)?\s*", "", val)
+        val = re.sub(r"--vendorChunk(=[^\s;&]+)?\s*", "", val)
+        val = re.sub(r"--extract-css\s*", "", val)
+        if "--prod" in val:
+            if "--configuration=production" not in val and "-c=production" not in val and "-c production" not in val:
+                val = val.replace("--prod", "--configuration=production")
+            else:
+                val = val.replace("--prod", "").strip()
+
+        # 3. Modernize Unix 'cp' to cross-platform Node fs.cpSync
         cp_matches = list(re.finditer(r"(?:^|(?<=&&)\s*|(?<=;)\s*)cp\s+(?:-[a-zA-Z]+\s+)*([^\s;&]+)\s+([^\s;&]+)", val))
         if cp_matches:
             for cm in reversed(cp_matches):
@@ -573,14 +590,24 @@ def _modernize_angular_tsconfig(repo_path: Path, target_major: int | None = None
                 compiler_opts["useDefineForClassFields"] = False
                 changed = True
 
-        # 5. Purge invalid ignoreDeprecations compiler options that cause TS5103
-        if "ignoreDeprecations" in compiler_opts:
+        # 5. For TypeScript 5.4+ with baseUrl, specify 'ignoreDeprecations': '6.0' to silence TS5101
+        if "baseUrl" in compiler_opts:
+            if compiler_opts.get("ignoreDeprecations") != "6.0":
+                compiler_opts["ignoreDeprecations"] = "6.0"
+                changed = True
+        elif "ignoreDeprecations" in compiler_opts:
             val = str(compiler_opts.get("ignoreDeprecations", "")).strip()
-            if val in ("6.0", "6", ""):
+            if val not in ("5.0", "6.0"):
                 del compiler_opts["ignoreDeprecations"]
                 changed = True
 
-        # 6. angularCompilerOptions -> clean up fullTemplateTypeCheck
+        # 6. Ensure compilerOptions.types includes 'node' if types is explicitly defined
+        if "types" in compiler_opts and isinstance(compiler_opts["types"], list):
+            if "node" not in compiler_opts["types"]:
+                compiler_opts["types"].append("node")
+                changed = True
+
+        # 7. angularCompilerOptions -> clean up fullTemplateTypeCheck
         if "angularCompilerOptions" in data and isinstance(data["angularCompilerOptions"], dict):
             if "fullTemplateTypeCheck" in data["angularCompilerOptions"]:
                 del data["angularCompilerOptions"]["fullTemplateTypeCheck"]
@@ -985,6 +1012,53 @@ def _modernize_angular_source_files(repo_path: Path, target_major: int | None = 
             if new_content != content:
                 content = new_content
                 modified = True
+
+        # 9. Clean up accidental Node.js console imports in browser files (TS2591 / bundling error)
+        # e.g., "import { error } from 'console';" or "import { debug } from 'console';"
+        if "from 'console'" in content or 'from "console"' in content or "from 'node:console'" in content or 'from "node:console"' in content:
+            c_matches = list(re.finditer(r"(?m)^import\s*\{([^}]+)\}\s*from\s*['\"](?:node:)?console['\"];?\s*\n?", content))
+            if c_matches:
+                for cm in reversed(c_matches):
+                    imported_symbols = [s.strip() for s in cm.group(1).split(",") if s.strip()]
+                    fallbacks = []
+                    for sym in imported_symbols:
+                        rest_of_code = content[:cm.start()] + content[cm.end():]
+                        if re.search(rf"\b{re.escape(sym)}\b", rest_of_code):
+                            fn_name = "error" if sym == "error" else ("debug" if sym == "debug" else ("warn" if sym == "warn" else ("info" if sym == "info" else "log")))
+                            fallbacks.append(f"const {sym} = console.{fn_name}.bind(console);")
+                    replacement = ("\n".join(fallbacks) + "\n") if fallbacks else ""
+                    content = content[:cm.start()] + replacement + content[cm.end():]
+                    modified = True
+
+        # 10. Ensure any @Component with imports: has standalone: true (prevents NG2010 compiler error)
+        if "@Component" in content and "imports" in content:
+            comp_dec_match = re.search(r"@Component\s*\(\s*\{", content)
+            if comp_dec_match:
+                open_b = content.find("{", comp_dec_match.start())
+                depth = 1
+                idx = open_b + 1
+                end_b = -1
+                while idx < len(content):
+                    ch = content[idx]
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end_b = idx
+                            break
+                    idx += 1
+                if end_b != -1:
+                    inner_dec = content[open_b + 1:end_b]
+                    if re.search(r"\bimports\s*:\s*\[", inner_dec):
+                        new_inner = inner_dec
+                        if re.search(r"\bstandalone\s*:\s*false\b", new_inner):
+                            new_inner = re.sub(r"\bstandalone\s*:\s*false\b", "standalone: true", new_inner)
+                        elif not re.search(r"\bstandalone\s*:\s*true\b", new_inner):
+                            new_inner = "\n  standalone: true," + new_inner
+                        if new_inner != inner_dec:
+                            content = content[:open_b + 1] + new_inner + content[end_b:]
+                            modified = True
 
         if modified:
             try:

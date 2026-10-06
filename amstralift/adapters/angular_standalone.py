@@ -508,7 +508,9 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
             if inline_match:
                 template_content = inline_match.group(2)
 
-        combined_text = content + "\n" + template_content
+        # Strip HTML comments from template to prevent matching commented-out elements
+        active_template = re.sub(r"<!--[\s\S]*?-->", "", template_content)
+        combined_text = content + "\n" + active_template
 
         # Determine required imports and schemas
         imports_to_add: list[str] = []
@@ -565,14 +567,14 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
 
         # Check child components from registry
         for sel, info in registry.items():
-            if info["path"] != comp_file and re.search(rf"<{re.escape(sel)}[\s>/]", template_content):
+            if info["path"] != comp_file and re.search(rf"<{re.escape(sel)}[\s>/]", active_template):
                 if not info["is_shared"]:
                     child_cls = info["class_name"]
                     imports_to_add.append(child_cls)
                     top_imports[child_cls] = compute_relative_import(comp_file, info["path"])
 
         # Check custom elements / schemas
-        if "<mwc-" in template_content or "*axLazyElement" in template_content:
+        if "<mwc-" in active_template or "*axLazyElement" in active_template:
             schemas_to_add.append("CUSTOM_ELEMENTS_SCHEMA")
             imports_to_add.append("LazyElementsModule")
             top_imports["LazyElementsModule"] = "@angular-extensions/elements"
@@ -581,7 +583,6 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
 
         # Check existing decorator fields
         existing_imp_match = re.search(r"imports\s*:\s*\[(.*?)\]", dec_content, re.DOTALL)
-        has_standalone = bool(re.search(r"\bstandalone\s*:\s*(true|false)\b", dec_content))
 
         modified_dec = False
         new_dec_content = dec_content
@@ -600,13 +601,19 @@ def modernize_angular_standalone_components(repo_path: Path) -> list[str]:
                     + new_dec_content[existing_imp_match.end():]
                 )
                 modified_dec = True
-            # Also ensure standalone: true is present
-            if not has_standalone:
+            # Also ensure standalone: true is present and convert standalone: false
+            if re.search(r"\bstandalone\s*:\s*false\b", new_dec_content):
+                new_dec_content = re.sub(r"\bstandalone\s*:\s*false\b", "standalone: true", new_dec_content)
+                modified_dec = True
+            elif not re.search(r"\bstandalone\s*:\s*true\b", new_dec_content):
                 new_dec_content = "standalone: true,\n  " + new_dec_content.lstrip()
                 modified_dec = True
         else:
             to_add_entries: list[str] = []
-            if not has_standalone:
+            if re.search(r"\bstandalone\s*:\s*false\b", new_dec_content):
+                new_dec_content = re.sub(r"\bstandalone\s*:\s*false\b", "standalone: true", new_dec_content)
+                modified_dec = True
+            elif not re.search(r"\bstandalone\s*:\s*true\b", new_dec_content):
                 to_add_entries.append("standalone: true")
             if unique_needed:
                 to_add_entries.append(f"imports: [{', '.join(unique_needed)}]")

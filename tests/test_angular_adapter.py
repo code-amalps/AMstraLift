@@ -381,7 +381,7 @@ def test_modernize_angular_tsconfig(tmp_path: Path):
     assert opts["target"] == "ES2022"
     assert opts["lib"] == ["ES2022", "dom"]
     assert opts["useDefineForClassFields"] is False
-    assert "ignoreDeprecations" not in opts
+    assert opts["ignoreDeprecations"] == "6.0"
     assert "fullTemplateTypeCheck" not in updated.get("angularCompilerOptions", {})
     assert updated["angularCompilerOptions"]["strictTemplates"] is True
 
@@ -1361,6 +1361,119 @@ def test_angular_fetch_latest_ignores_prerelease():
     with patch("amstralift.adapters.angular.httpx.Client", FakeClient):
         ver = adapter.fetch_latest_version("@angular/core")
         assert ver == "19.2.1"
+
+
+def test_modernize_angular_scripts_strips_obsolete_cli_flags(tmp_path: Path):
+    """Verify obsolete CLI flags like --build-optimizer and --vendor-chunk are stripped from package.json scripts."""
+    from amstralift.adapters.angular import _modernize_angular_scripts
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(json.dumps({
+        "name": "my-app",
+        "scripts": {
+            "build:portal": "ng build --project=rtcm-boilerplate --aot --output-hashing=all --configuration=production --build-optimizer=true --optimization=true --base-href=/rtcm/",
+            "build:legacy": "ng build --prod --vendor-chunk=false --build-optimizer"
+        }
+    }), encoding="utf-8")
+
+    applied = _modernize_angular_scripts(tmp_path)
+    assert len(applied) == 2
+
+    data = json.loads(pkg_json.read_text(encoding="utf-8"))
+    bp = data["scripts"]["build:portal"]
+    assert "--build-optimizer" not in bp
+    assert "--optimization=true" in bp
+    assert "--base-href=/rtcm/" in bp
+
+    bl = data["scripts"]["build:legacy"]
+    assert "--build-optimizer" not in bl
+    assert "--vendor-chunk" not in bl
+    assert "--prod" not in bl
+    assert "--configuration=production" in bl
+
+
+def test_modernize_angular_tsconfig_silences_baseurl_deprecation(tmp_path: Path):
+    """Verify tsconfig with baseUrl sets ignoreDeprecations: '6.0' to silence TS5101."""
+    from amstralift.adapters.angular import _modernize_angular_tsconfig
+
+    tsconfig = tmp_path / "tsconfig.json"
+    tsconfig.write_text(json.dumps({
+        "compilerOptions": {
+            "baseUrl": "./",
+            "paths": {
+                "@lib/*": ["dist/lib/*"]
+            },
+            "types": ["jasmine"]
+        }
+    }), encoding="utf-8")
+
+    applied = _modernize_angular_tsconfig(tmp_path, target_major=19)
+    assert len(applied) > 0
+
+    data = json.loads(tsconfig.read_text(encoding="utf-8"))
+    opts = data["compilerOptions"]
+    assert opts["ignoreDeprecations"] == "6.0"
+    assert "node" in opts["types"]
+
+
+def test_modernize_angular_source_files_cleans_console_imports(tmp_path: Path):
+    """Verify accidental Node.js console imports in browser files are cleaned up (TS2591)."""
+    from amstralift.adapters.angular import _modernize_angular_source_files
+
+    svc_file = tmp_path / "my-service.ts"
+    svc_file.write_text("""import { Injectable } from '@angular/core';
+import { error } from 'console';
+
+@Injectable({ providedIn: 'root' })
+export class MyService {
+  handle(err: any) {
+    error("failed: ", err);
+  }
+}
+""", encoding="utf-8")
+
+    unused_file = tmp_path / "unused.ts"
+    unused_file.write_text("""import { Component } from '@angular/core';
+import { debug } from 'console';
+
+@Component({ selector: 'app-u', template: '' })
+export class UnusedComponent {}
+""", encoding="utf-8")
+
+    applied = _modernize_angular_source_files(tmp_path, target_major=19)
+
+    svc_content = svc_file.read_text(encoding="utf-8")
+    assert "from 'console'" not in svc_content
+    assert "const error = console.error.bind(console);" in svc_content
+    assert "error(\"failed: \", err);" in svc_content
+
+    unused_content = unused_file.read_text(encoding="utf-8")
+    assert "from 'console'" not in unused_content
+    assert "debug" not in unused_content
+
+
+def test_modernize_angular_source_files_enforces_standalone_true(tmp_path: Path):
+    """Verify @Component with imports: is guaranteed to have standalone: true (NG2010)."""
+    from amstralift.adapters.angular import _modernize_angular_source_files
+
+    comp_file = tmp_path / "app.component.ts"
+    comp_file.write_text("""import { Component, OnInit } from '@angular/core';
+import { CommonModule } from '@angular/common';
+
+@Component({
+  selector: 'app-root',
+  templateUrl: './app.component.html',
+  styleUrls: ['./app.component.scss'],
+  imports: [CommonModule]
+})
+export class AppComponent implements OnInit {}
+""", encoding="utf-8")
+
+    _modernize_angular_source_files(tmp_path, target_major=19)
+
+    content = comp_file.read_text(encoding="utf-8")
+    assert "standalone: true" in content
+    assert "imports: [CommonModule]" in content
 
 
 
