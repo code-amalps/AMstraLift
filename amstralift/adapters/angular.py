@@ -1511,6 +1511,7 @@ class AngularAdapter(BaseAdapter):
                             text=True,
                             timeout=180,
                             shell=sys.platform == "win32",
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0,
                         )
                         if res.returncode == 0:
                             applied.append("Migrated templates to modern Angular control flow (@if, @for, @switch)")
@@ -1558,6 +1559,7 @@ class AngularAdapter(BaseAdapter):
                                 timeout=180,
                                 stdin=subprocess.DEVNULL,
                                 shell=sys.platform == "win32",
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0,
                             )
                             if res.returncode != 0:
                                 raw_err = (res.stderr or res.stdout or "").strip()

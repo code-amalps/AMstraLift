@@ -118,6 +118,7 @@ def _run_with_heartbeat(
         stderr=subprocess.PIPE,
         text=True,
         shell=sys.platform == "win32",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0,
     )
     last_ping = start_t
     try:

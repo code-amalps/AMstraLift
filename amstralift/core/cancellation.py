@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 import threading
 from typing import Any, Optional
 
@@ -135,6 +136,9 @@ def run_cancellable_subprocess(
             pop_kwargs["stdout"] = subprocess.PIPE
         if "stderr" not in pop_kwargs:
             pop_kwargs["stderr"] = subprocess.PIPE
+
+    if sys.platform == "win32" and "creationflags" not in pop_kwargs:
+        pop_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
     proc = subprocess.Popen(cmd, **pop_kwargs)
     tok.register_process(proc)
