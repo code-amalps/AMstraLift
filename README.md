@@ -9,8 +9,8 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Built with Python](https://img.shields.io/badge/Built_with-Python_3.11+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
-[![Automated Tests](https://img.shields.io/badge/Tests-300%20Passed-brightgreen.svg)]()
-[![Release](https://img.shields.io/badge/Release-v0.1.17-informational.svg)](https://github.com/code-amalps/AMstraLift/releases)
+[![Automated Tests](https://img.shields.io/badge/Tests-311%2B%20Passed-brightgreen.svg)]()
+[![Release](https://img.shields.io/badge/Release-v0.1.18-informational.svg)](https://github.com/code-amalps/AMstraLift/releases)
 [![Author](https://img.shields.io/badge/Author-Amal%20P%20S-black.svg)](https://github.com/code-amalps)
 
 ---
@@ -216,13 +216,16 @@ cd AMstraLift
 # 2. Install dependencies with uv (or pip)
 uv sync --group dev
 
-# 3. Test on a repository in SAFE PREVIEW MODE (zero files modified)
+# 3. (Optional) Scaffold an Angular/React/.NET/Python starter repository
+uv run amstralift init --repo ./my-starter --ecosystem angular
+
+# 4. Test on a repository in SAFE PREVIEW MODE (zero files modified)
 uv run amstralift audit --repo /path/to/your/project --mode preview
 
-# 4. Run a full modernization DRY-RUN
+# 5. Run a full modernization DRY-RUN
 uv run amstralift run --repo /path/to/your/project --dry-run
 
-# 5. Launch the Desktop GUI
+# 6. Launch the Desktop GUI
 uv run amstralift gui
 ```
 
@@ -327,7 +330,7 @@ AMstraLift is under active development by **Amal P S**. We are seeking developer
 
 ## Roadmap
 
-- **Generation 1 (Completed — v0.1.17)**: Multi-ecosystem upgrade engine, Angular AST modernization, 6 verification gates, OSV CVE remediation, HMAC attestation, GUI + REST API, monorepo discovery, standalone distribution.
+- **Generation 1 (Completed — v0.1.18)**: Multi-ecosystem upgrade engine, Angular AST modernization, 6 verification gates, OSV CVE remediation, HMAC attestation, GUI + REST API, monorepo discovery, starter scaffolding, standalone distribution.
 - **Generation 2 (In Progress)**:
   - **P16**: Transformation Dependency Graph (modeling prerequisites, conflicts, and parallelizable sets).
   - **P17**: Modernization Planning Engine (declarative upgrade plans).

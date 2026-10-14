@@ -862,20 +862,33 @@ class AMstraLiftGUI:
         self._scan_for_monorepo(initial_repo)
 
     def _scan_for_monorepo(self, repo_dir: str):
-        """Detect monorepo subprojects and populate dropdowns."""
+        """Detect monorepo subprojects up to 5 levels deep and populate dropdowns."""
         try:
             from amstralift.core.monorepo import MonorepoScanner
             p = Path(repo_dir)
             if not p.is_dir():
                 return
-            topo = MonorepoScanner.discover(p)
-            if topo.is_monorepo:
+            topo = MonorepoScanner.discover(p, max_depth=5)
+            if topo.projects:
                 options = [f"{proj.rel_path} ({proj.ecosystem})" for proj in topo.projects]
                 vals = ["(Root / Auto)", *options]
                 self.upgrade_subproject_combo["values"] = vals
                 self.audit_subproject_combo["values"] = vals
-                self.upgrade_subproject_combo.set(options[0])
-                self.audit_subproject_combo.set(options[0])
+
+                # If no manifest at root, auto-select first detected subproject
+                root_has_manifest = (
+                    (p / "package.json").is_file()
+                    or (p / "pyproject.toml").is_file()
+                    or (p / "requirements.txt").is_file()
+                    or list(p.glob("*.csproj"))
+                    or list(p.glob("*.sln"))
+                )
+                if not root_has_manifest and options:
+                    self.upgrade_subproject_combo.set(options[0])
+                    self.audit_subproject_combo.set(options[0])
+                else:
+                    self.upgrade_subproject_combo.set("(Root / Auto)")
+                    self.audit_subproject_combo.set("(Root / Auto)")
             else:
                 self.upgrade_subproject_combo["values"] = ["(Root / Auto)"]
                 self.audit_subproject_combo["values"] = ["(Root / Auto)"]
@@ -903,6 +916,150 @@ class AMstraLiftGUI:
             self.upgrade_repo_var.set(norm)
             self.audit_repo_var.set(norm)
             self._scan_for_monorepo(norm)
+            self._check_empty_repo_prompt(Path(norm))
+
+    def _check_empty_repo_prompt(self, target_path: Path):
+        """Prompt user if the selected directory is empty or contains no supported repository."""
+        try:
+            from amstralift.core.scaffold import detect_repository_status
+            status = detect_repository_status(target_path)
+            if status.get("is_empty"):
+                if messagebox.askyesno(
+                    "Empty Directory Detected",
+                    f"The folder '{target_path.name}' is empty and contains no Git repository.\n\n"
+                    "Would you like AMstraLift to initialize Git and scaffold a starter project template?",
+                    parent=self.root,
+                ):
+                    self._show_scaffold_dialog(target_path)
+        except Exception as exc:
+            logger.debug("Repo status check failed: %s", exc)
+
+    def _show_scaffold_dialog(self, target_path: Path):
+        """Show dialog to select starter project ecosystem and scaffold files."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Scaffold Starter Project - AMstraLift")
+        dialog.geometry("520x360")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        colors = THEMES[self.current_theme]
+        dialog.configure(bg=colors["bg_card"])
+
+        # Center over parent
+        try:
+            x = self.root.winfo_x() + (self.root.winfo_width() - 520) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - 360) // 2
+            dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
+        except Exception:
+            pass
+
+        pad_frame = tk.Frame(dialog, bg=colors["bg_card"], padx=24, pady=20)
+        pad_frame.pack(fill=tk.BOTH, expand=True)
+
+        lbl_title = tk.Label(
+            pad_frame,
+            text="✨ Initialize & Scaffold Starter Project",
+            font=("Segoe UI", 12, "bold"),
+            bg=colors["bg_card"],
+            fg=colors["fg_text"],
+        )
+        lbl_title.pack(anchor="w", pady=(0, 4))
+
+        lbl_desc = tk.Label(
+            pad_frame,
+            text=f"Initialize Git and generate an enterprise starter template in:\n{target_path}",
+            font=("Segoe UI", 9),
+            bg=colors["bg_card"],
+            fg=colors["fg_muted"],
+            justify=tk.LEFT,
+            wraplength=470,
+        )
+        lbl_desc.pack(anchor="w", pady=(0, 14))
+
+        eco_var = tk.StringVar(value="angular")
+        options = [
+            ("angular", "Angular 15 (Starter with legacy *ngIf / *ngFor control flow)"),
+            ("react", "React 17 (Starter with legacy JSX component patterns)"),
+            ("dotnet", ".NET 6.0 (C# Console Application with dependencies)"),
+            ("python", "Python (Package with requirements.txt and main script)"),
+        ]
+
+        for val, desc in options:
+            rb = tk.Radiobutton(
+                pad_frame,
+                text=desc,
+                value=val,
+                variable=eco_var,
+                bg=colors["bg_card"],
+                fg=colors["fg_text"],
+                selectcolor=colors["bg_input"],
+                activebackground=colors["bg_card"],
+                activeforeground=colors["fg_text"],
+                font=("Segoe UI", 9),
+            )
+            rb.pack(anchor="w", pady=3)
+
+        btn_frame = tk.Frame(pad_frame, bg=colors["bg_card"])
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(16, 0))
+
+        def _do_scaffold():
+            chosen = eco_var.get()
+            dialog.destroy()
+            try:
+                from amstralift.core.scaffold import scaffold_starter_project
+                created = scaffold_starter_project(target_path, ecosystem=chosen)
+                self._record_recent_repo(str(target_path))
+                self.upgrade_repo_var.set(str(target_path))
+                self.audit_repo_var.set(str(target_path))
+                self._scan_for_monorepo(str(target_path))
+                self._append_log(
+                    f"\n[INFO] Initialized Git repository and scaffolded {chosen.upper()} starter in {target_path} ({len(created)} files).\n",
+                    tag="success",
+                )
+                messagebox.showinfo(
+                    "Starter Project Ready",
+                    f"Successfully initialized Git and scaffolded {chosen.upper()} starter project in:\n\n{target_path}\n\nYou can now run 'Run Full Upgrade' or 'Run Security Audit'!",
+                    parent=self.root,
+                )
+            except Exception as exc:
+                messagebox.showerror("Scaffold Failed", f"Failed to scaffold starter project:\n\n{exc}", parent=self.root)
+
+        btn_ok = tk.Button(
+            btn_frame,
+            text="Scaffold Project",
+            font=("Segoe UI", 9, "bold"),
+            bg=colors["btn_primary"],
+            fg="#ffffff",
+            relief=tk.FLAT,
+            padx=14,
+            pady=6,
+            command=_do_scaffold,
+        )
+        btn_ok.pack(side=tk.RIGHT, padx=(8, 0))
+
+        btn_cancel = tk.Button(
+            btn_frame,
+            text="Cancel",
+            font=("Segoe UI", 9),
+            bg=colors["btn_secondary"],
+            fg=colors["btn_secondary_fg"],
+            relief=tk.FLAT,
+            padx=14,
+            pady=6,
+            command=dialog.destroy,
+        )
+        btn_cancel.pack(side=tk.RIGHT)
+
+    def _append_log(self, text: str, tag: str = "info"):
+        """Safely append formatted message to the output log text widget."""
+        try:
+            self.log_text.configure(state="normal")
+            self.log_text.insert(tk.END, text, tag)
+            self.log_text.see(tk.END)
+            self.log_text.configure(state="disabled")
+        except Exception:
+            pass
 
     def _toggle_theme(self):
         self.current_theme = "light" if self.current_theme == "dark" else "dark"
@@ -1231,6 +1388,21 @@ class AMstraLiftGUI:
             messagebox.showerror("Invalid Directory", "Please select a valid local repository directory.", parent=self.root)
             return
 
+        try:
+            from amstralift.core.scaffold import detect_repository_status
+            status = detect_repository_status(Path(repo_path_str))
+            if status.get("is_empty"):
+                if messagebox.askyesno(
+                    "Empty Directory Detected",
+                    f"The folder '{Path(repo_path_str).name}' is empty and contains no Git repository.\n\n"
+                    "Would you like AMstraLift to initialize Git and scaffold a starter project before running?",
+                    parent=self.root,
+                ):
+                    self._show_scaffold_dialog(Path(repo_path_str))
+                return
+        except Exception:
+            pass
+
         self._record_recent_repo(repo_path_str)
 
         eco = self.upgrade_eco_var.get().strip()
@@ -1345,6 +1517,21 @@ class AMstraLiftGUI:
         if not repo_path_str or not Path(repo_path_str).exists():
             messagebox.showerror("Invalid Directory", "Please select a valid local repository directory.", parent=self.root)
             return
+
+        try:
+            from amstralift.core.scaffold import detect_repository_status
+            status = detect_repository_status(Path(repo_path_str))
+            if status.get("is_empty"):
+                if messagebox.askyesno(
+                    "Empty Directory Detected",
+                    f"The folder '{Path(repo_path_str).name}' is empty and contains no Git repository.\n\n"
+                    "Would you like AMstraLift to initialize Git and scaffold a starter project before running?",
+                    parent=self.root,
+                ):
+                    self._show_scaffold_dialog(Path(repo_path_str))
+                return
+        except Exception:
+            pass
 
         self._record_recent_repo(repo_path_str)
 

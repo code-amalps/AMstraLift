@@ -24,7 +24,7 @@ def suppress_console_for_gui() -> None:
 
         # If user passed explicit CLI subcommands (run, audit, etc.), do not suppress console
         args = [a.lower() for a in sys.argv[1:]]
-        cli_commands = {"run", "audit", "projects", "topology", "version", "--help", "-h", "governance", "report", "package", "pack"}
+        cli_commands = {"run", "audit", "projects", "topology", "version", "--help", "-h", "governance", "report", "package", "pack", "init"}
         if any(a in cli_commands for a in args):
             return
 
@@ -122,6 +122,50 @@ def gui():
     """Launch interactive desktop GUI."""
     from amstralift.gui import launch_gui
     launch_gui()
+
+
+@app.command()
+def init(
+    repo: Annotated[Path, typer.Option("--repo", "-r", help="Target directory to initialize and scaffold.")] = Path("."),
+    ecosystem: Annotated[
+        str,
+        typer.Option(
+            "--ecosystem",
+            "-e",
+            help="Ecosystem starter template: 'angular', 'react', 'dotnet', or 'python'.",
+        ),
+    ] = "angular",
+    force: Annotated[bool, typer.Option("--force", "-f", help="Force scaffolding even if directory is not empty.")] = False,
+):
+    """Initialize a Git repository and scaffold a starter project ready for AMstraLift modernization."""
+    from amstralift.core.scaffold import detect_repository_status, scaffold_starter_project
+
+    status = detect_repository_status(repo)
+    if not status["is_empty"] and not force:
+        console.print(
+            f"[yellow]⚠️ Warning:[/yellow] Directory [cyan]{repo.resolve()}[/cyan] is not empty.\n"
+            f"[dim]Existing files may conflict. Use --force to proceed anyway.[/dim]"
+        )
+        if not typer.confirm("Do you wish to proceed?", default=False):
+            raise typer.Exit(code=0)
+
+    try:
+        created = scaffold_starter_project(repo, ecosystem=ecosystem)
+        console.print(
+            Panel.fit(
+                f"[bold green]✔ Git repository initialized and {ecosystem.upper()} starter project scaffolded![/bold green]\n\n"
+                f"[dim]Created {len(created)} files in [cyan]{repo.resolve()}[/cyan]:\n"
+                + "\n".join(f"  • {f}" for f in created[:8])
+                + (f"\n  • ...and {len(created) - 8} more" if len(created) > 8 else "")
+                + "\n\n[bold]Next Step:[/bold]\n"
+                f"  Run [bold cyan]amstralift run[/bold cyan] (or [bold cyan]amstralift audit[/bold cyan]) to modernize this project!",
+                title="Repository Initialized",
+                border_style="green",
+            )
+        )
+    except Exception as exc:
+        console.print(f"[bold red]✖ Failed to initialize starter project:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
 
 
 @app.command()
@@ -231,6 +275,55 @@ def run(
             f"[dim]Please ensure the directory exists and contains your project files.[/dim]"
         )
         raise typer.Exit(code=1)
+
+    from amstralift.core.scaffold import detect_repository_status, scaffold_starter_project
+
+    status = detect_repository_status(repo)
+    if status["is_empty"]:
+        console.print(
+            f"[yellow]⚠️ Directory [cyan]{repo.resolve()}[/cyan] is empty — no Git repository or project files found.[/yellow]\n"
+        )
+        should_init = yes
+        if not should_init:
+            try:
+                should_init = typer.confirm(
+                    "Would you like AMstraLift to initialize Git and scaffold a starter project now?",
+                    default=False,
+                )
+            except Exception:
+                should_init = False
+        if should_init:
+            chosen_eco = ecosystem or "angular"
+            created = scaffold_starter_project(repo, ecosystem=chosen_eco)
+            console.print(
+                f"[bold green]✔ Scaffolded {chosen_eco.upper()} starter project ({len(created)} files committed).[/bold green]\n"
+            )
+        else:
+            console.print("[dim]Tip: Run 'amstralift init' to scaffold a starter project here, or specify an existing repository.[/dim]")
+            raise typer.Exit(code=1)
+    elif not status["root_ecosystem"] and not status["subprojects"] and not status["is_git"]:
+        console.print(
+            f"[bold red]✖ No supported Git repository or project manifests found in:[/bold red] [cyan]{repo.resolve()}[/cyan]\n"
+            f"[dim]AMstraLift supports Angular, React, .NET, and Python repositories.\n"
+            f"Tip: Run [bold cyan]amstralift init[/bold cyan] to scaffold a starter repository here.[/dim]"
+        )
+        raise typer.Exit(code=1)
+    elif not status["root_ecosystem"] and status["subprojects"] and not project:
+        if len(status["subprojects"]) == 1:
+            project = status["subprojects"][0].rel_path
+            console.print(
+                f"[bold cyan]ℹ Auto-detected subproject:[/bold cyan] [yellow]{project}[/yellow] ({status['subprojects'][0].ecosystem.upper()})"
+            )
+        else:
+            console.print(
+                f"[yellow]ℹ Multiple subprojects discovered in [cyan]{repo.resolve()}[/cyan]:[/yellow]"
+            )
+            for sp in status["subprojects"]:
+                console.print(f"  • [bold cyan]{sp.rel_path}[/bold cyan] ({sp.ecosystem.upper()})")
+            console.print(
+                f"\n[yellow]Please specify which subproject to target using [bold cyan]--project <path>[/bold cyan][/yellow]"
+            )
+            raise typer.Exit(code=1)
 
     if publish and not yes:
         confirmed = typer.confirm(
@@ -525,6 +618,54 @@ def audit(
     if not repo.exists() or not repo.is_dir():
         console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {repo.resolve()}")
         raise typer.Exit(code=1)
+
+    from amstralift.core.scaffold import detect_repository_status, scaffold_starter_project
+
+    status = detect_repository_status(repo)
+    if status["is_empty"]:
+        console.print(
+            f"[yellow]⚠️ Directory [cyan]{repo.resolve()}[/cyan] is empty — no Git repository or project files found.[/yellow]\n"
+        )
+        should_init = False
+        try:
+            should_init = typer.confirm(
+                "Would you like AMstraLift to initialize Git and scaffold a starter project now?",
+                default=False,
+            )
+        except Exception:
+            should_init = False
+        if should_init:
+            chosen_eco = ecosystem or "angular"
+            created = scaffold_starter_project(repo, ecosystem=chosen_eco)
+            console.print(
+                f"[bold green]✔ Scaffolded {chosen_eco.upper()} starter project ({len(created)} files committed).[/bold green]\n"
+            )
+        else:
+            console.print("[dim]Tip: Run 'amstralift init' to scaffold a starter project here, or specify an existing repository.[/dim]")
+            raise typer.Exit(code=1)
+    elif not status["root_ecosystem"] and not status["subprojects"] and not status["is_git"]:
+        console.print(
+            f"[bold red]✖ No supported Git repository or project manifests found in:[/bold red] [cyan]{repo.resolve()}[/cyan]\n"
+            f"[dim]AMstraLift supports Angular, React, .NET, and Python repositories.\n"
+            f"Tip: Run [bold cyan]amstralift init[/bold cyan] to scaffold a starter repository here.[/dim]"
+        )
+        raise typer.Exit(code=1)
+    elif not status["root_ecosystem"] and status["subprojects"] and not project:
+        if len(status["subprojects"]) == 1:
+            project = status["subprojects"][0].rel_path
+            console.print(
+                f"[bold cyan]ℹ Auto-detected subproject:[/bold cyan] [yellow]{project}[/yellow] ({status['subprojects'][0].ecosystem.upper()})"
+            )
+        else:
+            console.print(
+                f"[yellow]ℹ Multiple subprojects discovered in [cyan]{repo.resolve()}[/cyan]:[/yellow]"
+            )
+            for sp in status["subprojects"]:
+                console.print(f"  • [bold cyan]{sp.rel_path}[/bold cyan] ({sp.ecosystem.upper()})")
+            console.print(
+                f"\n[yellow]Please specify which subproject to audit using [bold cyan]--project <path>[/bold cyan][/yellow]"
+            )
+            raise typer.Exit(code=1)
 
     effective_mode = "apply" if fix else mode.lower().strip()
     if effective_mode not in ("audit", "preview", "apply"):

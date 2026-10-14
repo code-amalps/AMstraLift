@@ -46,7 +46,7 @@ class MonorepoScanner:
     }
 
     @classmethod
-    def discover(cls, repo_path: Path, max_depth: int = 3) -> MonorepoTopology:
+    def discover(cls, repo_path: Path, max_depth: int = 5) -> MonorepoTopology:
         """Scan repository up to max_depth and return detected projects across all ecosystems."""
         repo_path = repo_path.resolve()
         discovered: list[DiscoveredProject] = []

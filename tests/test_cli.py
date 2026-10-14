@@ -68,6 +68,7 @@ def test_cli_rejects_nonexistent_directory(tmp_path: Path):
 def test_cli_publish_confirmation_declined(tmp_path: Path):
     repo_path = tmp_path / "test-repo"
     repo_path.mkdir()
+    (repo_path / "package.json").write_text('{"name": "test", "dependencies": {"@angular/core": "17.0.0"}}', encoding="utf-8")
     result = runner.invoke(app, ["run", "--repo", str(repo_path), "--publish"], input="n\n")
     assert result.exit_code == 0
     assert "Remote publishing aborted by user" in result.stdout
@@ -85,6 +86,7 @@ def test_cli_handles_already_up_to_date(tmp_path: Path, monkeypatch):
 
     repo_path = tmp_path / "up-to-date-repo"
     repo_path.mkdir()
+    (repo_path / "package.json").write_text('{"name": "test", "dependencies": {"@angular/core": "17.0.0"}}', encoding="utf-8")
     result = runner.invoke(app, ["run", "--repo", str(repo_path), "--dry-run"])
     assert result.exit_code == 0
     assert "All dependencies are already up to date" in result.stdout
@@ -111,6 +113,7 @@ def test_cli_passes_skip_tests_and_timeout(tmp_path: Path, monkeypatch):
 
     repo_path = tmp_path / "test-repo"
     repo_path.mkdir()
+    (repo_path / "package.json").write_text('{"name": "test", "dependencies": {"@angular/core": "17.0.0"}}', encoding="utf-8")
 
     result = runner.invoke(
         app,
@@ -140,6 +143,7 @@ def test_cli_audit_options_forwarding(tmp_path: Path, monkeypatch):
 
     repo_path = tmp_path / "audit-repo"
     repo_path.mkdir()
+    (repo_path / "package.json").write_text('{"name": "test", "dependencies": {"@angular/core": "17.0.0"}}', encoding="utf-8")
 
     result = runner.invoke(
         app,
@@ -148,6 +152,83 @@ def test_cli_audit_options_forwarding(tmp_path: Path, monkeypatch):
     assert result.exit_code == 0
     assert captured_kwargs.get("allow_major") is True
     assert captured_kwargs.get("safe_only") is True
+
+
+def test_cli_init_angular(tmp_path: Path):
+    target_dir = tmp_path / "new-angular-app"
+    result = runner.invoke(app, ["init", "--repo", str(target_dir), "--ecosystem", "angular"])
+    assert result.exit_code == 0
+    assert "Git repository initialized and ANGULAR starter project scaffolded" in result.stdout
+    assert (target_dir / "package.json").is_file()
+    assert (target_dir / "angular.json").is_file()
+    assert (target_dir / "src" / "app" / "app.component.ts").is_file()
+
+
+def test_cli_init_react(tmp_path: Path):
+    target_dir = tmp_path / "new-react-app"
+    result = runner.invoke(app, ["init", "--repo", str(target_dir), "--ecosystem", "react"])
+    assert result.exit_code == 0
+    assert "Git repository initialized and REACT starter project scaffolded" in result.stdout
+    assert (target_dir / "package.json").is_file()
+    assert (target_dir / "src" / "App.tsx").is_file()
+
+
+def test_cli_init_dotnet(tmp_path: Path):
+    target_dir = tmp_path / "new-dotnet-app"
+    result = runner.invoke(app, ["init", "--repo", str(target_dir), "--ecosystem", "dotnet"])
+    assert result.exit_code == 0
+    assert "Git repository initialized and DOTNET starter project scaffolded" in result.stdout
+    assert (target_dir / "MyApplication.csproj").is_file()
+    assert (target_dir / "Program.cs").is_file()
+
+
+def test_cli_init_python(tmp_path: Path):
+    target_dir = tmp_path / "new-python-app"
+    result = runner.invoke(app, ["init", "--repo", str(target_dir), "--ecosystem", "python"])
+    assert result.exit_code == 0
+    assert "Git repository initialized and PYTHON starter project scaffolded" in result.stdout
+    assert (target_dir / "requirements.txt").is_file()
+    assert (target_dir / "main.py").is_file()
+
+
+def test_cli_run_on_empty_dir_prompt_scaffold(tmp_path: Path, monkeypatch):
+    from amstralift.execution.stage_a import NoUpgradesAvailableError
+    from amstralift.service import UpgradeOrchestrator
+
+    def mock_run_upgrade(self, **kwargs):
+        raise NoUpgradesAvailableError("Scaffolded starter ready")
+
+    monkeypatch.setattr(UpgradeOrchestrator, "run_upgrade", mock_run_upgrade)
+
+    empty_dir = tmp_path / "empty-dir"
+    empty_dir.mkdir()
+    result = runner.invoke(app, ["run", "--repo", str(empty_dir)], input="y\n")
+    assert "Directory" in result.stdout
+    assert "is empty" in result.stdout
+    assert "Scaffolded ANGULAR starter project" in result.stdout
+
+
+def test_cli_auto_detect_single_subproject(tmp_path: Path, monkeypatch):
+    """Verify that a deeply nested subproject is auto-detected when running on solution root."""
+    from amstralift.execution.stage_a import NoUpgradesAvailableError
+    from amstralift.service import UpgradeOrchestrator
+
+    captured_kwargs = {}
+
+    def mock_run_upgrade(self, **kwargs):
+        captured_kwargs.update(kwargs)
+        raise NoUpgradesAvailableError("Mock done")
+
+    monkeypatch.setattr(UpgradeOrchestrator, "run_upgrade", mock_run_upgrade)
+
+    root = tmp_path / "solution-root"
+    deep_app = root / "src" / "Company.App" / "WebClient"
+    deep_app.mkdir(parents=True)
+    (deep_app / "package.json").write_text('{"dependencies": {"@angular/core": "15.0.0"}}', encoding="utf-8")
+
+    result = runner.invoke(app, ["run", "--repo", str(root), "--dry-run"])
+    assert result.exit_code == 0
+    assert captured_kwargs.get("subproject") == "src/Company.App/WebClient"
 
 
 def test_suppress_console_skips_cli_commands(monkeypatch):
