@@ -26,6 +26,11 @@ def get_node_execution_env(workspace_path: Path | None = None) -> dict[str, str]
             if os.path.exists(ep) and ep not in current_paths:
                 current_paths.append(ep)
     env["PATH"] = os.pathsep.join(current_paths)
+    env["npm_config_progress"] = "false"
+    env["npm_config_timing"] = "false"
+    env["npm_config_fund"] = "false"
+    env["npm_config_audit"] = "false"
+    env["npm_config_prefer_offline"] = "true"
     return env
 
 

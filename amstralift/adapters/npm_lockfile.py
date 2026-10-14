@@ -93,7 +93,10 @@ def _run_with_heartbeat(
     timeout: int,
     message: str,
 ) -> subprocess.CompletedProcess[str]:
-    """Execute a subprocess while periodically printing heartbeat progress and checking cancellation."""
+    """Execute a subprocess while periodically printing heartbeat progress and checking cancellation.
+
+    Streams output in real-time background reader threads to prevent OS pipe buffer deadlocks.
+    """
     # If subprocess.run is mocked in tests, delegate to it directly to honor mock expectations
     if subprocess.run is not _ORIG_SUBPROCESS_RUN:
         return subprocess.run(
@@ -107,6 +110,7 @@ def _run_with_heartbeat(
         )
 
     from amstralift.core.cancellation import check_cancelled
+    import threading
     import time
 
     start_t = time.time()
@@ -114,12 +118,36 @@ def _run_with_heartbeat(
         cmd,
         cwd=cwd,
         env=env,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         shell=sys.platform == "win32",
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0,
     )
+
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def _drain_stream(stream, sink):
+        try:
+            for line in iter(stream.readline, ""):
+                sink.append(line)
+        except Exception:
+            pass
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    t_stdout = threading.Thread(target=_drain_stream, args=(proc.stdout, stdout_chunks), daemon=True)
+    t_stderr = threading.Thread(target=_drain_stream, args=(proc.stderr, stderr_chunks), daemon=True)
+    t_stdout.start()
+    t_stderr.start()
+
     last_ping = start_t
     try:
         while proc.poll() is None:
@@ -128,24 +156,29 @@ def _run_with_heartbeat(
             now = time.time()
             if now - start_t > timeout:
                 proc.kill()
+                proc.wait()
                 raise subprocess.TimeoutExpired(cmd, timeout)
             if now - last_ping >= 15.0:
                 elapsed = int(now - start_t)
                 print(f"   ↳ {message} ({elapsed}s elapsed)...", flush=True)
                 last_ping = now
-        stdout, stderr = proc.communicate()
     except BaseException:
         proc.kill()
         proc.wait()
         raise
+    finally:
+        t_stdout.join(timeout=2.0)
+        t_stderr.join(timeout=2.0)
 
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
     return subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr)
 
 
 def _run_npm_install(
     repo_path: Path,
     env: dict[str, str] | None,
-    timeout: int = 600,
+    timeout: int = 300,
 ) -> None:
     """Run npm install to resolve upgraded dependencies cleanly in the workspace."""
     if os.environ.get("PYTEST_CURRENT_TEST"):
@@ -161,7 +194,19 @@ def _run_npm_install(
     print("   ↳ Running 'npm install' to resolve upgraded dependencies (this may take a minute)...", flush=True)
     start_t = time.time()
     result = _run_with_heartbeat(
-        [npm_cmd, "install", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund"],
+        [
+            npm_cmd,
+            "install",
+            "--legacy-peer-deps",
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            "--no-progress",
+            "--prefer-offline",
+            "--fetch-retries=2",
+            "--fetch-retry-mintimeout=3000",
+            "--fetch-retry-maxtimeout=10000",
+        ],
         cwd=repo_path,
         env=env or os.environ.copy(),
         timeout=timeout,
@@ -193,7 +238,7 @@ def _regenerate_lockfile(
     repo_path: Path,
     npm_cmd: str,
     env: dict[str, str] | None,
-    timeout: int = 300,
+    timeout: int = 90,
 ) -> bool:
     """Delete the old package-lock.json and regenerate it from package.json.
 
@@ -224,6 +269,11 @@ def _regenerate_lockfile(
                 "--legacy-peer-deps",
                 "--no-audit",
                 "--no-fund",
+                "--no-progress",
+                "--prefer-offline",
+                "--fetch-retries=2",
+                "--fetch-retry-mintimeout=3000",
+                "--fetch-retry-maxtimeout=10000",
             ],
             cwd=repo_path,
             env=env or os.environ.copy(),

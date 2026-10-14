@@ -1548,7 +1548,15 @@ class AngularAdapter(BaseAdapter):
 
         gate_env = get_node_execution_env()
         update_npm_lockfile(repo_path, changes, env=gate_env)
-        install_npm_dependencies(repo_path, env=gate_env)
+        try:
+            install_npm_dependencies(repo_path, env=gate_env)
+        except Exception as exc:
+            logger.warning("Sandbox dependency pre-install could not complete cleanly: %s", exc)
+            print(
+                f"   ⚠ Note: Sandbox dependency pre-install encountered an error or timeout ({exc}). "
+                "Continuing to verification gates...",
+                flush=True,
+            )
 
         # ── Docker: update FROM / image: tags in Dockerfiles & docker-compose ──
         if angular_core:

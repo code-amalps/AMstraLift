@@ -34,6 +34,11 @@ def test_install_npm_dependencies_uses_local_workspace(tmp_path: Path, monkeypat
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
+        "--no-progress",
+        "--prefer-offline",
+        "--fetch-retries=2",
+        "--fetch-retry-mintimeout=3000",
+        "--fetch-retry-maxtimeout=10000",
     ]
     assert kwargs["cwd"] == tmp_path
     assert kwargs["env"] == {"PATH": "test-path"}
