@@ -183,10 +183,10 @@ def transform_angular_control_flow(html_content: str) -> tuple[str, int]:
             block_header = f"@if ({cond})"
         else:  # ngFor
             for_expr = raw_expr.strip()
-            track_val = "$index"
             tb_match = re.search(r";\s*trackBy:\s*([a-zA-Z0-9_]+)", for_expr, re.IGNORECASE)
+            tb_fn = None
             if tb_match:
-                track_val = tb_match.group(1)
+                tb_fn = tb_match.group(1)
                 for_expr = re.sub(r";\s*trackBy:\s*[a-zA-Z0-9_]+", "", for_expr, flags=re.IGNORECASE).strip()
 
             # Additional let vars: let i = index
@@ -196,6 +196,18 @@ def transform_angular_control_flow(html_content: str) -> tuple[str, int]:
                 extra_vars.append(f"; let {vm.group(1)} = {vm.group(2)}")
             for_expr = re.sub(r";\s*(?:let\s+)?[a-zA-Z0-9_]+\s*=\s*[a-zA-Z0-9_$]+", "", for_expr).strip()
             for_expr = for_expr.rstrip(";")
+
+            # Strip leading 'let ' keyword as required by Angular 17+ control flow (@for (item of items; ...))
+            if for_expr.startswith("let "):
+                for_expr = for_expr[4:].strip()
+
+            # Identify loop item variable to generate a valid trackBy expression if present
+            item_var = for_expr.split(" of ")[0].strip() if " of " in for_expr else "item"
+            if tb_fn:
+                track_val = f"{tb_fn}($index, {item_var})"
+            else:
+                track_val = "$index"
+
             extra_str = "".join(extra_vars)
             block_header = f"@for ({for_expr}; track {track_val}{extra_str})"
 

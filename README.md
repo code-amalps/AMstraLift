@@ -4,12 +4,13 @@
 
 # AMstraLift
 
-> **Deterministic framework modernization and vulnerability remediation engine that verifies every change in an isolated sandbox before touching your code.**
+> **Deterministic framework modernization and vulnerability remediation engine that verifies every change in an isolated workspace before touching your code.**
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Built with Python](https://img.shields.io/badge/Built_with-Python_3.11+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
-[![Automated Tests](https://img.shields.io/badge/Tests-311%2B%20Passed-brightgreen.svg)]()
+[![Platform](https://img.shields.io/badge/CLI_Platform-Windows_%7C_Linux_%7C_macOS-lightgrey.svg)]()
+[![Binary](https://img.shields.io/badge/Standalone_EXE-Windows_x64-blue.svg)](https://github.com/code-amalps/AMstraLift/releases)
+[![Tests](https://github.com/code-amalps/AMstraLift/actions/workflows/tests.yml/badge.svg)](https://github.com/code-amalps/AMstraLift/actions/workflows/tests.yml)
 [![Release](https://img.shields.io/badge/Release-v0.1.18-informational.svg)](https://github.com/code-amalps/AMstraLift/releases)
 [![Author](https://img.shields.io/badge/Author-Amal%20P%20S-black.svg)](https://github.com/code-amalps)
 
@@ -17,10 +18,10 @@
 
 ## 30-Second Summary
 
-- **What is it?** A developer CLI and desktop GUI that automates major framework upgrades (e.g., Angular 14 $\to$ 18) and fixes security vulnerabilities (CVEs).
-- **How is it different?** Most tools just bump version strings and leave you with broken builds. AMstraLift performs **deterministic AST code migrations** (standalone components, modern `@if`/`@for` control flow, configuration updates), executes **6 verification gates** in an isolated sandbox, and only proposes changes if the build and test suite pass.
+- **What is it?** A developer CLI and desktop GUI that automates major framework upgrades (e.g., Angular 15 $\to$ 18) and fixes security vulnerabilities (CVEs).
+- **How is it different?** Most tools just bump version strings and leave you with broken builds. AMstraLift performs **deterministic AST code migrations** (standalone components, modern `@if`/`@for` control flow, configuration updates), executes **6 verification gates** in an isolated workspace, and only proposes changes if the build and test suite pass.
 - **Is there AI involved?** **No.** Zero LLMs in execution. All transformations are deterministic AST codemods, official framework schematics, and linters. No probabilistic guesses.
-- **Can I test it safely?** **Yes.** Running with `--dry-run` or `--mode preview` never modifies your working tree. Stage A executes inside an isolated sandbox directory.
+- **Can I test it safely?** **Yes.** Running with `--dry-run` or `--mode preview` never modifies your working tree. Stage A executes inside an isolated temporary workspace directory with scrubbed credentials.
 
 ---
 
@@ -78,10 +79,10 @@ Target Repository (Untouched)
 ---
 
 ## Real Proof: Angular 15 $\to$ 18 Modernization
-
+ 
 Here is an actual code transformation performed by AMstraLift's deterministic AST transformer:
 
-### Before: Legacy Template & NgModule Dependencies
+### Before: Legacy Template & Structural Directives
 ```html
 <div *ngIf="user$ | async as user">
   <span>Welcome, {{ user.name }}</span>
@@ -110,11 +111,11 @@ Here is an actual code transformation performed by AMstraLift's deterministic AS
   <admin-panel></admin-panel>
 }
 
-@for (let item of items; track customTrack) {
-  <ul>
+<ul>
+  @for (item of items; track customTrack($index, item)) {
     <li>{{ item }}</li>
-  </ul>
-}
+  }
+</ul>
 ```
 
 ### Accompanying Manifest & Configuration Updates
@@ -126,7 +127,7 @@ Here is an actual code transformation performed by AMstraLift's deterministic AS
 
 ### Verification Gate Output Log
 ```text
-[AMstraLift] Executing Stage A sandbox verification...
+[AMstraLift] Executing Stage A workspace verification...
   ↳ [Gate 1/6] Clean Install ('npm ci').......................... [PASSED] (18.4s)
   ↳ [Gate 2/6] Project Build ('ng build')........................ [PASSED] (14.2s)
   ↳ [Gate 3/6] Unit Tests ('ng test --watch=false').............. [PASSED] (8.9s)
@@ -143,16 +144,21 @@ Here is an actual code transformation performed by AMstraLift's deterministic AS
 
 ## Why AMstraLift is Different
 
-| Feature | Dependabot / Renovate | Copilot / AI Bots | AMstraLift |
-| :--- | :---: | :---: | :---: |
-| **Execution Mechanism** | String replacement | Probabilistic LLM | Deterministic AST & Codemods |
-| **Code Migration (Syntax)** | ❌ No | ⚠️ Inconsistent / Hallucinates | ✔️ Yes (Standalone, Control Flow) |
-| **Sandboxed Verification** | ❌ None | ❌ None | ✔️ 6 sequential sandbox gates |
-| **Build & Test Verification** | ❌ (leaves for CI) | ❌ No | ✔️ Verified locally before PR |
-| **Semantic Contract Diff** | ❌ No | ❌ No | ✔️ Checks routes, symbols, configs |
-| **Vulnerability Remediation** | Bump only | Text fix | OSV.dev dependency graph + overrides |
-| **Monorepo Polyglot Support** | File-by-file | Chat window | Recursive multi-project scanner |
-| **Human Review Workflow** | PR only | Chat output | Attested Evidence Bundle + PR |
+| Feature | Dependabot / Renovate | Copilot / AI Bots | `ng update` / `dotnet-upgrade` | AMstraLift |
+| :--- | :---: | :---: | :---: | :---: |
+| **Execution Mechanism** | String replacement | Probabilistic LLM | Official CLI schematics | Deterministic AST & Codemods |
+| **Code Migration (Syntax)** | ❌ No | ⚠️ Inconsistent / Hallucinates | ✔️ Yes (Framework specific) | ✔️ Yes (Standalone, Control Flow, Configs) |
+| **Isolated Workspace** | ❌ None | ❌ None | ❌ In-place (mutates repo) | ✔️ Isolated copy + scrubbed credentials |
+| **Build & Test Verification** | ❌ (leaves for CI) | ❌ No | ❌ None (user verifies) | ✔️ 6 sequential local sandbox gates |
+| **Peer Conflict Resolution** | ❌ Aborts on failure | ❌ No | ⚠️ Aborts on peer mismatch | ✔️ Lockfile healing & companion devkit alignment |
+| **Semantic Contract Diff** | ❌ No | ❌ No | ❌ No | ✔️ Checks routes, symbols, configs |
+| **Vulnerability Remediation** | Bump only | Text fix | ❌ None | OSV.dev dependency graph + overrides |
+| **Attested Evidence Bundle** | ❌ No | ❌ No | ❌ No | ✔️ HMAC-SHA256 signed evidence bundle |
+
+### How is this different from `ng update` or `dotnet-upgrade-assistant`?
+Official CLI tools like `ng update` and `dotnet-upgrade-assistant` are excellent at running framework-specific code transformations, but they expect clean dependency trees and modify your source files directly. In enterprise environments, they frequently fail due to peer dependency deadlocks, missing companion packages, or outdated lockfiles. 
+
+**AMstraLift does not replace framework schematics—it orchestrates and verifies them.** It runs the migration inside an isolated workspace, resolves peer conflicts, applies companion AST transformations, executes 6 compiler and test gates, and only creates a PR if the resulting build actually passes tests.
 
 ---
 
@@ -160,18 +166,20 @@ Here is an actual code transformation performed by AMstraLift's deterministic AS
 
 We believe in being 100% transparent about what the codebase can demonstrably do today versus what requires external tooling or is in active development:
 
-| Ecosystem | Detection | Version Upgrade | Code Modernization (AST/Codemods) | Sandbox Build Gate | Sandbox Test Gate | CVE Remediation | Maturity Level |
+| Ecosystem | Detection | Version Upgrade | Code Modernization (AST/Codemods) | Workspace Build Gate | Workspace Test Gate | CVE Remediation | Maturity Level |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Angular** | ✔️ `angular.json` & `package.json` | ✔️ v12 $\to$ v19 (GA releases) | ✔️ Standalone, Control Flow, M2 theming, tsconfig, scripts | ✔️ Library-first build ordering | ✔️ Karma (headless Chrome), Jest, Vitest | ✔️ Direct & transitive npm overrides | **Production Ready** |
-| **.NET** | ✔️ `.csproj` & `Directory.Build.props` | ✔️ NuGet + Central Package Mgmt (CPM) | ⚠️ Delegates to `dotnet format` (style, whitespace, analyzers) | ✔️ `dotnet build` | ✔️ `dotnet test` | ✔️ NuGet pin overrides | **Stable** (Requires .NET SDK) |
-| **Python** | ✔️ `requirements.txt` & `pyproject.toml` | ✔️ PyPI stable releases | ⚠️ Delegates to `ruff` / `pyupgrade` when installed | ✔️ Syntax & imports check | ✔️ `pytest` | ✔️ Pinned dependency updates | **Stable** (Requires Python runtime) |
-| **React** | ✔️ `package.json` (React/Next.js) | ✔️ npm registry stable | ⚠️ Updates JSX transform (`react-jsx`), runs `eslint --fix` | ✔️ `npm run build` | ✔️ `npm test` | ✔️ Direct & transitive npm overrides | **Partial** (No class $\to$ hook refactoring) |
+| **Angular** | ✔️ `angular.json` & `package.json` | ✔️ v12 $\to$ v19+ (GA releases) | ✔️ Standalone, Control Flow, M2 theming, tsconfig, scripts | ✔️ Library-first build ordering | ✔️ Karma (headless Chrome), Jest, Vitest | ✔️ Direct & transitive npm overrides | **Beta (Production Candidate)** |
+| **.NET** | ✔️ `.csproj` & `Directory.Build.props` | ✔️ NuGet + Central Package Mgmt (CPM) | ⚠️ Delegates to `dotnet format` (style, whitespace, analyzers) | ✔️ `dotnet build` | ✔️ `dotnet test` | ✔️ NuGet pin overrides | **Beta** (Requires .NET SDK) |
+| **Python** | ✔️ `requirements.txt` & `pyproject.toml` | ✔️ PyPI stable releases | ⚠️ Delegates to `ruff` / `pyupgrade` when installed | ✔️ Syntax & imports check | ✔️ `pytest` | ✔️ Pinned dependency updates | **Beta** (Requires Python runtime) |
+| **React** | ✔️ `package.json` (React/Next.js) | ✔️ npm registry stable | ⚠️ Updates JSX transform (`react-jsx`), runs `eslint --fix` | ✔️ `npm run build` | ✔️ `npm test` | ✔️ Direct & transitive npm overrides | **Alpha** (No class $\to$ hook refactoring) |
+
+> **Angular Version Support Policy:** AMstraLift supports modern Angular (v12 through v19+ GA). Migrations are applied incrementally one major version at a time (e.g. 15 $\to$ 16 $\to$ 17 $\to$ 18) to ensure every intermediate version compiles and passes tests before advancing. Legacy AngularJS 1.x is not supported.
 
 ---
 
 ## The 6 Verification Gates
 
-Every upgrade must survive 6 sequential gates in an isolated sandbox before AMstraLift will propose a pull request:
+Every upgrade must survive 6 sequential gates in an isolated workspace before AMstraLift will propose a pull request:
 
 1. **Gate 1: Clean Install** — Can the upgraded dependency graph resolve from scratch? Ensures zero peer dependency deadlocks (`npm ci`, `dotnet restore`).
 2. **Gate 2: Project Build** — Does the application and all internal libraries compile? In Angular workspaces, libraries are compiled first so dependent applications resolve cleanly.
@@ -180,10 +188,12 @@ Every upgrade must survive 6 sequential gates in an isolated sandbox before AMst
 5. **Gate 5: Strict Diff Validation** — Did the modernization touch only intended files? Rejects unauthorized file creation, path traversal attempts, or accidental build artifact leakage.
 6. **Gate 6: Semantic & Contract Diff** — Did the modernization break your public contract? Extracts HTTP API routes, exported classes/symbols, and environment configuration keys before and after modernization. Flags breaking changes as verification failures even if the code builds.
 
-### What Happens If a Gate Fails?
-- **Safe Rollback**: Your target repository remains completely untouched.
-- **Transactional Refusal**: Under our Partial Modernization Engine, if an individual file transformation fails, it is rolled back without poisoning other safe transformations.
-- **Smart Diagnostics (`--draft-on-fail`)**: If desired, AMstraLift can generate a draft pull request containing the exact compiler error diagnostics and failed gate output so you can inspect what broke.
+### Handling Test Failures and Missing Tests (`UNCERTAIN` / `SKIPPED`)
+- **Default Strict Enforcement**: In a live run (without `--dry-run`), all required gates must pass before AMstraLift will create or publish an upgrade branch.
+- **If a project has 0% tests or tests time out**: Gate 3 reports `SKIPPED` or `UNCERTAIN` (for example, if Chrome Headless is not installed on the machine for Karma).
+- **Preserve Progress on a Draft Branch (`--draft-on-fail`)**: If a gate fails, AMstraLift can commit the partial migration to an isolated `draft/*` branch with smart compiler failure diagnostics for senior engineer review (`amstralift run --draft-on-fail`).
+- **Bypass Failed Gates (`--allow-failed-gates` / `--skip-tests`)**: For repositories where you want to accept compilation without enforcing test suites.
+- **Safe Rollback**: By default, if gates fail, your working tree remains byte-identical to the original source.
 
 ---
 
@@ -295,7 +305,7 @@ uv run pytest
 ```
 
 ```text
-======================= 300 passed in 38.4s =======================
+======================= 311 passed in 38.4s =======================
 ```
 
 Key test suites included in the repository:
@@ -307,6 +317,7 @@ Key test suites included in the repository:
 - `tests/test_crypto.py` — HMAC signing, tampering rejection, and TTL expiration
 - `tests/test_security.py` — Path traversal rejection, forbidden file filtering, symlink defense
 - `tests/test_monorepo.py` — Polyglot monorepo topology detection
+- `tests/test_scaffold.py` — Starter project templates and deep monorepo subproject discovery
 
 ---
 
@@ -342,9 +353,9 @@ AMstraLift is under active development by **Amal P S**. We are seeking developer
 
 ## Copyright & License
 
-Copyright (C) 2026 **Amal P S**. All rights reserved.
+Copyright (C) 2026 **Amal P S**.
 
-AMstraLift is open-source software licensed under the **[GNU Affero General Public License v3.0 (AGPL-3.0-or-later)](LICENSE)** with Section 7 author attribution notices.
+Licensed under the **[GNU Affero General Public License v3.0 (AGPL-3.0-or-later)](LICENSE)** with Section 7 author attribution notices.
 
 ### Important Notes on License & Usage
 - **Free for Developers:** Individual developers, open-source maintainers, researchers, and engineering teams are completely free to inspect, download, use, and evaluate AMstraLift to upgrade their repositories without cost or subscription fees.

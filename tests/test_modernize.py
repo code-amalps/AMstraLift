@@ -262,7 +262,7 @@ def test_transform_angular_control_flow_directives():
     assert count == 3
     assert "@if (user$ | async; as user)" in transformed
     assert "@if (isAdmin)" in transformed
-    assert "@for (let item of items; track customTrack)" in transformed
+    assert "@for (item of items; track customTrack($index, item))" in transformed
     assert "<ng-container" not in transformed
 
 
