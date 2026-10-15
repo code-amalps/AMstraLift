@@ -120,3 +120,28 @@ def test_generate_patch_ignores_node_modules_and_build_dirs_without_gitignore(tm
     assert "node_modules" not in patch
     assert ".angular" not in patch
 
+
+def test_sanitize_environment_scrubs_all_credentials():
+    """Verify sanitize_environment strips every sensitive token, key, and password."""
+    from amstralift.core.workspace import SCRUBBED_ENV_VARS, sanitize_environment
+
+    tainted_env = {
+        "PATH": "/usr/bin:/bin",
+        "USER": "developer",
+        "NODE_ENV": "production",
+    }
+    # Populate every scrubbed variable with a fake secret
+    for var in SCRUBBED_ENV_VARS:
+        tainted_env[var] = f"super_secret_token_for_{var}"
+
+    clean = sanitize_environment(tainted_env)
+
+    # Legitimate non-secret variables must be preserved
+    assert clean["PATH"] == "/usr/bin:/bin"
+    assert clean["USER"] == "developer"
+    assert clean["NODE_ENV"] == "production"
+
+    # Every single sensitive variable must be scrubbed
+    for var in SCRUBBED_ENV_VARS:
+        assert var not in clean, f"Secret variable {var} was not scrubbed!"
+

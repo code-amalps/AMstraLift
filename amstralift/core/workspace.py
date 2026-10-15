@@ -53,6 +53,44 @@ STANDARD_IGNORED_DIRS: tuple[str, ...] = (
 
 EPHEMERAL_CACHE_DIRS = STANDARD_IGNORED_DIRS
 
+SCRUBBED_ENV_VARS: tuple[str, ...] = (
+    # Git & SCM tokens
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITLAB_TOKEN",
+    "GL_TOKEN",
+    "BITBUCKET_TOKEN",
+    "GIT_ASKPASS",
+    "SSH_AUTH_SOCK",
+    "GIT_CREDENTIAL_HELPER",
+    # Package Manager Publishing Tokens
+    "NODE_AUTH_TOKEN",
+    "NPM_TOKEN",
+    "NPM_AUTH_TOKEN",
+    "PYPI_API_TOKEN",
+    "TWINE_PASSWORD",
+    "NUGET_API_KEY",
+    # Cloud Provider Secrets
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AZURE_CLIENT_SECRET",
+    "AZURE_TENANT_ID",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+)
+
+
+def sanitize_environment(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Return a sanitized copy of the environment with sensitive credentials removed.
+
+    Used when launching subprocesses in the isolated workspace so child tools
+    (like npm install, git, test runners) do not leak ambient host secrets.
+    """
+    env = (base_env if base_env is not None else os.environ).copy()
+    for var in SCRUBBED_ENV_VARS:
+        env.pop(var, None)
+    return env
+
 
 def safe_rglob(
     root: Path,
@@ -146,11 +184,7 @@ def run_git(
     input_data: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute a git command with strict error checking."""
-    clean_env = os.environ.copy()
-    # Strip any potential token leak from parent environment
-    for sensitive_var in ("GITHUB_TOKEN", "GIT_ASKPASS", "SSH_AUTH_SOCK", "GIT_CREDENTIAL_HELPER"):
-        clean_env.pop(sensitive_var, None)
-
+    clean_env = sanitize_environment(os.environ.copy())
     if env:
         clean_env.update(env)
 

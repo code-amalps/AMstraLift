@@ -10,7 +10,9 @@ from amstralift.core.models import DependencyChange, GateSummary
 
 def get_node_execution_env(workspace_path: Path | None = None) -> dict[str, str]:
     """Return an environment dictionary augmented with common Node.js, npm, and workspace paths."""
-    env = os.environ.copy()
+    from amstralift.core.workspace import sanitize_environment
+
+    env = sanitize_environment(os.environ.copy())
     current_paths = env.get("PATH", "").split(os.pathsep)
     if workspace_path:
         local_bin = str(Path(workspace_path) / "node_modules" / ".bin")

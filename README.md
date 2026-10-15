@@ -10,7 +10,7 @@
 [![Built with Python](https://img.shields.io/badge/Built_with-Python_3.11+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/CLI_Platform-Windows_%7C_Linux_%7C_macOS-lightgrey.svg)]()
 [![Binary](https://img.shields.io/badge/Standalone_EXE-Windows_x64-blue.svg)](https://github.com/code-amalps/AMstraLift/releases)
-[![Tests](https://github.com/code-amalps/AMstraLift/actions/workflows/tests.yml/badge.svg)](https://github.com/code-amalps/AMstraLift/actions/workflows/tests.yml)
+[![Tests](https://github.com/code-amalps/AMstraLift/actions/workflows/tests.yml/badge.svg?branch=Dev)](https://github.com/code-amalps/AMstraLift/actions/workflows/tests.yml)
 [![Release](https://img.shields.io/badge/Release-v0.1.18-informational.svg)](https://github.com/code-amalps/AMstraLift/releases)
 [![Author](https://img.shields.io/badge/Author-Amal%20P%20S-black.svg)](https://github.com/code-amalps)
 
@@ -55,15 +55,15 @@ Target Repository (Untouched)
        ▼ [1. Discover & Scan]
        ├─ Discovers dependencies, monorepo subprojects, and Google OSV.dev CVEs
        │
-       ▼ [2. Isolate Sandbox (Stage A)]
-       ├─ Copies project to an isolated sandbox workspace
+       ▼ [2. Prepare Isolated Workspace (Stage A)]
+       ├─ Copies project to an isolated temporary workspace directory
        ├─ Aligns companion packages, TypeScript, and lockfiles
        │
        ▼ [3. Deterministic Code Migration]
        ├─ AST codemods: template control flow (@if/@for), standalone components
        ├─ Config migrations: angular.json builders, tsconfig flags, scripts
        │
-       ▼ [4. 6 Sandboxed Verification Gates]
+       ▼ [4. 6 Verification Gates]
        ├─ Gate 1: Clean Install  ──> Does the lockfile resolve without errors?
        ├─ Gate 2: Project Build  ──> Does the application and library compile?
        ├─ Gate 3: Unit Tests     ──> Does the test suite pass (headless Karma, Jest, pytest)?
@@ -125,7 +125,7 @@ Here is an actual code transformation performed by AMstraLift's deterministic AS
 - `tsconfig.json`: purged obsolete `baseUrl` deprecations
 - `package-lock.json`: rebuilt cleanly with companion devkits aligned
 
-### Verification Gate Output Log
+### Verification Gate Output Log *(Captured from Angular 15 → 18 evaluation repository)*
 ```text
 [AMstraLift] Executing Stage A workspace verification...
   ↳ [Gate 1/6] Clean Install ('npm ci').......................... [PASSED] (18.4s)
@@ -144,19 +144,19 @@ Here is an actual code transformation performed by AMstraLift's deterministic AS
 
 ## Why AMstraLift is Different
 
-| Feature | Dependabot / Renovate | Copilot / AI Bots | `ng update` / `dotnet-upgrade` | AMstraLift |
+| Feature | Dependabot / Renovate | Copilot / AI Bots | `ng update` / `.NET Upgrade Assistant` | AMstraLift |
 | :--- | :---: | :---: | :---: | :---: |
 | **Execution Mechanism** | String replacement | Probabilistic LLM | Official CLI schematics | Deterministic AST & Codemods |
 | **Code Migration (Syntax)** | ❌ No | ⚠️ Inconsistent / Hallucinates | ✔️ Yes (Framework specific) | ✔️ Yes (Standalone, Control Flow, Configs) |
 | **Isolated Workspace** | ❌ None | ❌ None | ❌ In-place (mutates repo) | ✔️ Isolated copy + scrubbed credentials |
-| **Build & Test Verification** | ❌ (leaves for CI) | ❌ No | ❌ None (user verifies) | ✔️ 6 sequential local sandbox gates |
-| **Peer Conflict Resolution** | ❌ Aborts on failure | ❌ No | ⚠️ Aborts on peer mismatch | ✔️ Lockfile healing & companion devkit alignment |
+| **Build & Test Verification** | ❌ (leaves for CI) | ❌ No | ❌ None (user verifies) | ✔️ 6 sequential local verification gates |
+| **Peer Conflict Resolution** | ❌ Aborts on failure | ❌ No | ⚠️ Strict check (fails by default; --force risks breakage) | ✔️ Lockfile healing & companion devkit alignment |
 | **Semantic Contract Diff** | ❌ No | ❌ No | ❌ No | ✔️ Checks routes, symbols, configs |
 | **Vulnerability Remediation** | Bump only | Text fix | ❌ None | OSV.dev dependency graph + overrides |
 | **Attested Evidence Bundle** | ❌ No | ❌ No | ❌ No | ✔️ HMAC-SHA256 signed evidence bundle |
 
-### How is this different from `ng update` or `dotnet-upgrade-assistant`?
-Official CLI tools like `ng update` and `dotnet-upgrade-assistant` are excellent at running framework-specific code transformations, but they expect clean dependency trees and modify your source files directly. In enterprise environments, they frequently fail due to peer dependency deadlocks, missing companion packages, or outdated lockfiles. 
+### How is this different from `ng update` or `.NET Upgrade Assistant`?
+Official CLI tools like `ng update` and Microsoft's `.NET Upgrade Assistant` are excellent at running framework-specific code transformations, but they modify your source files directly in-place and assume clean dependency resolution. In complex enterprise codebases with deep dependency trees or private registries, they can fail due to peer dependency deadlocks or require manual `--force` workarounds that introduce broken companion packages. 
 
 **AMstraLift does not replace framework schematics—it orchestrates and verifies them.** It runs the migration inside an isolated workspace, resolves peer conflicts, applies companion AST transformations, executes 6 compiler and test gates, and only creates a PR if the resulting build actually passes tests.
 
@@ -168,12 +168,12 @@ We believe in being 100% transparent about what the codebase can demonstrably do
 
 | Ecosystem | Detection | Version Upgrade | Code Modernization (AST/Codemods) | Workspace Build Gate | Workspace Test Gate | CVE Remediation | Maturity Level |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Angular** | ✔️ `angular.json` & `package.json` | ✔️ v12 $\to$ v19+ (GA releases) | ✔️ Standalone, Control Flow, M2 theming, tsconfig, scripts | ✔️ Library-first build ordering | ✔️ Karma (headless Chrome), Jest, Vitest | ✔️ Direct & transitive npm overrides | **Beta (Production Candidate)** |
+| **Angular** | ✔️ `angular.json` & `package.json` | ✔️ v12 $\to$ v18 (highest tested: 18.2; v19+ tracking) | ✔️ Standalone, Control Flow, M2 theming, tsconfig, scripts | ✔️ Library-first build ordering | ✔️ Karma (headless Chrome), Jest, Vitest | ✔️ Direct & transitive npm overrides | **Beta (Production Candidate)** |
 | **.NET** | ✔️ `.csproj` & `Directory.Build.props` | ✔️ NuGet + Central Package Mgmt (CPM) | ⚠️ Delegates to `dotnet format` (style, whitespace, analyzers) | ✔️ `dotnet build` | ✔️ `dotnet test` | ✔️ NuGet pin overrides | **Beta** (Requires .NET SDK) |
 | **Python** | ✔️ `requirements.txt` & `pyproject.toml` | ✔️ PyPI stable releases | ⚠️ Delegates to `ruff` / `pyupgrade` when installed | ✔️ Syntax & imports check | ✔️ `pytest` | ✔️ Pinned dependency updates | **Beta** (Requires Python runtime) |
 | **React** | ✔️ `package.json` (React/Next.js) | ✔️ npm registry stable | ⚠️ Updates JSX transform (`react-jsx`), runs `eslint --fix` | ✔️ `npm run build` | ✔️ `npm test` | ✔️ Direct & transitive npm overrides | **Alpha** (No class $\to$ hook refactoring) |
 
-> **Angular Version Support Policy:** AMstraLift supports modern Angular (v12 through v19+ GA). Migrations are applied incrementally one major version at a time (e.g. 15 $\to$ 16 $\to$ 17 $\to$ 18) to ensure every intermediate version compiles and passes tests before advancing. Legacy AngularJS 1.x is not supported.
+> **Angular Version Support Policy:** AMstraLift supports modern Angular from v12 through v18 (highest version tested end-to-end: Angular 18.2; Angular 19+ in active preview tracking). Migrations are applied incrementally one major version at a time (e.g. 15 $\to$ 16 $\to$ 17 $\to$ 18) to ensure every intermediate version compiles and passes tests before advancing. Legacy AngularJS 1.x is not supported.
 
 ---
 
@@ -190,7 +190,8 @@ Every upgrade must survive 6 sequential gates in an isolated workspace before AM
 
 ### Handling Test Failures and Missing Tests (`UNCERTAIN` / `SKIPPED`)
 - **Default Strict Enforcement**: In a live run (without `--dry-run`), all required gates must pass before AMstraLift will create or publish an upgrade branch.
-- **If a project has 0% tests or tests time out**: Gate 3 reports `SKIPPED` or `UNCERTAIN` (for example, if Chrome Headless is not installed on the machine for Karma).
+- **Default Behavior for Missing Tests (`SKIPPED`)**: If a project has no test script defined in its manifest, Gate 3 reports `SKIPPED`. By default, a `SKIPPED` gate does **not** block PR generation (since Gate 1 Clean Install and Gate 2 Build have passed). If your team requires that tests must exist and pass, pass `--require-tests`, which treats `SKIPPED` as a failure and blocks the upgrade.
+- **Behavior for `UNCERTAIN` Gates**: An `UNCERTAIN` status (e.g. Chrome Headless is not installed on the host for Karma tests) is treated as a gate failure by default, blocking PR generation unless `--allow-failed-gates` or `--skip-tests` is passed.
 - **Preserve Progress on a Draft Branch (`--draft-on-fail`)**: If a gate fails, AMstraLift can commit the partial migration to an isolated `draft/*` branch with smart compiler failure diagnostics for senior engineer review (`amstralift run --draft-on-fail`).
 - **Bypass Failed Gates (`--allow-failed-gates` / `--skip-tests`)**: For repositories where you want to accept compilation without enforcing test suites.
 - **Safe Rollback**: By default, if gates fail, your working tree remains byte-identical to the original source.
@@ -245,11 +246,12 @@ uv run amstralift gui
 
 To save you time, here is what AMstraLift **cannot** or does **not** do today:
 
-1. **AngularJS (1.x) is not supported**: AMstraLift supports modern Angular (v12 through v19). It cannot migrate legacy AngularJS 1.x directives to Angular 2+.
+1. **AngularJS (1.x) is not supported**: AMstraLift supports modern Angular from v12 through v18 (highest version tested end-to-end: Angular 18.2; Angular 19+ in active preview tracking). It cannot migrate legacy AngularJS 1.x directives to Angular 2+.
 2. **React does not refactor component syntax**: The React adapter upgrades packages, sets up modern JSX transforms, and fixes lint issues. It will not rewrite legacy React class components into functional components with hooks.
-3. **No test generation**: AMstraLift executes your *existing* test suite. If your project has 0% test coverage, Gate 3 will report `SKIPPED` or `UNCERTAIN`—it cannot fabricate tests for you.
+3. **No test generation**: AMstraLift executes your *existing* test suite. If your project has 0% test coverage, Gate 3 will report `SKIPPED`—it cannot fabricate tests for you.
 4. **Karma requires a headless browser**: Angular unit tests running Karma need Chrome or Chromium installed on the host machine to execute headless tests. If missing, Gate 3 flags `UNCERTAIN`.
 5. **Does not prove mathematical correctness**: AMstraLift proves that your code compiles, tests pass, dependencies resolve, and semantic contracts (routes/symbols) are preserved. It does not replace code review.
+6. **Local user privileges & network access**: Verification gates (`npm install`, `ng build`, `npm test`, `dotnet build`) execute as child subprocesses directly under your user account with host network access. While sensitive environment tokens and package manager credentials are automatically scrubbed, dependency install scripts (`postinstall`) and tests run with your local user privileges. True containerized isolation (Docker/rootless containers) is on the active roadmap.
 
 ---
 
@@ -257,7 +259,7 @@ To save you time, here is what AMstraLift **cannot** or does **not** do today:
 
 ```text
 ┌────────────────────────────────────────────────────────┐
-│                   STAGE A: SANDBOX                     │
+│              STAGE A: ISOLATED WORKSPACE               │
 │  (Isolated temporary copy of repository)              │
 │                                                        │
 │   Candidate -> AST Transforms -> 6 Verification Gates   │
@@ -290,8 +292,21 @@ To save you time, here is what AMstraLift **cannot** or does **not** do today:
 
 ### What Cryptographic Attestation Actually Means
 We use HMAC-SHA256 signing between Stage A and Stage B:
-- **What it proves:** It cryptographically guarantees that the patch published in Stage B is **byte-for-byte identical** to the patch that executed and passed all 6 gates in the Stage A sandbox, and that no third-party process tampered with the patch between stages.
+- **What it proves:** It cryptographically guarantees that the patch published in Stage B is **byte-for-byte identical** to the patch that executed and passed all 6 gates in the Stage A isolated workspace, and that no third-party process tampered with the patch between stages.
 - **What it does NOT prove:** It does *not* prove that the code is free of bugs. Code correctness is verified empirically by your build and test suites, not by cryptographic hashes.
+
+### HMAC Key Management & Verifiability
+The HMAC signing key is read from the `AMSTRALIFT_HMAC_SECRET` environment variable. If omitted, an ephemeral session secret is generated in memory per execution run.
+- **Symmetric Authentication:** Because HMAC is symmetric, any party possessing the secret key can generate or verify bundles. This protects against accidental corruption or unauthorized local tampering between Stage A and Stage B.
+- **Asymmetric Signing Roadmap:** To enable public third-party attestation without sharing private secrets, asymmetric public/private key signing (Ed25519) and Sigstore integration are scheduled for future releases.
+
+### Privacy, Network Calls & Zero Telemetry
+- **Zero Telemetry:** AMstraLift contains no tracking, telemetry, or analytics.
+- **Public CVE Lookups:** Vulnerability scanning queries Google's public OSV.dev database over HTTPS. Only package names and version strings are queried; no application source code, repository URLs, internal tokens, or user metadata are ever transmitted.
+- **Credential Scrubbing:** Subprocesses executed during Stage A have sensitive environment variables automatically scrubbed:
+  - **Git & SCM Tokens:** `GITHUB_TOKEN`, `GH_TOKEN`, `GITLAB_TOKEN`, `GL_TOKEN`, `BITBUCKET_TOKEN`, `GIT_ASKPASS`, `SSH_AUTH_SOCK`, `GIT_CREDENTIAL_HELPER`.
+  - **Package Manager Tokens:** `NODE_AUTH_TOKEN`, `NPM_TOKEN`, `NPM_AUTH_TOKEN`, `PYPI_API_TOKEN`, `TWINE_PASSWORD`, `NUGET_API_KEY`.
+  - **Cloud Secrets:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`, `GOOGLE_APPLICATION_CREDENTIALS`.
 
 ---
 

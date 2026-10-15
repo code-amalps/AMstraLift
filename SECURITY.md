@@ -40,7 +40,12 @@ If you discover a security vulnerability or security boundary flaw in AMstraLift
 
 AMstraLift enforces strict security invariants in its execution:
 
-1. **Isolated Working Tree (Stage A):** Upgrades execute in an isolated temporary workspace (`.amstralift_sandbox`). Host Git remotes are neutralized (`file:///dev/null`) and sensitive environment variables (`GITHUB_TOKEN`, `SSH_AUTH_SOCK`, `GIT_ASKPASS`) are scrubbed from subshell environments.
-2. **Cryptographic Attestation:** Evidence bundles connecting Stage A sandbox results to Stage B pull requests are signed using HMAC-SHA256 with constant-time verification to detect tampering.
-3. **No Dynamic Remote Execution:** AMstraLift operates on local clones and runs purely deterministic AST codemods, static linters, and compiler gates. Zero probabilistic LLMs are used in transformation execution.
-4. **Network Access Disclosure:** In default mode, AMstraLift accesses standard official registries (`registry.npmjs.org`, `pypi.org`, `nuget.org`) and Google's `api.osv.dev` for vulnerability lookups. To disable all external network traffic entirely, run with `--offline` or `--corporate-safe`.
+1. **Isolated Workspace (Stage A):** Upgrades execute in an isolated temporary clone directory (`.amstralift_workspace`). Host Git remotes are neutralized (`file:///dev/null`) to prevent unauthorized network pushes, and dangerous git hooks are removed.
+2. **Subprocess Credential Scrubbing:** All subprocesses executed during Stage A have ambient host secrets automatically purged from their environment:
+   - **Git & SCM Tokens:** `GITHUB_TOKEN`, `GH_TOKEN`, `GITLAB_TOKEN`, `GL_TOKEN`, `BITBUCKET_TOKEN`, `GIT_ASKPASS`, `SSH_AUTH_SOCK`, `GIT_CREDENTIAL_HELPER`
+   - **Package Manager Tokens:** `NODE_AUTH_TOKEN`, `NPM_TOKEN`, `NPM_AUTH_TOKEN`, `PYPI_API_TOKEN`, `TWINE_PASSWORD`, `NUGET_API_KEY`
+   - **Cloud Provider Secrets:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`, `GOOGLE_APPLICATION_CREDENTIALS`
+3. **Local Process Boundary:** Build and test verification gates (`npm install`, `ng build`, `npm test`, `dotnet build`) execute on the host machine under the invoking user's account. Install scripts (`postinstall`) and tests run with local user privileges. True containerized isolation (Docker/rootless containers) is on the active roadmap.
+4. **Cryptographic Attestation:** Evidence bundles connecting Stage A verification results to Stage B pull requests are signed using HMAC-SHA256 (`AMSTRALIFT_HMAC_SECRET` or ephemeral session key) with constant-time verification to detect tampering.
+5. **Deterministic Transformations:** AMstraLift operates on local clones and runs deterministic AST codemods, static linters, and compiler gates. Zero probabilistic LLMs are used in transformation execution.
+6. **Network & Privacy Notice:** AMstraLift collects zero telemetry or analytics. In default mode, AMstraLift accesses official registries (`registry.npmjs.org`, `pypi.org`, `nuget.org`) and Google's `api.osv.dev` for vulnerability lookups (transmitting package names and versions only). To disable external network traffic entirely, run with `--offline`.
