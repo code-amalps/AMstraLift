@@ -1733,12 +1733,28 @@ class AngularAdapter(BaseAdapter):
                     total_signals = sum(stats.values())
                     if total_signals > 0:
                         applied.append(
-                            f"Migrated {len(stats)} component file(s) ({total_signals} input/output properties) to modern Angular Signals (input(), output())"
+                            f"Migrated {len(stats)} component file(s) ({total_signals} signal properties/queries) to modern Angular Signals (input(), output(), viewChild(), etc.)"
                         )
                     else:
-                        applied.append("Signals migration completed (no legacy @Input/@Output properties found)")
+                        applied.append("Signals migration completed (no legacy @Input/@Output or query decorators found)")
             else:
                 applied.append(f"Skipped signals migration: requires Angular 17+ (current is v{major or 'unknown'})")
+
+        # 4. Constructor DI -> inject() Migration
+        if any(f in ("inject", "inject-fn", "all") for f in normalized):
+            if major and major >= 14:
+                from amstralift.adapters.angular_inject import migrate_repository_inject
+
+                stats = migrate_repository_inject(repo_path)
+                total_injected = sum(stats.values())
+                if total_injected > 0:
+                    applied.append(
+                        f"Migrated {len(stats)} file(s) ({total_injected} constructor parameters) to modern inject() function"
+                    )
+                else:
+                    applied.append("Constructor DI migration completed (no legacy constructor injections found)")
+            else:
+                applied.append(f"Skipped inject migration: requires Angular 14+ (current is v{major or 'unknown'})")
 
         return applied
 

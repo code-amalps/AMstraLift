@@ -94,6 +94,44 @@ def build_input_options_str(options: dict[str, Any]) -> str:
     return ""
 
 
+def parse_query_decorator_args(args_str: str) -> tuple[str, dict[str, str], bool]:
+    """Parse predicate, options, and whether required: true was specified.
+
+    Returns:
+        (predicate, options_dict, is_required)
+    """
+    raw = args_str.strip()
+    if not raw:
+        return "", {}, False
+
+    # Check for options object separated by comma
+    match = re.search(r"^(.*?),\s*(\{.*\})\s*$", raw, re.DOTALL)
+    if match:
+        predicate = match.group(1).strip()
+        opts_raw = match.group(2).strip()[1:-1].strip()
+    else:
+        predicate = raw
+        opts_raw = ""
+
+    options: dict[str, str] = {}
+    is_required = False
+
+    if opts_raw:
+        if re.search(r"\brequired\s*:\s*true\b", opts_raw):
+            is_required = True
+        read_match = re.search(r"\bread\s*:\s*([^,}]+)", opts_raw)
+        if read_match:
+            options["read"] = read_match.group(1).strip()
+
+    return predicate, options, is_required
+
+
+def _build_query_options_str(options: dict[str, str]) -> str:
+    """Format query options dictionary into a TypeScript object literal string."""
+    parts = [f"{k}: {v}" for k, v in options.items()]
+    return "{ " + ", ".join(parts) + " }" if parts else ""
+
+
 def transform_angular_signals(ts_content: str) -> tuple[str, int]:
     """Transform @Input() and @Output() property declarations to input() and output().
 
@@ -234,6 +272,72 @@ def transform_angular_signals(ts_content: str) -> tuple[str, int]:
 
     content = output_pattern.sub(_replace_output, content)
 
+    # Regex for @ViewChild, @ViewChildren, @ContentChild, @ContentChildren:
+    query_pattern = re.compile(
+        r"^([ \t]*)"
+        r"(?:(public|protected|private|readonly)\s+)?"
+        r"@(ViewChild|ViewChildren|ContentChild|ContentChildren)\s*\((.*?)\)\s*"
+        r"(?:(public|protected|private|readonly)\s+)?"
+        r"([a-zA-Z0-9_$]+)"
+        r"([!?])?"
+        r"(?:\s*:\s*([^;]+?))?"
+        r";\s*$",
+        re.MULTILINE,
+    )
+
+    def _replace_query(match: re.Match[str]) -> str:
+        nonlocal changes
+        indent = match.group(1)
+        mod1 = match.group(2)
+        decorator_name = match.group(3)
+        decorator_args_raw = match.group(4)
+        mod2 = match.group(5)
+        prop_name = match.group(6)
+        flag = match.group(7)
+        type_annot = match.group(8)
+
+        # Do not transform getters or setters
+        if prop_name in ("get", "set"):
+            return match.group(0)
+
+        predicate, options, is_required = parse_query_decorator_args(decorator_args_raw)
+        opt_str = _build_query_options_str(options)
+
+        fn_map = {
+            "ViewChild": "viewChild",
+            "ViewChildren": "viewChildren",
+            "ContentChild": "contentChild",
+            "ContentChildren": "contentChildren",
+        }
+        target_fn = fn_map[decorator_name]
+        if is_required and target_fn in ("viewChild", "contentChild"):
+            target_fn = f"{target_fn}.required"
+
+        modifiers = [m for m in (mod1, mod2) if m]
+        mod_prefix = " ".join(modifiers) + " " if modifiers else ""
+
+        changes += 1
+
+        type_param = ""
+        if type_annot:
+            clean_type = type_annot.strip()
+            ql_match = re.search(r"QueryList\s*<\s*(.+)\s*>", clean_type)
+            if ql_match:
+                inner_type = ql_match.group(1).strip()
+                if predicate.startswith(("'", '"')):
+                    type_param = f"<{inner_type}>"
+            else:
+                if predicate.startswith(("'", '"')):
+                    type_param = f"<{clean_type}>"
+                elif clean_type != predicate and clean_type != f"{predicate} | undefined":
+                    if "read" in options:
+                        type_param = f"<{clean_type}>"
+
+        call_args = f"({predicate}, {opt_str})" if opt_str else f"({predicate})"
+        return f"{indent}{mod_prefix}{prop_name} = {target_fn}{type_param}{call_args};"
+
+    content = query_pattern.sub(_replace_query, content)
+
     if changes > 0:
         content = _update_angular_core_imports(content)
 
@@ -243,11 +347,8 @@ def transform_angular_signals(ts_content: str) -> tuple[str, int]:
 def _update_angular_core_imports(content: str) -> str:
     """Synchronize imports from '@angular/core'.
 
-    - If 'input' is used and not imported, adds 'input'.
-    - If 'output' is used and not imported, adds 'output'.
-    - If '@Input' is no longer in the file, removes 'Input'.
-    - If '@Output' is no longer in the file, removes 'Output'.
-    - If 'EventEmitter' is no longer in the file, removes 'EventEmitter'.
+    - Adds 'input', 'output', 'viewChild', 'viewChildren', 'contentChild', 'contentChildren' if used.
+    - Removes legacy decorators and 'QueryList' if no longer used.
     """
     import_match = re.search(
         r"import\s*\{\s*([^}]+)\s*\}\s*from\s*(['\"]@angular/core['\"]);?",
@@ -269,33 +370,48 @@ def _update_angular_core_imports(content: str) -> str:
     has_remaining_output_decorator = bool(re.search(r"@Output\s*\(", content_outside_import))
     has_remaining_event_emitter = bool(re.search(r"\bEventEmitter\b", content_outside_import))
 
+    has_remaining_view_child = bool(re.search(r"@ViewChild\s*\(", content_outside_import))
+    has_remaining_view_children = bool(re.search(r"@ViewChildren\s*\(", content_outside_import))
+    has_remaining_content_child = bool(re.search(r"@ContentChild\s*\(", content_outside_import))
+    has_remaining_content_children = bool(re.search(r"@ContentChildren\s*\(", content_outside_import))
+    has_remaining_query_list = bool(re.search(r"\bQueryList\b", content_outside_import))
+
     has_signal_input = bool(re.search(r"\binput(?:\.required)?\s*[<(]", content_outside_import))
     has_signal_output = bool(re.search(r"\boutput\s*[<(]", content_outside_import))
+    has_signal_view_child = bool(re.search(r"\bviewChild(?:\.required)?\s*[<(]", content_outside_import))
+    has_signal_view_children = bool(re.search(r"\bviewChildren\s*[<(]", content_outside_import))
+    has_signal_content_child = bool(re.search(r"\bcontentChild(?:\.required)?\s*[<(]", content_outside_import))
+    has_signal_content_children = bool(re.search(r"\bcontentChildren\s*[<(]", content_outside_import))
 
     # Add signal imports if needed
-    if has_signal_input and "input" not in symbols_set:
-        imported_symbols.append("input")
-        symbols_set.add("input")
-
-    if has_signal_output and "output" not in symbols_set:
-        imported_symbols.append("output")
-        symbols_set.add("output")
+    for symbol, needed in [
+        ("input", has_signal_input),
+        ("output", has_signal_output),
+        ("viewChild", has_signal_view_child),
+        ("viewChildren", has_signal_view_children),
+        ("contentChild", has_signal_content_child),
+        ("contentChildren", has_signal_content_children),
+    ]:
+        if needed and symbol not in symbols_set:
+            imported_symbols.append(symbol)
+            symbols_set.add(symbol)
 
     # Remove legacy symbols if unused
-    if not has_remaining_input_decorator and "Input" in symbols_set:
-        imported_symbols = [s for s in imported_symbols if s != "Input"]
-        symbols_set.discard("Input")
-
-    if not has_remaining_output_decorator and "Output" in symbols_set:
-        imported_symbols = [s for s in imported_symbols if s != "Output"]
-        symbols_set.discard("Output")
-
-    if not has_remaining_event_emitter and "EventEmitter" in symbols_set:
-        imported_symbols = [s for s in imported_symbols if s != "EventEmitter"]
-        symbols_set.discard("EventEmitter")
+    for symbol, still_used in [
+        ("Input", has_remaining_input_decorator),
+        ("Output", has_remaining_output_decorator),
+        ("EventEmitter", has_remaining_event_emitter),
+        ("ViewChild", has_remaining_view_child),
+        ("ViewChildren", has_remaining_view_children),
+        ("ContentChild", has_remaining_content_child),
+        ("ContentChildren", has_remaining_content_children),
+        ("QueryList", has_remaining_query_list),
+    ]:
+        if not still_used and symbol in symbols_set:
+            imported_symbols = [s for s in imported_symbols if s != symbol]
+            symbols_set.discard(symbol)
 
     # Reconstruct the import statement
-    # Preserve multiline formatting if original was multiline
     if "\n" in imports_raw:
         new_imports = ",\n  ".join(imported_symbols)
         new_stmt = f"import {{\n  {new_imports},\n}} from {quote_target};"

@@ -19,7 +19,7 @@
 ## 30-Second Summary
 
 - **What is it?** A developer CLI and desktop GUI that automates major framework upgrades (e.g., Angular 15 $\to$ 18) and fixes security vulnerabilities (CVEs).
-- **How is it different?** Most tools just bump version strings and leave you with broken builds. AMstraLift performs **deterministic AST code migrations** (standalone components, modern `@if`/`@for` control flow, Signal `input()`/`output()` APIs, configuration updates), executes **6 verification gates** in an isolated workspace, and only proposes changes if the build and test suite pass.
+- **How is it different?** Most tools just bump version strings and leave you with broken builds. AMstraLift performs **deterministic AST code migrations** (standalone components, modern `@if`/`@for` control flow, Signal `input()`/`output()` and query APIs (`viewChild()`), modern `inject()` constructor DI, configuration updates), executes **6 verification gates** in an isolated workspace, and only proposes changes if the build and test suite pass.
 - **Is there AI involved?** **No.** Zero LLMs in execution. All transformations are deterministic AST codemods, official framework schematics, and linters. No probabilistic guesses.
 - **Can I test it safely?** **Yes.** Running with `--dry-run` or `--mode preview` never modifies your working tree. Stage A executes inside an isolated temporary workspace directory with scrubbed credentials.
 
@@ -168,7 +168,7 @@ We believe in being 100% transparent about what the codebase can demonstrably do
 
 | Ecosystem | Detection | Version Upgrade | Code Modernization (AST/Codemods) | Workspace Build Gate | Workspace Test Gate | CVE Remediation | Maturity Level |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Angular** | ✔️ `angular.json` & `package.json` | ✔️ v12 $\to$ v18 (highest tested: 18.2; v19+ tracking) | ✔️ Standalone, Control Flow, Signal Inputs/Outputs, M2 theming, tsconfig, scripts | ✔️ Library-first build ordering | ✔️ Karma (headless Chrome), Jest, Vitest | ✔️ Direct & transitive npm overrides | **Beta (Production Candidate)** |
+| **Angular** | ✔️ `angular.json` & `package.json` | ✔️ v12 $\to$ v18 (highest tested: 18.2; v19+ tracking) | ✔️ Standalone, Control Flow, Signals (`input()`, `output()`, `viewChild()`), `inject()` DI, M2 theming, tsconfig, scripts | ✔️ Library-first build ordering | ✔️ Karma (headless Chrome), Jest, Vitest | ✔️ Direct & transitive npm overrides | **Beta (Production Candidate)** |
 | **.NET** | ✔️ `.csproj` & `Directory.Build.props` | ✔️ NuGet + Central Package Mgmt (CPM) | ⚠️ Delegates to `dotnet format` (style, whitespace, analyzers) | ✔️ `dotnet build` | ✔️ `dotnet test` | ✔️ NuGet pin overrides | **Beta** (Requires .NET SDK) |
 | **Python** | ✔️ `requirements.txt` & `pyproject.toml` | ✔️ PyPI stable releases | ⚠️ Delegates to `ruff` / `pyupgrade` when installed | ✔️ Syntax & imports check | ✔️ `pytest` | ✔️ Pinned dependency updates | **Beta** (Requires Python runtime) |
 | **React** | ✔️ `package.json` (React/Next.js) | ✔️ npm registry stable | ⚠️ Updates JSX transform (`react-jsx`), runs `eslint --fix` | ✔️ `npm run build` | ✔️ `npm test` | ✔️ Direct & transitive npm overrides | **Alpha** (No class $\to$ hook refactoring) |

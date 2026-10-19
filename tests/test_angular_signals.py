@@ -189,3 +189,53 @@ def test_migrate_repository_signals(tmp_path):
     assert "title = input<string>('App');" in migrated
     assert "logout = output<void>();" in migrated
 
+
+def test_transform_view_child_and_view_children():
+    ts = (
+        "import { Component, ViewChild, ViewChildren, ElementRef, QueryList } from '@angular/core';\n\n"
+        "@Component({})\n"
+        "export class CardComponent {\n"
+        "  @ViewChild('myCanvas') canvas!: ElementRef<HTMLCanvasElement>;\n"
+        "  @ViewChild(UserAvatarComponent) avatar?: UserAvatarComponent;\n"
+        "  @ViewChild('btn', { required: true }) button!: ElementRef;\n"
+        "  @ViewChildren(ItemComponent) items!: QueryList<ItemComponent>;\n"
+        "}\n"
+    )
+    result, count = transform_angular_signals(ts)
+    assert count == 4
+    assert "canvas = viewChild<ElementRef<HTMLCanvasElement>>('myCanvas');" in result
+    assert "avatar = viewChild(UserAvatarComponent);" in result
+    assert "button = viewChild.required<ElementRef>('btn');" in result
+    assert "items = viewChildren(ItemComponent);" in result
+    # Check imports updated
+    first_line = result.split("\n")[0]
+    assert "viewChild" in first_line
+    assert "viewChildren" in first_line
+    assert "ViewChild" not in first_line
+    assert "ViewChildren" not in first_line
+    assert "QueryList" not in first_line
+
+
+def test_transform_content_child_and_content_children():
+    ts = (
+        "import { Component, ContentChild, ContentChildren, QueryList } from '@angular/core';\n\n"
+        "@Component({})\n"
+        "export class TabsComponent {\n"
+        "  @ContentChild(TabLabelDirective) label!: TabLabelDirective;\n"
+        "  @ContentChild('customHeader', { required: true }) header!: HeaderDirective;\n"
+        "  @ContentChildren(TabComponent) tabs!: QueryList<TabComponent>;\n"
+        "}\n"
+    )
+    result, count = transform_angular_signals(ts)
+    assert count == 3
+    assert "label = contentChild(TabLabelDirective);" in result
+    assert "header = contentChild.required<HeaderDirective>('customHeader');" in result
+    assert "tabs = contentChildren(TabComponent);" in result
+    first_line = result.split("\n")[0]
+    assert "contentChild" in first_line
+    assert "contentChildren" in first_line
+    assert "ContentChild" not in first_line
+    assert "ContentChildren" not in first_line
+    assert "QueryList" not in first_line
+
+
