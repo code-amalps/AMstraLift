@@ -37,6 +37,13 @@ This project follows [Semantic Versioning](https://semver.org/).
   - `amstralift plan --dry-run`: Simulates phase execution without touching workspace files.
   - `amstralift plan --yaml` / `--json`: Prints raw declarative plan definitions.
 
+- **P18 — Pre-Execution Cross-Transformation Conflict Detection (`amstralift.conflicts`)**:
+  - Pre-execution conflict detection engine (`PreExecutionConflictDetector`) analyzing candidates, DAG dependency constraints, file boundaries, AST symbol surfaces, and configuration options before workspace files are touched.
+  - Conflict categorization modeling `EXPLICIT_CONFLICT` (mutual exclusivity edges in DAG), `FILE_COLLISION` (concurrent mutations of shared file patterns), `SYMBOL_COLLISION` (pruning or refactoring symbols required by downstream rules, e.g. `@NgModule`), `CONFIG_KEY_COLLISION` (contradictory builder/compiler targets), and `PRECONDITION_INVALIDATION` (invalidated rule preconditions).
+  - Deterministic conflict resolution engine (`ConflictResolver`) automatically pruning superseded legacy rules and injecting deterministic category-prioritized ordering edges to eliminate workspace file collisions.
+  - CLI conflict inspection command (`amstralift conflicts` with `--repo`, `--ecosystem`, `--resolve/--no-resolve`, `--json`).
+  - Native integration into `amstralift plan`, embedding complete pre-execution conflict analysis reports directly into `plan.metadata` and displaying conflict resolution summaries.
+
 ---
 
 ## [0.1.19] - 2026-11-20

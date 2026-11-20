@@ -1183,6 +1183,16 @@ def plan_cmd(
         plan.save(output_file)
         console.print(f"[bold green]✔ Modernization plan successfully written to:[/bold green] {output_file.resolve()}")
 
+    conflict_meta = plan.metadata.get("conflict_analysis", {})
+    if conflict_meta.get("total_conflicts", 0) > 0:
+        c_count = conflict_meta.get("total_conflicts", 0)
+        c_discarded = len(conflict_meta.get("discarded_rules", []))
+        c_injected = len(conflict_meta.get("injected_orderings", []))
+        console.print(
+            f"\n[dim]ℹ Pre-execution conflict detector resolved {c_count} conflict(s): "
+            f"discarded {c_discarded} incompatible rule(s), injected {c_injected} ordering constraint(s).[/dim]"
+        )
+
     # Execute if requested
     if execute or dry_run:
         executor = PlanExecutor()
@@ -1198,6 +1208,104 @@ def plan_cmd(
         else:
             console.print(f"[bold red]✖ {exec_res.message}[/bold red]")
             raise typer.Exit(code=1)
+
+
+@app.command("conflicts")
+def conflicts_cmd(
+    repo: Annotated[
+        Path,
+        typer.Option("--repo", "-r", help="Target repository directory to analyze."),
+    ] = Path("."),
+    ecosystem: Annotated[
+        str | None,
+        typer.Option("--ecosystem", "-e", help="Target ecosystem override (angular, dotnet, python, react)."),
+    ] = None,
+    resolve: Annotated[
+        bool,
+        typer.Option("--resolve/--no-resolve", help="Simulate automatic conflict resolution."),
+    ] = True,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output conflict report as raw JSON."),
+    ] = False,
+):
+    """Detect and analyze pre-execution cross-transformation conflicts (P18)."""
+    from rich.panel import Panel
+    from rich.table import Table
+
+    from amstralift.conflicts import ConflictResolver, ConflictSeverity, PreExecutionConflictDetector
+    from amstralift.planning.analyzer import RepoAnalyzer
+    from amstralift.transforms.registry import build_default_graph, get_transformations_for_ecosystem
+
+    if not repo.exists() or not repo.is_dir():
+        console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {repo.resolve()}")
+        raise typer.Exit(code=1)
+
+    analysis = RepoAnalyzer.analyze(repo, ecosystem_hint=ecosystem)
+    eco = analysis.ecosystem.lower()
+
+    graph = build_default_graph()
+    candidate_nodes = get_transformations_for_ecosystem(eco)
+    active_ids = [n.id for n in candidate_nodes]
+
+    detector = PreExecutionConflictDetector(graph)
+    report = detector.detect_all(active_ids, repo_path=repo)
+
+    if resolve:
+        resolver = ConflictResolver(graph)
+        report = resolver.resolve(report, active_ids)
+
+    if as_json:
+        typer.echo(report.model_dump_json(indent=2))
+        raise typer.Exit(code=0)
+
+    # Rich display
+    safe_badge = "[bold green]SAFE TO EXECUTE[/bold green]" if report.safe_to_execute else "[bold red]BLOCKED BY CONFLICTS[/bold red]"
+    console.print(
+        Panel(
+            f"[bold]Target Ecosystem:[/bold] [cyan]{eco.upper()}[/cyan]\n"
+            f"[bold]Execution Status:[/bold] {safe_badge}\n"
+            f"[bold]Conflicts Found:[/bold] {report.total_conflicts} "
+            f"([red]{report.blocking_count} Blocking[/red], [yellow]{report.warning_count} Warnings[/yellow])\n"
+            f"[bold]Discarded Rules:[/bold] {', '.join(report.discarded_rules) or 'None'}\n"
+            f"[bold]Injected Orderings:[/bold] {len(report.injected_orderings)}",
+            title="Pre-Execution Conflict Detection Report (P18)",
+            border_style="cyan" if report.safe_to_execute else "red",
+        )
+    )
+
+    if report.conflicts:
+        table = Table(
+            title=f"Detected Conflicts ({len(report.conflicts)} items)",
+            header_style="bold cyan",
+            border_style="dim",
+        )
+        table.add_column("ID", style="bold", no_wrap=True)
+        table.add_column("Type", style="bold")
+        table.add_column("Severity", style="magenta")
+        table.add_column("Transformations", style="yellow")
+        table.add_column("Resource in Dispute", style="dim")
+        table.add_column("Resolution Strategy", style="cyan")
+        table.add_column("Resolved?", style="bold")
+
+        for c in report.conflicts:
+            res_str = "[bold green]YES[/bold green]" if c.resolved else "[bold red]NO[/bold red]"
+            sev_str = "[bold red]BLOCKING[/bold red]" if c.severity == ConflictSeverity.BLOCKING else "[yellow]WARNING[/yellow]"
+            table.add_row(
+                c.id,
+                c.conflict_type.value,
+                sev_str,
+                f"{c.rule_a} ⚡ {c.rule_b}",
+                c.conflicting_resource or "-",
+                c.resolution_strategy.value,
+                res_str,
+            )
+        console.print(table)
+    else:
+        console.print("[bold green]✔ Zero cross-transformation conflicts detected. Clean execution path confirmed.[/bold green]")
+
+    if not report.safe_to_execute:
+        raise typer.Exit(code=1)
 
 
 @app.command()

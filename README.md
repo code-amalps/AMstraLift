@@ -248,7 +248,10 @@ uv run amstralift graph --phases
 # 9. Generate a Declarative Modernization Plan (P17 staged waves, risk breakdown, YAML export)
 uv run amstralift plan --target 18
 
-# 10. Launch the Desktop GUI
+# 10. Detect Pre-Execution Cross-Transformation Conflicts (P18 file, symbol, and config collisions)
+uv run amstralift conflicts --ecosystem angular
+
+# 11. Launch the Desktop GUI
 uv run amstralift gui
 ```
 

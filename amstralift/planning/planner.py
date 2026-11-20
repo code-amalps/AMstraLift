@@ -10,6 +10,7 @@ Engineered by Amal P S for AMstraLift Generation 2.
 from pathlib import Path
 from typing import Any
 
+from amstralift.conflicts import ConflictResolver, PreExecutionConflictDetector
 from amstralift.planning.analyzer import RepoAnalysis, RepoAnalyzer
 from amstralift.planning.models import (
     ExecutionPhase,
@@ -135,22 +136,8 @@ class ModernizationPlanner:
         refused_nodes: list[PlannedTransformation] = []
 
         # 1. Filter, evaluate, and classify candidates
+        active_candidate_ids: list[str] = []
         for node in candidate_nodes:
-            # Check for legacy / conflict nodes
-            if "legacy" in node.id:
-                refused_nodes.append(
-                    PlannedTransformation(
-                        id=node.id,
-                        name=node.name,
-                        category=node.category,
-                        risk=node.risk,
-                        status=TransformationStatus.REFUSED,
-                        reason="Mutually exclusive with modern architectural standards and Central Package Management.",
-                        affected_file_patterns=node.affected_file_patterns,
-                    )
-                )
-                continue
-
             # Check min major version requirement
             if node.min_major_version and eff_target_major < node.min_major_version:
                 refused_nodes.append(
@@ -181,6 +168,38 @@ class ModernizationPlanner:
                 )
                 continue
 
+            active_candidate_ids.append(node.id)
+
+        # 2. P18: Pre-Execution Cross-Transformation Conflict Detection & Resolution
+        detector = PreExecutionConflictDetector(self.graph)
+        detected_conflicts = detector.detect_all(active_candidate_ids, repo_path=repo_path)
+
+        resolver = ConflictResolver(self.graph)
+        resolved_conflicts = resolver.resolve(detected_conflicts, active_candidate_ids)
+
+        discarded_set = set(resolved_conflicts.discarded_rules)
+
+        # Process discarded nodes into refused_nodes
+        for node in candidate_nodes:
+            if node.id in discarded_set:
+                refused_nodes.append(
+                    PlannedTransformation(
+                        id=node.id,
+                        name=node.name,
+                        category=node.category,
+                        risk=node.risk,
+                        status=TransformationStatus.REFUSED,
+                        reason="Mutually exclusive with modern architectural standards or superseded by conflict resolution.",
+                        affected_file_patterns=node.affected_file_patterns,
+                    )
+                )
+
+        # Filter remaining candidate nodes
+        remaining_candidates = [
+            n for n in candidate_nodes if n.id in active_candidate_ids and n.id not in discarded_set
+        ]
+
+        for node in remaining_candidates:
             # Determine prerequisites from P16 DAG
             prereqs = sorted(list(self.graph.get_prerequisites(node.id, transitive=False)))
 
@@ -211,7 +230,7 @@ class ModernizationPlanner:
                 metadata=node.metadata,
             )
 
-        # 2. Determine execution order via P16 Topological Sort
+        # 3. Determine execution order via P16 Topological Sort
         active_ids = list(accepted_nodes.keys())
         try:
             topological_order = self.graph.topological_sort(active_ids)
@@ -290,5 +309,6 @@ class ModernizationPlanner:
             metadata={
                 "manifest_files": analysis.manifest_files,
                 "detected_features": analysis.features,
+                "conflict_analysis": resolved_conflicts.model_dump(mode="json"),
             },
         )

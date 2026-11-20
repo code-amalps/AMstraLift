@@ -165,25 +165,25 @@ plan:
 
 ---
 
-### P18 — Cross-Transformation Conflict Detection
+### P18 — Cross-Transformation Conflict Detection (COMPLETED — v0.2.0)
 
-> **Detect conflicts before touching the workspace.**
+> **Built:** Full pre-execution conflict analysis engine in `amstralift.conflicts` detecting explicit graph conflicts, precondition invalidations, file collisions, AST symbol collisions, and configuration key collisions before touching workspace files. Deterministic resolution via `ConflictResolver` and inspection CLI via `amstralift conflicts`.
 
 ```text
 Rule A: modify angular.json
 Rule B: modify angular.json
-                                 → FILE_CONFLICT detected
+                                 → FILE_COLLISION detected (resolved via sequencing)
 
 Rule A: rename exported symbol
 Rule B: expects old symbol
-                                 → SYMBOL_CONFLICT detected
+                                 → SYMBOL_COLLISION detected (resolved via discard)
 ```
 
 **Pre-execution conflict analysis:**
 
 ```text
 Rule A ─────┐
-            ├── Conflict → resolve before execution
+            ├── Conflict → Resolved before execution (discard legacy / inject ordering)
 Rule B ─────┘
 ```
 
