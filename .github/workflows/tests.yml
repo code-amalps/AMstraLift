@@ -15,6 +15,9 @@ jobs:
   test:
     name: Test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -45,7 +48,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb
+          sudo apt-get install -y xvfb xauth
 
       - name: Install dependencies
         run: |
@@ -53,10 +56,48 @@ jobs:
 
       - name: Run Test Suite (Linux)
         if: runner.os == 'Linux'
+        id: test_linux
         run: |
-          xvfb-run -a uv run pytest -v
+          xvfb-run -a uv run pytest -v --tb=short 2>&1 | tee pytest_output.log
+        continue-on-error: true
 
       - name: Run Test Suite (Windows / macOS)
         if: runner.os != 'Linux'
+        id: test_other
         run: |
-          uv run pytest -v
+          uv run pytest -v --tb=short 2>&1 | tee pytest_output.log
+        continue-on-error: true
+
+      - name: Publish Test Summary
+        if: always()
+        run: |
+          echo "## Test Suite Results (${{ matrix.os }})" >> $GITHUB_STEP_SUMMARY
+          if [ -f pytest_output.log ]; then
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 120 pytest_output.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No test log produced." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Test Output Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log-${{ matrix.os }}
+          path: pytest_output.log
+          if-no-files-found: ignore
+
+      - name: Validate Test Run Exit Status
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            if [ "${{ steps.test_linux.outcome }}" != "success" ]; then
+              echo "Tests failed on Linux."
+              exit 1
+            fi
+          else
+            if [ "${{ steps.test_other.outcome }}" != "success" ]; then
+              echo "Tests failed on ${{ matrix.os }}."
+              exit 1
+            fi
+          fi
