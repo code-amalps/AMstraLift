@@ -18,9 +18,10 @@ from amstralift.planning.models import (
     PlannedTransformation,
     TransformationStatus,
 )
-from amstralift.transforms.graph import TransformationGraph
+from amstralift.transforms.graph import TransformationGraph, _file_patterns_conflict
 from amstralift.transforms.models import (
     EdgeType,
+    ParallelBatch,
     TransformationCategory,
     TransformationNode,
     TransformationRisk,
@@ -56,9 +57,6 @@ PHASE_DISPLAY_METADATA = [
 
 def partition_phase_batches(items: list[PlannedTransformation]) -> list[ParallelBatch]:
     """Group items within a phase into concurrent batches with disjoint file patterns."""
-    from amstralift.transforms.graph import _file_patterns_conflict
-    from amstralift.transforms.models import ParallelBatch
-
     if len(items) <= 1:
         return [
             ParallelBatch(
