@@ -110,6 +110,10 @@ Repository Inspection ──► Dependency DAG (P16) ──► Modernization Pla
 5. **Enterprise Policy-as-Code (`amstralift policy init` / `amstralift policy check`)**:
    - Declarative `policy.yaml` configuration enforcing corporate governance (major version jump limits, EOL horizons), risk tolerances, vulnerability thresholds (CVE blocking), and public API symbol preservation.
    - Evaluates plans with deterministic `ALLOW`, `REVIEW`, and `BLOCK` verdicts, safely halting runs upon policy violations.
+6. **Multi-Repository Modernization & Fleet Orchestration (`amstralift fleet scan` / `amstralift fleet graph` / `amstralift fleet plan`)**:
+   - Discovers multi-repository enterprise fleets, extracting cross-repo consumer-provider dependencies across Angular, React, .NET, and Python.
+   - Resolves directed inter-repo dependency graphs, validates DAG acyclicity, detects circular repo dependencies (`InterRepoCycleError`), and partitions modernization campaigns into parallelizable execution waves (shared libraries/providers first in Wave 1, followed by downstream consumer services).
+   - Generates deterministic campaign plans with cross-repo dependency matrices and JSON/YAML export.
 
 ---
 
@@ -294,7 +298,12 @@ uv run amstralift resume
 uv run amstralift policy init
 uv run amstralift policy check --ecosystem angular
 
-# 13. Launch the Desktop GUI
+# 13. Coordinate Multi-Repository Modernization (P21 cross-repo topology, cycle checks, and execution waves)
+uv run amstralift fleet scan --dir ./enterprise-repos
+uv run amstralift fleet graph --dir ./enterprise-repos
+uv run amstralift fleet plan --dir ./enterprise-repos --target 18
+
+# 14. Launch the Desktop GUI
 uv run amstralift gui
 ```
 

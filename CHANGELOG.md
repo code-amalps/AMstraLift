@@ -5,6 +5,25 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.0] - 2026-11-20
+
+### Added
+- **P21 — Multi-Repository Modernization (`amstralift.multirepo`)**:
+  - Enterprise multi-repository fleet discovery and dependency analysis engine (`FleetScanner`) supporting polyglot fleets containing Angular, React, .NET, and Python repositories.
+  - Automatic extraction and cross-referencing of package exports (npm `package.json`, NuGet `.csproj` PackageIds/assemblies, Python `pyproject.toml` project names) and consumed imports across repositories.
+  - Cross-repository Directed Acyclic Graph engine (`FleetDependencyGraph`) modeling directed `Provider -> Consumer` edges, ensuring shared libraries are upgraded and tested before dependent downstream services.
+  - Strict cycle detection (`InterRepoCycleError`) identifying circular cross-repository dependencies using DFS cycle back-edge analysis.
+  - Topological multi-repo execution wave engine (`compute_execution_waves`) partitioning large fleets into staged waves (Wave 1: leaf providers/shared libraries; Wave 2+: dependent consumer services).
+  - Multi-repository modernization planning engine (`FleetPlanner`) synthesizing declarative modernization plans with cross-repo prerequisite matrices, execution concurrency metrics, and JSON persistence.
+  - Declarative fleet manifest parser supporting `fleet.yaml` / `amstralift-fleet.yaml` specifications for explicitly tagged enterprise fleet definitions.
+- **CLI Multi-Repository Fleet Engine (`amstralift fleet` / `amstralift multirepo`)**:
+  - `amstralift fleet scan`: Discovers and displays interactive Rich table summaries of all repositories, ecosystems, framework versions, published package exports, and internal consumer/provider counts.
+  - `amstralift fleet graph`: Validates DAG acyclicity and renders cross-repository dependency tables linking upstream providers to downstream consumers.
+  - `amstralift fleet plan`: Generates coordinated multi-repo modernization campaign plans with execution waves, concurrency metrics, and dependency prerequisite matrices.
+  - Full `--json` serialization across all fleet commands for headless CI/CD pipeline automation.
+
+---
+
 ## [0.2.0] - 2026-11-20
 
 ### Added

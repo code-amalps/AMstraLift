@@ -42,6 +42,14 @@ def suppress_console_for_gui() -> None:
             "update",
             "serve",
             "init-ci",
+            "graph",
+            "plan",
+            "conflicts",
+            "resume",
+            "checkpoints",
+            "policy",
+            "fleet",
+            "multirepo",
         }
         if any(a in cli_commands for a in args):
             return
@@ -1587,6 +1595,312 @@ def policy_check_cmd(
 
     if not report.allowed:
         raise typer.Exit(code=1)
+
+
+fleet_app = typer.Typer(
+    name="fleet",
+    help="Multi-Repository Modernization & Cross-Repo Orchestration Engine (P21).",
+    no_args_is_help=True,
+)
+app.add_typer(fleet_app, name="fleet")
+app.add_typer(fleet_app, name="multirepo")
+
+
+@fleet_app.command("scan")
+def fleet_scan_cmd(
+    directory: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Root directory containing repositories to scan."),
+    ] = Path("."),
+    manifest: Annotated[
+        Optional[Path],
+        typer.Option("--manifest", "-m", help="Path to declarative fleet.yaml manifest."),
+    ] = None,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output fleet topology as raw JSON."),
+    ] = False,
+):
+    """Scan directory or manifest for repositories and inter-repository dependencies (P21)."""
+    from rich.panel import Panel
+    from rich.table import Table
+
+    from amstralift.multirepo import FleetScanner
+
+    if manifest:
+        if not manifest.is_file():
+            console.print(f"[bold red]✖ Error:[/bold red] Fleet manifest file not found: {manifest.resolve()}")
+            raise typer.Exit(code=1)
+        topology = FleetScanner.load_manifest(manifest)
+    else:
+        if not directory.is_dir():
+            console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {directory.resolve()}")
+            raise typer.Exit(code=1)
+        topology = FleetScanner.scan_directory(directory)
+
+    if as_json:
+        typer.echo(topology.model_dump_json(indent=2))
+        return
+
+    repo_count = len(topology.repositories)
+    dep_count = len(topology.dependencies)
+    provider_count = len(topology.provider_repos)
+    consumer_count = len(topology.consumer_repos)
+    isolated_count = len(topology.isolated_repos)
+    ecos = ", ".join(topology.ecosystems) if topology.ecosystems else "None"
+
+    console.print(
+        Panel(
+            f"[bold]Root Location:[/bold] [cyan]{topology.root_path}[/cyan]\n"
+            f"[bold]Total Repositories:[/bold] [green]{repo_count}[/green]\n"
+            f"[bold]Detected Ecosystems:[/bold] [yellow]{ecos}[/yellow]\n"
+            f"[bold]Cross-Repo Dependencies:[/bold] [cyan]{dep_count}[/cyan]\n"
+            f"[bold]Provider Repos (Shared Libraries):[/bold] [magenta]{provider_count}[/magenta] ({', '.join(topology.provider_repos) or 'none'})\n"
+            f"[bold]Consumer Repos (Downstream Services):[/bold] [blue]{consumer_count}[/blue] ({', '.join(topology.consumer_repos) or 'none'})\n"
+            f"[bold]Isolated Repos:[/bold] [white]{isolated_count}[/white]",
+            title="Multi-Repository Fleet Topology (P21) — Engineered by Amal P S",
+            border_style="cyan",
+        )
+    )
+
+    if not topology.repositories:
+        console.print("[yellow]⚠ No projects or repositories discovered in the target directory.[/yellow]")
+        return
+
+    table = Table(
+        title=f"Discovered Fleet Repositories ({repo_count} repos)",
+        header_style="bold cyan",
+        border_style="dim",
+    )
+    table.add_column("Repository ID", style="bold green", no_wrap=True)
+    table.add_column("Ecosystem", style="cyan")
+    table.add_column("Framework Version", style="yellow")
+    table.add_column("Published Exports", style="magenta")
+    table.add_column("Upstream Providers", style="blue")
+    table.add_column("Downstream Consumers", style="white")
+
+    for r_id in sorted(list(topology.repositories.keys())):
+        repo = topology.repositories[r_id]
+        exports_str = ", ".join([e.package_name for e in repo.exports]) or "[dim]none[/dim]"
+        providers = topology.get_providers(r_id)
+        consumers = topology.get_consumers(r_id)
+        prov_str = ", ".join(providers) if providers else "[dim]none (root)[/dim]"
+        cons_str = ", ".join(consumers) if consumers else "[dim]none (leaf)[/dim]"
+
+        table.add_row(
+            r_id,
+            repo.primary_ecosystem.upper(),
+            repo.framework_version or "[dim]n/a[/dim]",
+            exports_str,
+            prov_str,
+            cons_str,
+        )
+
+    console.print(table)
+
+
+@fleet_app.command("graph")
+def fleet_graph_cmd(
+    directory: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Root directory containing repositories to scan."),
+    ] = Path("."),
+    manifest: Annotated[
+        Optional[Path],
+        typer.Option("--manifest", "-m", help="Path to declarative fleet.yaml manifest."),
+    ] = None,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output dependency graph as raw JSON."),
+    ] = False,
+):
+    """Analyze and display cross-repository dependency topology and cycle detection (P21)."""
+    import json as json_lib
+    from rich.panel import Panel
+    from rich.table import Table
+
+    from amstralift.multirepo import FleetDependencyGraph, FleetScanner, InterRepoCycleError
+
+    if manifest:
+        if not manifest.is_file():
+            console.print(f"[bold red]✖ Error:[/bold red] Fleet manifest file not found: {manifest.resolve()}")
+            raise typer.Exit(code=1)
+        topology = FleetScanner.load_manifest(manifest)
+    else:
+        if not directory.is_dir():
+            console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {directory.resolve()}")
+            raise typer.Exit(code=1)
+        topology = FleetScanner.scan_directory(directory)
+
+    try:
+        graph = FleetDependencyGraph(topology)
+        waves = graph.compute_execution_waves()
+    except InterRepoCycleError as e:
+        console.print(f"[bold red]✖ Circular Dependency Detected:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    if as_json:
+        payload = {
+            "repositories": sorted(list(topology.repositories.keys())),
+            "dependencies": [d.model_dump() for d in topology.dependencies],
+            "dependency_matrix": graph.dependency_matrix(),
+            "execution_waves": [w.model_dump() for w in waves],
+        }
+        typer.echo(json_lib.dumps(payload, indent=2))
+        return
+
+    console.print(
+        Panel(
+            f"[bold]Active Repositories:[/bold] [green]{len(topology.repositories)}[/green]\n"
+            f"[bold]Cross-Repository Links:[/bold] [cyan]{len(topology.dependencies)}[/cyan]\n"
+            f"[bold]Calculated Execution Waves:[/bold] [magenta]{len(waves)}[/magenta]\n"
+            f"[bold]DAG Cycle Validation:[/bold] [bold green]✔ PASSED (Acyclic Directed Graph)[/bold green]",
+            title="Cross-Repository Dependency Graph (P21) — Engineered by Amal P S",
+            border_style="green",
+        )
+    )
+
+    if topology.dependencies:
+        table = Table(
+            title="Inter-Repository Dependency Links (Provider → Consumer)",
+            header_style="bold magenta",
+            border_style="dim",
+        )
+        table.add_column("Provider (Upstream)", style="bold magenta")
+        table.add_column("Consumer (Downstream)", style="bold blue")
+        table.add_column("Package / Link", style="yellow")
+        table.add_column("Required Version", style="white")
+        table.add_column("Ecosystem", style="cyan")
+        table.add_column("Type", style="dim")
+
+        for dep in topology.dependencies:
+            table.add_row(
+                dep.provider_repo_id,
+                dep.consumer_repo_id,
+                dep.package_name,
+                dep.version_required,
+                dep.ecosystem.upper(),
+                dep.dependency_type,
+            )
+
+        console.print(table)
+    else:
+        console.print("[dim green]✔ No cross-repository dependencies detected. All repositories can be upgraded independently.[/dim green]")
+
+
+@fleet_app.command("plan")
+def fleet_plan_cmd(
+    directory: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Root directory containing repositories to scan."),
+    ] = Path("."),
+    manifest: Annotated[
+        Optional[Path],
+        typer.Option("--manifest", "-m", help="Path to declarative fleet.yaml manifest."),
+    ] = None,
+    target: Annotated[
+        Optional[int],
+        typer.Option("--target", "-t", help="Target framework version override."),
+    ] = None,
+    ecosystem: Annotated[
+        Optional[str],
+        typer.Option("--ecosystem", "-e", help="Filter modernization to a specific ecosystem (angular, react, dotnet, python)."),
+    ] = None,
+    output_file: Annotated[
+        Optional[Path],
+        typer.Option("--output", "-o", help="File path to save modernization plan JSON."),
+    ] = None,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output modernization plan as raw JSON to stdout."),
+    ] = False,
+):
+    """Generate a coordinated, staged multi-repository modernization campaign plan (P21)."""
+    from rich.panel import Panel
+    from rich.table import Table
+
+    from amstralift.multirepo import FleetPlanner, FleetScanner, InterRepoCycleError
+
+    if manifest:
+        if not manifest.is_file():
+            console.print(f"[bold red]✖ Error:[/bold red] Fleet manifest file not found: {manifest.resolve()}")
+            raise typer.Exit(code=1)
+        topology = FleetScanner.load_manifest(manifest)
+    else:
+        if not directory.is_dir():
+            console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {directory.resolve()}")
+            raise typer.Exit(code=1)
+        topology = FleetScanner.scan_directory(directory)
+
+    try:
+        plan = FleetPlanner.generate_plan(
+            topology=topology,
+            target_major=target,
+            ecosystem=ecosystem,
+        )
+    except InterRepoCycleError as e:
+        console.print(f"[bold red]✖ Planning Aborted due to Cycle:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    if output_file:
+        FleetPlanner.save_plan(plan, output_file)
+        console.print(f"[bold green]✔ Modernization plan persisted to:[/bold green] {output_file.resolve()}")
+
+    if as_json:
+        typer.echo(plan.model_dump_json(indent=2))
+        return
+
+    console.print(
+        Panel(
+            f"[bold]Campaign Plan ID:[/bold] [cyan]{plan.plan_id}[/cyan]\n"
+            f"[bold]Participating Repositories:[/bold] [green]{plan.total_repositories}[/green]\n"
+            f"[bold]Staged Execution Waves:[/bold] [magenta]{len(plan.waves)}[/magenta]\n"
+            f"[bold]Cross-Repo Dependency Edges:[/bold] [yellow]{plan.cross_repo_edges}[/yellow]\n"
+            f"[bold]Ecosystem Filter:[/bold] [cyan]{(plan.ecosystem_filter or 'All Ecosystems').upper()}[/cyan]\n"
+            f"[bold]Target Framework Version:[/bold] [yellow]{plan.target_version or 'Latest Stable LTS'}[/yellow]\n"
+            f"[bold]Summary:[/bold] {plan.summary}",
+            title="Multi-Repository Modernization Plan (P21) — Engineered by Amal P S",
+            border_style="magenta",
+        )
+    )
+
+    if plan.waves:
+        wave_table = Table(
+            title=f"Coordinated Execution Waves ({len(plan.waves)} stages)",
+            header_style="bold magenta",
+            border_style="dim",
+        )
+        wave_table.add_column("Wave", style="bold magenta", no_wrap=True)
+        wave_table.add_column("Wave Name", style="bold cyan")
+        wave_table.add_column("Scheduled Repositories", style="green")
+        wave_table.add_column("Concurrency", style="yellow")
+        wave_table.add_column("Wave Responsibilities & Staging", style="italic")
+
+        for w in plan.waves:
+            wave_table.add_row(
+                f"Stage {w.wave_number}",
+                w.name,
+                ", ".join(w.repo_ids),
+                f"{len(w.repo_ids)} parallel worker(s)",
+                w.description,
+            )
+
+        console.print(wave_table)
+
+    if any(prereqs for prereqs in plan.dependency_matrix.values()):
+        matrix_table = Table(
+            title="Cross-Repository Dependency Prerequisite Matrix",
+            header_style="bold blue",
+            border_style="dim",
+        )
+        matrix_table.add_column("Repository", style="bold green")
+        matrix_table.add_column("Required Upstream Prerequisite Repositories", style="magenta")
+
+        for r_id, prereqs in sorted(plan.dependency_matrix.items()):
+            prereq_str = ", ".join(prereqs) if prereqs else "[dim green]none (ready in Wave 1)[/dim green]"
+            matrix_table.add_row(r_id, prereq_str)
+
+        console.print(matrix_table)
 
 
 @app.command()
