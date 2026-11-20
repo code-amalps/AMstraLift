@@ -93,11 +93,14 @@ def test_cli_handles_already_up_to_date(tmp_path: Path, monkeypatch):
 
 
 def test_cli_run_help_shows_test_options():
+    import re
+
     result = runner.invoke(app, ["run", "--help"])
     assert result.exit_code == 0
-    assert "--test-timeout" in result.stdout
-    assert "--allow-failed" in result.stdout
-    assert "--ignore-scripts" in result.stdout
+    clean_stdout = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout)
+    assert "--test-timeout" in clean_stdout
+    assert "--allow-failed" in clean_stdout
+    assert "--ignore-scripts" in clean_stdout
 
 
 def test_cli_passes_skip_tests_and_timeout(tmp_path: Path, monkeypatch):
@@ -204,9 +207,10 @@ def test_cli_run_on_empty_dir_prompt_scaffold(tmp_path: Path, monkeypatch):
     empty_dir = tmp_path / "empty-dir"
     empty_dir.mkdir()
     result = runner.invoke(app, ["run", "--repo", str(empty_dir)], input="y\n")
-    assert "Directory" in result.stdout
-    assert "is empty" in result.stdout
-    assert "Scaffolded ANGULAR starter project" in result.stdout
+    normalized = " ".join(result.stdout.split())
+    assert "Directory" in normalized
+    assert "is empty" in normalized
+    assert "Scaffolded ANGULAR starter project" in normalized
 
 
 def test_cli_auto_detect_single_subproject(tmp_path: Path, monkeypatch):
