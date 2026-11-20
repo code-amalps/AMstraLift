@@ -78,6 +78,41 @@ Target Repository (Untouched)
 
 ---
 
+## Generation 2: Modernization Orchestration Platform (v0.2.0)
+
+AMstraLift Generation 2 evolves the core upgrade engine into a declarative **modernization orchestration platform**:
+
+```text
+Repository Inspection ──► Dependency DAG (P16) ──► Modernization Plan (P17)
+                                                        │
+┌───────────────────────────────────────────────────────┴────────────────────────┐
+│ Pre-Execution Conflict Detection (P18)  ──> Zero file races & symbol collisions │
+│ Enterprise Policy-as-Code (P20)         ──> ALLOW / REVIEW / BLOCK governance  │
+│ Resumable Checkpoint Engine (P19)       ──> Instant crash/interruption recovery│
+└───────────────────────────────────────────────────────┬────────────────────────┘
+                                                        ▼
+                                           Attested Verified Execution
+```
+
+1. **Transformation Dependency Graph (`amstralift graph`)**:
+   - Directed Acyclic Graph (DAG) modeling prerequisites, conflicts, invalidation, and topological waves.
+   - Computes concurrent parallel batches with disjoint file patterns and exact transactional rollback blast radius.
+2. **Modernization Planning Engine (`amstralift plan`)**:
+   - Generates declarative execution plans (`ModernizationPlan`) partitioned into 6 canonical lifecycle phases (Dependencies $\to$ Framework Migration $\to$ Template & AST $\to$ Tooling & Config $\to$ Hygiene Cleanup $\to$ Sandbox Verification).
+   - Classifies transformations into **Safe** (low risk, idempotent), **Dependent** (chained), **Risky** (architectural shifts), and **Refused** (invalidated or out-of-scope).
+   - Lossless YAML/JSON export for corporate review before touching files.
+3. **Pre-Execution Conflict Detection (`amstralift conflicts`)**:
+   - Detects explicit DAG conflicts, file collisions (`**/*.ts`, `**/*.html`), public symbol changes (`@NgModule`), and compiler/config key mismatches (`angular.json`) **before touching workspace files**.
+   - Automatically prunes superseded legacy rules and injects sequence orderings to eliminate execution races.
+4. **Resumable / Checkpointed Modernization (`amstralift resume` / `amstralift checkpoints`)**:
+   - Automatically persists phase checkpoints to `.amstralift/checkpoints/` with SHA-256 evidence integrity hashes.
+   - Resumes interrupted or failed modernizations from the exact point of pause, dynamically skipping already-completed AST transforms.
+5. **Enterprise Policy-as-Code (`amstralift policy init` / `amstralift policy check`)**:
+   - Declarative `policy.yaml` configuration enforcing corporate governance (major version jump limits, EOL horizons), risk tolerances, vulnerability thresholds (CVE blocking), and public API symbol preservation.
+   - Evaluates plans with deterministic `ALLOW`, `REVIEW`, and `BLOCK` verdicts, safely halting runs upon policy violations.
+
+---
+
 ## Real Proof: Angular 15 $\to$ 18 Modernization
  
 Here is an actual code transformation performed by AMstraLift's deterministic AST transformer:
@@ -345,10 +380,15 @@ uv run pytest
 ```
 
 ```text
-======================= 380 passed in 52.4s =======================
+======================= 443 passed in 58.2s =======================
 ```
 
 Key test suites included in the repository:
+- `tests/test_transformation_graph.py` — Transformation Dependency Graph (DAG), Kahn topological waves, rollback blast radius (P16)
+- `tests/test_modernization_planner.py` — Declarative modernization planning engine, risk classification, canonical phases (P17)
+- `tests/test_conflict_detector.py` — Pre-execution cross-transformation conflict detection, symbol/file collision resolution (P18)
+- `tests/test_checkpoints.py` — Resumable checkpointing, SHA-256 evidence integrity, execution resumption (P19)
+- `tests/test_policy_as_code.py` — Declarative enterprise policy engine, governance jump limits, CVE thresholds, API preservation (P20)
 - `tests/test_angular_adapter.py` — Angular version resolution, lockfile updates, and schematics
 - `tests/test_angular_self_closing.py` — Angular void tag and self-closing component AST transformer
 - `tests/test_angular_signals.py` — Signal `input()`, `output()`, and query migrations
@@ -386,15 +426,19 @@ AMstraLift is under active development by **Amal P S**. We are seeking developer
 
 ---
 
-## Roadmap
+## Roadmap & Generational Architecture
 
 - **Generation 1 (Completed — v0.1.19)**: Multi-ecosystem upgrade engine, complete Angular AST modernization quartet (control flow, standalone, signals, inject, self-closing), 6 verification gates, OSV CVE remediation, exact resolved versions attestation, self-healing compiler configs, system doctor diagnostics & repairs (`amstralift doctor --fix`), in-place self-update engine (`amstralift update`), desktop GUI with silent background scanner and 1-click update/self-heal pill, monorepo discovery, turnkey CI templates, standalone distribution.
-- **Generation 2 (In Progress)**:
-  - **P16 (Completed — v0.2.0)**: Transformation Dependency Graph (DAG modeling prerequisites, ordering, conflicts, invalidations, execution waves, parallel-safe batches, and atomic rollback boundaries via `amstralift graph`).
-  - **P17 (Completed — v0.2.0)**: Modernization Planning Engine (declarative upgrade plans, risk classification, canonical phases, parallel batches, and YAML/JSON export via `amstralift plan`).
-  - **P18**: Pre-execution Cross-Transformation Conflict Detection.
-  - **P19**: Resumable / Checkpointed Modernization (`amstralift resume`).
-  - **P20**: Policy-as-Code (declarative enterprise rules).
+- **Generation 2 (Completed — v0.2.0)**: Modernization Orchestration Platform
+  - **P16 (Completed)**: Transformation Dependency Graph (DAG modeling prerequisites, ordering, conflicts, invalidations, execution waves, parallel-safe batches, and atomic rollback boundaries via `amstralift graph`).
+  - **P17 (Completed)**: Modernization Planning Engine (declarative upgrade plans, risk classification into safe/dependent/risky/refused, canonical lifecycle phases, parallel batches, and YAML/JSON export via `amstralift plan`).
+  - **P18 (Completed)**: Pre-execution Cross-Transformation Conflict Detection (detects and resolves file, symbol, and config collisions before modifying files via `amstralift conflicts`).
+  - **P19 (Completed)**: Resumable / Checkpointed Modernization (persistent phase checkpointing with SHA-256 evidence integrity and instant recovery via `amstralift resume` and `amstralift checkpoints`).
+  - **P20 (Completed)**: Policy-as-Code (declarative enterprise rules for major jump limits, AST risk tolerance, CVE blocking, and API symbol protection via `amstralift policy check` and `amstralift policy init`).
+- **Generation 3 (Next Horizon)**: Enterprise Scale
+  - **P21**: Multi-Repository Modernization Campaigns (cross-repo dependency graphs, mass fleet modernizations).
+  - **P22**: Runtime Verification in Sandbox (canary execution, integration smoke testing).
+  - **P23**: Organization Governance & Team Ownership Routing.
 
 ---
 
