@@ -35,6 +35,7 @@ class PlanExecutionResult(BaseModel):
 
     plan_id: str
     repo_path: str
+    execution_id: str = ""
     success: bool = True
     start_time: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     end_time: str = ""
@@ -49,7 +50,7 @@ class PlanExecutionResult(BaseModel):
 
 
 class PlanExecutor:
-    """Executes a ModernizationPlan with progressive logging and rollback protection."""
+    """Executes a ModernizationPlan with progressive logging, checkpointing (P19), and rollback protection."""
 
     def __init__(self, graph: TransformationGraph | None = None) -> None:
         self.graph = graph or build_default_graph()
@@ -60,9 +61,12 @@ class PlanExecutor:
         workspace_path: Path,
         dry_run: bool = False,
         progress_callback: Callable[[str], None] | None = None,
+        enable_checkpointing: bool = True,
+        existing_checkpoint: Any | None = None,
     ) -> PlanExecutionResult:
-        """Run through all planned phases sequentially."""
+        """Run through all planned phases sequentially with checkpointed persistence."""
         import time
+        from amstralift.checkpoints import CheckpointManager
 
         workspace_path = Path(workspace_path).resolve()
         result = PlanExecutionResult(
@@ -71,14 +75,30 @@ class PlanExecutor:
             total_phases=len(plan.phases),
         )
 
+        checkpoint_mgr: CheckpointManager | None = None
+        checkpoint = existing_checkpoint
+        if enable_checkpointing:
+            try:
+                checkpoint_mgr = CheckpointManager(workspace_path)
+                if not checkpoint:
+                    checkpoint = checkpoint_mgr.start_execution(plan, dry_run=dry_run)
+                result.execution_id = checkpoint.execution_id
+            except Exception as e:
+                # If checkpointing cannot initialize, proceed with execution gracefully
+                pass
+
         def log(msg: str) -> None:
             if progress_callback:
                 progress_callback(msg)
 
-        log(f"Starting execution of modernization plan {plan.plan_id} (Dry Run: {dry_run})")
+        exec_prefix = f" [{checkpoint.execution_id}]" if checkpoint else ""
+        log(f"Starting execution of modernization plan {plan.plan_id}{exec_prefix} (Dry Run: {dry_run})")
 
         for phase in plan.phases:
             log(f"Phase {phase.phase_index + 1}/{len(plan.phases)}: {phase.name}")
+            if checkpoint_mgr and checkpoint:
+                checkpoint_mgr.record_phase_start(checkpoint, phase.phase_index)
+
             start_ts = time.time()
             phase_res = PhaseExecutionResult(
                 phase_index=phase.phase_index,
@@ -95,6 +115,13 @@ class PlanExecutor:
                 phase_res.duration_seconds = time.time() - start_ts
                 result.phase_results.append(phase_res)
                 result.phases_completed += 1
+                if checkpoint_mgr and checkpoint:
+                    checkpoint_mgr.record_phase_success(
+                        checkpoint,
+                        phase.phase_index,
+                        phase_res.applied,
+                        phase_res.duration_seconds,
+                    )
                 continue
 
             # Live execution mode: execute transformations
@@ -119,6 +146,15 @@ class PlanExecutor:
                         result.rollback_required = True
                         result.rollback_targets = sorted(list(rb.get(node_id, {node_id})))
                         log(f"    ✖ Error in {node_id}. Rollback boundary triggered for: {result.rollback_targets}")
+                        if checkpoint_mgr and checkpoint:
+                            checkpoint_mgr.record_phase_failure(
+                                checkpoint,
+                                phase.phase_index,
+                                failed_transformation=node_id,
+                                error_message=str(ex),
+                                applied_so_far=phase_res.applied,
+                                duration_seconds=time.time() - start_ts,
+                            )
                         break
 
                 if not phase_res.success:
@@ -132,6 +168,13 @@ class PlanExecutor:
                 break
             else:
                 result.phases_completed += 1
+                if checkpoint_mgr and checkpoint:
+                    checkpoint_mgr.record_phase_success(
+                        checkpoint,
+                        phase.phase_index,
+                        phase_res.applied,
+                        phase_res.duration_seconds,
+                    )
 
         result.end_time = datetime.now(timezone.utc).isoformat()
         if result.success:

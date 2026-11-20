@@ -191,9 +191,9 @@ Rule B ─────┘
 
 ---
 
-### P19 — Incremental / Resumeable Modernization
+### P19 — Incremental / Resumeable Modernization (COMPLETED — v0.2.0)
 
-> **Major enterprise feature: don't restart 3-hour modernizations.**
+> **Built:** Full persistent checkpoint engine in `amstralift.checkpoints` recording execution runs, phase progression, completed transformation IDs, and SHA-256 evidence integrity hashes. Integrated with `PlanExecutor` for seamless pause/failure recovery and CLI resumption via `amstralift resume` and inspection via `amstralift checkpoints`.
 
 ```text
 Phase 1 ✓  ─── checkpoint ───┐
@@ -201,9 +201,9 @@ Phase 2 ✓  ─── checkpoint ───┤
 Phase 3 ✓  ─── checkpoint ───┤
 Phase 4 ✗                    │
                               ↓
-                      amstralift resume <execution-id>
+                      amstralift resume [execution-id]
                               ↓
-                         Phase 4 (retry)
+                         Phase 4 (resumed without re-executing 1-3!)
 ```
 
 **Checkpoint model:**
@@ -221,7 +221,7 @@ checkpoint:
   resumable: true
 ```
 
-**CLI:** `amstralift resume <execution-id>`
+**CLI:** `amstralift resume [execution-id]`, `amstralift checkpoints`
 
 ---
 

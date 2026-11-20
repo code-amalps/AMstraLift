@@ -44,6 +44,13 @@ This project follows [Semantic Versioning](https://semver.org/).
   - CLI conflict inspection command (`amstralift conflicts` with `--repo`, `--ecosystem`, `--resolve/--no-resolve`, `--json`).
   - Native integration into `amstralift plan`, embedding complete pre-execution conflict analysis reports directly into `plan.metadata` and displaying conflict resolution summaries.
 
+- **P19 — Resumable / Checkpointed Modernization (`amstralift.checkpoints`)**:
+  - Resumable checkpointing engine (`CheckpointStore` and `CheckpointManager`) automatically checkpointing progress between phases to eliminate redundant work during long-running modernizations.
+  - Phase-level tracking recording execution IDs, plan metadata, starting/current git commit hashes, completed transformation IDs, and duration timestamps.
+  - Cryptographic evidence integrity hashes (SHA-256) preventing corrupted or tampered checkpoint files from resuming execution.
+  - Automatic resumption planner (`prepare_resumption`) dynamically pruning already-completed phases and AST transformations to resume execution at the exact interrupted point.
+  - Dedicated CLI commands (`amstralift resume [id]` and `amstralift checkpoints` with `--repo` and `--json`).
+
 ---
 
 ## [0.1.19] - 2026-11-20

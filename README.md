@@ -251,7 +251,11 @@ uv run amstralift plan --target 18
 # 10. Detect Pre-Execution Cross-Transformation Conflicts (P18 file, symbol, and config collisions)
 uv run amstralift conflicts --ecosystem angular
 
-# 11. Launch the Desktop GUI
+# 11. Resume an Interrupted Modernization Run (P19 checkpointing and instant recovery)
+uv run amstralift checkpoints
+uv run amstralift resume
+
+# 12. Launch the Desktop GUI
 uv run amstralift gui
 ```
 

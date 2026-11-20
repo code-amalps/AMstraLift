@@ -1308,6 +1308,137 @@ def conflicts_cmd(
         raise typer.Exit(code=1)
 
 
+@app.command("resume")
+def resume_cmd(
+    execution_id: Annotated[
+        str | None,
+        typer.Argument(help="Optional execution run ID to resume (e.g. 'exec_20261120_...'). Defaults to latest resumable checkpoint."),
+    ] = None,
+    repo: Annotated[
+        Path,
+        typer.Option("--repo", "-r", help="Path to workspace root directory."),
+    ] = Path("."),
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Simulate resumption without modifying files."),
+    ] = False,
+):
+    """Resume an interrupted or failed modernization execution from its last saved checkpoint (P19)."""
+    from rich.panel import Panel
+
+    from amstralift.checkpoints import CheckpointManager, CheckpointStatus
+    from amstralift.planning import PlanExecutor
+
+    if not repo.exists() or not repo.is_dir():
+        console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {repo.resolve()}")
+        raise typer.Exit(code=1)
+
+    mgr = CheckpointManager(repo)
+
+    try:
+        checkpoint, resumed_plan, starting_phase = mgr.prepare_resumption(execution_id)
+    except Exception as ex:
+        console.print(f"[bold red]✖ Cannot resume modernization:[/bold red] {ex}")
+        raise typer.Exit(code=1)
+
+    console.print(
+        Panel(
+            f"[bold]Execution Run ID:[/bold] [cyan]{checkpoint.execution_id}[/cyan]\n"
+            f"[bold]Modernization Plan:[/bold] [yellow]{checkpoint.plan_id}[/yellow]\n"
+            f"[bold]Target Ecosystem:[/bold] [cyan]{checkpoint.ecosystem.upper()}[/cyan] ({checkpoint.target_version})\n"
+            f"[bold]Progress Before Resumption:[/bold] {checkpoint.completed_phases_count}/{checkpoint.total_phases} phases completed\n"
+            f"[bold]Resuming From Phase:[/bold] [bold green]Phase {starting_phase + 1}[/bold green] ({len(resumed_plan.phases)} remaining phases)",
+            title="Resuming Modernization Execution (P19)",
+            border_style="cyan",
+        )
+    )
+
+    executor = PlanExecutor()
+    res = executor.execute_plan(
+        plan=resumed_plan,
+        workspace_path=repo,
+        dry_run=dry_run,
+        progress_callback=lambda m: console.print(f"  {m}"),
+        enable_checkpointing=True,
+        existing_checkpoint=checkpoint,
+    )
+
+    if res.success:
+        console.print(f"\n[bold green]✔ Modernization successfully resumed and completed all phases![/bold green]")
+    else:
+        console.print(f"\n[bold red]✖ Resumed execution halted:[/bold red] {res.message}")
+        raise typer.Exit(code=1)
+
+
+@app.command("checkpoints")
+def checkpoints_cmd(
+    repo: Annotated[
+        Path,
+        typer.Option("--repo", "-r", help="Path to workspace root directory."),
+    ] = Path("."),
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output checkpoints as raw JSON."),
+    ] = False,
+):
+    """List historical and active modernization execution checkpoints (P19)."""
+    import json
+    from rich.table import Table
+
+    from amstralift.checkpoints import CheckpointManager, CheckpointStatus
+
+    if not repo.exists() or not repo.is_dir():
+        console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {repo.resolve()}")
+        raise typer.Exit(code=1)
+
+    mgr = CheckpointManager(repo)
+    checkpoints = mgr.store.list_checkpoints()
+
+    if as_json:
+        data = [cp.model_dump(mode="json") for cp in checkpoints]
+        typer.echo(json.dumps(data, indent=2))
+        raise typer.Exit(code=0)
+
+    if not checkpoints:
+        console.print(f"[dim]No modernization checkpoints found in {repo.resolve()}[/dim]")
+        raise typer.Exit(code=0)
+
+    table = Table(
+        title=f"Modernization Execution Checkpoints ({len(checkpoints)} found)",
+        header_style="bold cyan",
+        border_style="dim",
+    )
+    table.add_column("Execution ID", style="bold", no_wrap=True)
+    table.add_column("Ecosystem", style="cyan")
+    table.add_column("Status", style="bold")
+    table.add_column("Progress", style="magenta")
+    table.add_column("Resumable?", style="green")
+    table.add_column("Updated At", style="dim")
+
+    status_colors = {
+        CheckpointStatus.COMPLETED: "[bold green]COMPLETED[/bold green]",
+        CheckpointStatus.IN_PROGRESS: "[bold yellow]IN PROGRESS[/bold yellow]",
+        CheckpointStatus.FAILED: "[bold red]FAILED[/bold red]",
+        CheckpointStatus.PAUSED: "[bold cyan]PAUSED[/bold cyan]",
+        CheckpointStatus.PENDING: "[dim]PENDING[/dim]",
+    }
+
+    for cp in checkpoints:
+        badge = status_colors.get(cp.status, cp.status.value.upper())
+        prog = f"{cp.completed_phases_count}/{cp.total_phases} phases"
+        resumable_badge = "[bold green]YES[/bold green]" if cp.resumable and cp.status != CheckpointStatus.COMPLETED else "[dim]NO[/dim]"
+        table.add_row(
+            cp.execution_id,
+            cp.ecosystem.upper(),
+            badge,
+            prog,
+            resumable_badge,
+            cp.updated_at[:19].replace("T", " "),
+        )
+
+    console.print(table)
+
+
 @app.command()
 def version():
     """Display AMstraLift version and author attribution."""
