@@ -125,9 +125,9 @@ verification
 
 ---
 
-### P17 — Transformation Planning Engine
+### P17 — Transformation Planning Engine (COMPLETED — v0.2.0)
 
-> **AMstraLift becomes a modernization planner, not just an upgrade engine.**
+> **Built:** Full declarative modernization planning engine in `amstralift.planning` producing staged execution plans, risk breakdowns (safe/dependent/risky/refused), canonical lifecycle phases, parallel batch partitioning, and YAML/JSON export via `amstralift plan`.
 
 Today AMstraLift can *execute* transformations. P17 adds the ability to *decide* what should be transformed, in what order, and why.
 
@@ -266,7 +266,7 @@ ALLOW / REVIEW / BLOCK
 | Priority | Capability | Reason |
 |---|---|---|
 | **P16** | Transformation Dependency Graph | Foundation for everything else (✅ Completed in v0.2.0) |
-| **P17** | Modernization Planner | Decides what/when/how to transform |
+| **P17** | Modernization Planner | Decides what/when/how to transform (✅ Completed in v0.2.0) |
 | **P18** | Conflict Detection | Safety before execution |
 | **P20** | Policy-as-Code | Converts verification into governance |
 | **P19** | Resumeable Execution | Operationally practical for enterprise |

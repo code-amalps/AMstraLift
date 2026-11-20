@@ -238,16 +238,16 @@ def build_default_graph() -> TransformationGraph:
 
     # --- Angular Dependency Chains ---
     graph.add_edge(
-        "angular:workspace-config",
         "angular:ecosystem-align",
+        "angular:workspace-config",
         EdgeType.PREREQUISITE,
-        "Workspace schema must be normalized before aligning package dependencies",
+        "Package dependencies must be upgraded before workspace configuration schema is modernized",
     )
     graph.add_edge(
-        "angular:ecosystem-align",
+        "angular:workspace-config",
         "angular:standalone",
         EdgeType.PREREQUISITE,
-        "Angular core dependencies must be upgraded before standalone component migration",
+        "Workspace schema must be normalized before standalone component migration",
     )
     graph.add_edge(
         "angular:standalone",

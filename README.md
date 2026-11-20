@@ -245,7 +245,10 @@ uv run amstralift update --check
 # 8. Inspect the Transformation Dependency Graph (P16 DAG, phases, and rollback boundaries)
 uv run amstralift graph --phases
 
-# 9. Launch the Desktop GUI
+# 9. Generate a Declarative Modernization Plan (P17 staged waves, risk breakdown, YAML export)
+uv run amstralift plan --target 18
+
+# 10. Launch the Desktop GUI
 uv run amstralift gui
 ```
 
@@ -377,7 +380,7 @@ AMstraLift is under active development by **Amal P S**. We are seeking developer
 - **Generation 1 (Completed — v0.1.19)**: Multi-ecosystem upgrade engine, complete Angular AST modernization quartet (control flow, standalone, signals, inject, self-closing), 6 verification gates, OSV CVE remediation, exact resolved versions attestation, self-healing compiler configs, system doctor diagnostics & repairs (`amstralift doctor --fix`), in-place self-update engine (`amstralift update`), desktop GUI with silent background scanner and 1-click update/self-heal pill, monorepo discovery, turnkey CI templates, standalone distribution.
 - **Generation 2 (In Progress)**:
   - **P16 (Completed — v0.2.0)**: Transformation Dependency Graph (DAG modeling prerequisites, ordering, conflicts, invalidations, execution waves, parallel-safe batches, and atomic rollback boundaries via `amstralift graph`).
-  - **P17**: Modernization Planning Engine (declarative upgrade plans).
+  - **P17 (Completed — v0.2.0)**: Modernization Planning Engine (declarative upgrade plans, risk classification, canonical phases, parallel batches, and YAML/JSON export via `amstralift plan`).
   - **P18**: Pre-execution Cross-Transformation Conflict Detection.
   - **P19**: Resumable / Checkpointed Modernization (`amstralift resume`).
   - **P20**: Policy-as-Code (declarative enterprise rules).

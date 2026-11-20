@@ -1051,6 +1051,155 @@ def graph_cmd(
     )
 
 
+@app.command("plan")
+def plan_cmd(
+    repo: Annotated[
+        Path,
+        typer.Option("--repo", "-r", help="Target repository directory to analyze and plan."),
+    ] = Path("."),
+    ecosystem: Annotated[
+        str | None,
+        typer.Option("--ecosystem", "-e", help="Target ecosystem override (angular, dotnet, python, react)."),
+    ] = None,
+    target: Annotated[
+        int | None,
+        typer.Option("--target", "-t", help="Target major framework version (e.g. 18, 21, 8)."),
+    ] = None,
+    output_file: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="File to save the modernization plan (.yaml, .yml, or .json)."),
+    ] = None,
+    execute: Annotated[
+        bool,
+        typer.Option("--execute", help="Execute the generated modernization plan."),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Simulate execution without modifying files."),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output modernization plan as JSON."),
+    ] = False,
+    as_yaml: Annotated[
+        bool,
+        typer.Option("--yaml", help="Output modernization plan as raw YAML."),
+    ] = False,
+):
+    """Generate a declarative modernization plan (P17) based on codebase analysis and the DAG."""
+    from rich.panel import Panel
+    from amstralift.planning import ModernizationPlanner, PlanExecutor, TransformationStatus
+
+    if not repo.exists() or not repo.is_dir():
+        console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {repo.resolve()}")
+        raise typer.Exit(code=1)
+
+    planner = ModernizationPlanner()
+    plan = planner.generate_plan(
+        repo_path=repo,
+        ecosystem=ecosystem,
+        target_major=target,
+    )
+
+    if as_json:
+        typer.echo(plan.model_dump_json(indent=2))
+        raise typer.Exit(code=0)
+
+    if as_yaml:
+        typer.echo(plan.to_yaml())
+        raise typer.Exit(code=0)
+
+    # Rich Terminal Output
+    status_summary = (
+        f"[bold green]✔ {plan.safe_count} Safe[/bold green] · "
+        f"[bold cyan]↳ {plan.dependent_count} Dependent[/bold cyan] · "
+        f"[bold magenta]▲ {plan.risky_count} Risky[/bold magenta] · "
+        f"[bold red]✖ {plan.refused_count} Refused[/bold red]"
+    )
+
+    console.print(
+        Panel(
+            f"[bold]Repository:[/bold] {plan.repo_path}\n"
+            f"[bold]Ecosystem:[/bold] [cyan]{plan.ecosystem.upper()}[/cyan] (Current: [yellow]{plan.current_version or 'unknown'}[/yellow] → Target: [bold green]{plan.target_version}[/bold green])\n"
+            f"[bold]Total Transformations Planned:[/bold] [bold white]{plan.total_transformations}[/bold white]\n"
+            f"[bold]Transformation Breakdown:[/bold] {status_summary}",
+            title=f"Modernization Plan: {plan.plan_id} (P17)",
+            border_style="cyan",
+        )
+    )
+
+    # Render each phase
+    status_badges = {
+        TransformationStatus.SAFE: "[bold green]SAFE[/bold green]",
+        TransformationStatus.DEPENDENT: "[cyan]DEPENDENT[/cyan]",
+        TransformationStatus.RISKY: "[bold magenta]RISKY[/bold magenta]",
+        TransformationStatus.REFUSED: "[red]REFUSED[/red]",
+        TransformationStatus.SKIPPED: "[dim]SKIPPED[/dim]",
+    }
+
+    for phase in plan.phases:
+        table = Table(
+            title=f"Phase {phase.phase_index + 1}: {phase.name} ({len(phase.transformations)} items)",
+            header_style="bold cyan",
+            border_style="dim",
+        )
+        table.add_column("Transformation ID", style="bold", no_wrap=True)
+        table.add_column("Status", style="bold")
+        table.add_column("Risk", style="green")
+        table.add_column("Prerequisites", style="cyan")
+        table.add_column("Affected Files", style="dim")
+        table.add_column("Rationale", style="italic")
+
+        for t in phase.transformations:
+            prereq_str = ", ".join(t.prerequisites) if t.prerequisites else "-"
+            files_str = ", ".join(t.affected_file_patterns) if t.affected_file_patterns else "-"
+            badge = status_badges.get(t.status, str(t.status))
+            table.add_row(
+                t.id,
+                badge,
+                t.risk.value.upper(),
+                prereq_str,
+                files_str,
+                t.reason,
+            )
+        console.print(table)
+
+    # Render refused transformations if any
+    if plan.refused_transformations:
+        refused_table = Table(
+            title=f"Refused Transformations ({len(plan.refused_transformations)} items)",
+            header_style="bold red",
+            border_style="red dim",
+        )
+        refused_table.add_column("Transformation ID", style="bold red", no_wrap=True)
+        refused_table.add_column("Category", style="dim")
+        refused_table.add_column("Refusal Rationale", style="yellow")
+        for rt in plan.refused_transformations:
+            refused_table.add_row(rt.id, rt.category.value.upper(), rt.reason)
+        console.print(refused_table)
+
+    # Save to file if requested
+    if output_file:
+        plan.save(output_file)
+        console.print(f"[bold green]✔ Modernization plan successfully written to:[/bold green] {output_file.resolve()}")
+
+    # Execute if requested
+    if execute or dry_run:
+        executor = PlanExecutor()
+        console.print(f"\n[bold cyan]Starting plan execution...[/bold cyan]")
+        exec_res = executor.execute_plan(
+            plan=plan,
+            workspace_path=repo,
+            dry_run=dry_run,
+            progress_callback=lambda m: console.print(f"  {m}"),
+        )
+        if exec_res.success:
+            console.print(f"[bold green]✔ {exec_res.message}[/bold green]")
+        else:
+            console.print(f"[bold red]✖ {exec_res.message}[/bold red]")
+            raise typer.Exit(code=1)
+
+
 @app.command()
 def version():
     """Display AMstraLift version and author attribution."""

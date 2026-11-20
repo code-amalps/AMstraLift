@@ -23,6 +23,20 @@ This project follows [Semantic Versioning](https://semver.org/).
   - `amstralift graph --ecosystem <name>`: Filters transformations by ecosystem (`angular`, `dotnet`, `python`, `react`).
   - `amstralift graph --json`: Clean JSON serialization for automated modernization planning pipelines (P17).
 
+- **P17 — Modernization Planning Engine (`amstralift.planning`)**:
+  - Declarative modernization plan generator (`ModernizationPlan`) shifting AMstraLift from a reactive upgrade engine into a proactive modernization planner.
+  - Deep repository inspection (`RepoAnalyzer`) discovering framework versions, structural directives (`*ngIf`, `*ngFor`), legacy NgModules, constructor dependency injection, empty template tags, Central Package Management, and setup.py configurations.
+  - Risk classification dividing transformations into **Safe** (low-risk, idempotent), **Dependent** (prerequisite-chained), **Risky** (major architectural shifts), and **Refused** (conflicting, invalidated, or out-of-bounds).
+  - Canonical 6-phase lifecycle: Dependencies & Package Alignment $\to$ Framework & Architecture Migration $\to$ Template & AST Modernization $\to$ Tooling & Compiler Configuration $\to$ Hygiene & Deprecated Artifact Pruning $\to$ Sandbox Verification & Attestation.
+  - Lossless YAML and JSON serialization (`to_yaml`, `from_yaml`, `save`, `load`).
+  - Staged plan execution engine (`PlanExecutor`) supporting progressive live execution, simulation dry-runs, and transaction rollback boundaries.
+- **CLI Modernization Plan Generator (`amstralift plan`)**:
+  - `amstralift plan`: Analyzes the workspace and renders a formatted Rich overview of all planned lifecycle phases, safe/dependent/risky breakdowns, parallel batches, and refused transformations with explicit refusal rationale.
+  - `amstralift plan --target <version>`: Explicitly specifies target framework major version (e.g. `--target 18` or `--target 21`).
+  - `amstralift plan -o modernization-plan.yaml`: Exports the declarative plan to file for enterprise policy review.
+  - `amstralift plan --dry-run`: Simulates phase execution without touching workspace files.
+  - `amstralift plan --yaml` / `--json`: Prints raw declarative plan definitions.
+
 ---
 
 ## [0.1.19] - 2026-11-20
