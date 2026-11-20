@@ -126,6 +126,7 @@ class UnsignedAdvisoryBundle(BaseModel):
     patch_sha256: str
     lockfile_hashes_before: dict[str, str] = Field(default_factory=dict)
     lockfile_hashes_after: dict[str, str] = Field(default_factory=dict)
+    resolved_versions: dict[str, str] = Field(default_factory=dict)
     changes: list[DependencyChange] = Field(default_factory=list)
     gate_summary: GateSummary = Field(default_factory=GateSummary)
     migration: MigrationClassification = Field(default_factory=MigrationClassification)

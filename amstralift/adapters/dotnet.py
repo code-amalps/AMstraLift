@@ -321,7 +321,7 @@ class DotNetAdapter(BaseAdapter):
 
         return candidates
 
-    def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange]) -> None:
+    def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange], ignore_scripts: bool = True) -> None:
         """Apply package and TargetFramework updates to *.csproj, Directory.Build.props, Directory.Packages.props, and packages.lock.json."""
         csproj_files = safe_rglob(repo_path, ["*.csproj", "*.fsproj"])
         props_files = safe_rglob(repo_path, ["Directory.Build.props", "Directory.Build.targets"])

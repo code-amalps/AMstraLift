@@ -115,6 +115,7 @@ class UpgradeOrchestrator:
         incremental: bool | None = None,
         progress_callback: Any | None = None,
         cancellation_token: Any | None = None,
+        ignore_scripts: bool = True,
     ) -> tuple[SignedAdvisoryBundle, PullRequestProposal]:
         """Execute complete upgrade workflow for a repository."""
         repo_path = repo_path.resolve()
@@ -184,6 +185,7 @@ class UpgradeOrchestrator:
                     progress_callback=progress_callback,
                     cancellation_token=cancellation_token,
                     subproject=subproject,
+                    ignore_scripts=ignore_scripts,
                 )
 
                 if cancellation_token:

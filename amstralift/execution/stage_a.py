@@ -66,6 +66,7 @@ def run_stage_a(
     progress_callback: Optional[Callable[[int, str], None]] = None,
     cancellation_token: Optional[CancellationToken] = None,
     subproject: str | None = None,
+    ignore_scripts: bool = True,
 ) -> UnsignedAdvisoryBundle:
     """Execute Stage A inside the sanitized workspace."""
     run_id = run_id or f"run_{uuid4().hex[:12]}"
@@ -146,7 +147,7 @@ def run_stage_a(
 
     # 2. Apply upgrades to manifests/lockfiles
     _notify(3, 5, 45, "📦 Applying version updates to manifests and regenerating lockfiles...")
-    adapter.apply_upgrade(target_project_dir, candidates)
+    adapter.apply_upgrade(target_project_dir, candidates, ignore_scripts=ignore_scripts)
 
     # 2a. Post-upgrade transitive CVE remediation pass
     _notify(4, 5, 65, "🛡️ Running post-upgrade CVE checks and framework modernizations...")
@@ -186,7 +187,7 @@ def run_stage_a(
                         existing_names.add(change.package_name)
 
                     if clean_post_changes:
-                        adapter.apply_upgrade(target_project_dir, clean_post_changes)
+                        adapter.apply_upgrade(target_project_dir, clean_post_changes, ignore_scripts=ignore_scripts)
                         candidates.extend(clean_post_changes)
         except Exception as e:
             logger.warning("Post-upgrade CVE remediation pass skipped: %s", e)
@@ -239,6 +240,10 @@ def run_stage_a(
     touched_paths = validate_patch_security(patch)
     migration = classify_migration_diff(touched_paths, ecosystem=adapter.name)
 
+    from amstralift.core.resolved_versions import capture_resolved_versions
+
+    resolved_versions = capture_resolved_versions(target_project_dir, adapter.name)
+
     head_commit_sha = base_commit_sha  # Working tree is dirty; HEAD remains base until Stage B commits
 
     return UnsignedAdvisoryBundle(
@@ -251,6 +256,7 @@ def run_stage_a(
         patch_sha256=patch_sha256,
         lockfile_hashes_before=lockfiles_before,
         lockfile_hashes_after=lockfiles_after,
+        resolved_versions=resolved_versions,
         changes=candidates,
         gate_summary=gate_summary,
         migration=migration,

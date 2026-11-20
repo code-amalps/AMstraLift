@@ -253,6 +253,13 @@ def run(
             help="Run in corporate/offline safe mode (skips external CVE lookups).",
         ),
     ] = False,
+    ignore_scripts: Annotated[
+        bool,
+        typer.Option(
+            "--ignore-scripts/--no-ignore-scripts",
+            help="Block third-party lifecycle scripts (preinstall/postinstall) during Stage A workspace package resolution.",
+        ),
+    ] = True,
 ):
     """Run full two-stage upgrade workflow on a target repository."""
     repo_str = str(repo)
@@ -388,6 +395,7 @@ def run(
                 draft_on_fail=draft_on_fail,
                 modernize=modernize_list,
                 remediate_cves=remediate_cves and not offline,
+                ignore_scripts=ignore_scripts,
             )
 
         console.print("[bold green]✔ Upgrade workflow completed successfully![/bold green]\n")

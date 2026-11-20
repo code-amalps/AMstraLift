@@ -242,7 +242,7 @@ class ReactAdapter(BaseAdapter):
 
         return candidates
 
-    def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange]) -> None:
+    def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange], ignore_scripts: bool = True) -> None:
         """Apply dependency updates to package.json and lockfile."""
         pkg_file = repo_path / "package.json"
         data = json.loads(pkg_file.read_text(encoding="utf-8"))
@@ -297,7 +297,7 @@ class ReactAdapter(BaseAdapter):
         from amstralift.adapters.npm_lockfile import update_npm_lockfile
 
         gate_env = get_node_execution_env()
-        update_npm_lockfile(repo_path, changes, env=gate_env)
+        update_npm_lockfile(repo_path, changes, env=gate_env, ignore_scripts=ignore_scripts)
 
         # ── Docker: update FROM / image: tags in Dockerfiles & docker-compose ──
         react_change = next(

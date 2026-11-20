@@ -60,7 +60,7 @@ class BaseAdapter(ABC):
         pass
 
     @abstractmethod
-    def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange]) -> None:
+    def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange], ignore_scripts: bool = True) -> None:
         """Apply the chosen upgrades to the working directory manifests/lockfiles."""
         pass
 

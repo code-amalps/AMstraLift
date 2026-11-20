@@ -179,6 +179,7 @@ class EvidenceBundle(BaseModel):
     transformations_applied: list[TransformationRecord] = Field(default_factory=list)
     transformations_refused: list[RefusalRecord] = Field(default_factory=list)
 
+    resolved_versions: dict[str, str] = Field(default_factory=dict)
     verification: GateVerificationRecord = Field(default_factory=GateVerificationRecord)
     attestation: CryptographicAttestation | None = None
 

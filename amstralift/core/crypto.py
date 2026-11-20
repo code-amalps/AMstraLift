@@ -45,6 +45,7 @@ def _canonical_payload(bundle: UnsignedAdvisoryBundle, expires_at: datetime) -> 
         "head_commit_sha": bundle.head_commit_sha,
         "patch_sha256": bundle.patch_sha256,
         "lockfile_hashes_after": bundle.lockfile_hashes_after,
+        "resolved_versions": bundle.resolved_versions,
         "highest_tier": bundle.highest_tier.value,
         "expires_at": expires_at.isoformat(),
     }

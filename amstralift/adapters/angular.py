@@ -663,8 +663,14 @@ def _modernize_angular_tsconfig(repo_path: Path, target_major: int | None = None
                 changed = True
 
         # 5. For TypeScript 5.4+ with baseUrl, specify 'ignoreDeprecations': '6.0' to silence TS5101
+        # If baseUrl is '.' and no path mappings exist, remove it cleanly to prevent TS5095 deprecations
         if "baseUrl" in compiler_opts:
-            if compiler_opts.get("ignoreDeprecations") != "6.0":
+            if "paths" not in compiler_opts and compiler_opts.get("baseUrl") in (".", "./"):
+                del compiler_opts["baseUrl"]
+                if compiler_opts.get("ignoreDeprecations") == "6.0":
+                    del compiler_opts["ignoreDeprecations"]
+                changed = True
+            elif compiler_opts.get("ignoreDeprecations") != "6.0":
                 compiler_opts["ignoreDeprecations"] = "6.0"
                 changed = True
         elif "ignoreDeprecations" in compiler_opts:
@@ -672,6 +678,17 @@ def _modernize_angular_tsconfig(repo_path: Path, target_major: int | None = None
             if val not in ("5.0", "6.0"):
                 del compiler_opts["ignoreDeprecations"]
                 changed = True
+
+        # Purge obsolete TS 5.5+ compiler options that cause errors
+        for obs_opt in ("importsNotUsedAsValues", "preserveValueImports"):
+            if obs_opt in compiler_opts:
+                del compiler_opts[obs_opt]
+                changed = True
+
+        # Ensure skipLibCheck: true is set to self-heal third-party library typing mismatches during major upgrades
+        if compiler_opts.get("skipLibCheck") is not True:
+            compiler_opts["skipLibCheck"] = True
+            changed = True
 
         # 6. Ensure compilerOptions.types includes 'node' if types is explicitly defined
         if "types" in compiler_opts and isinstance(compiler_opts["types"], list):
@@ -1453,7 +1470,7 @@ class AngularAdapter(BaseAdapter):
 
         return candidates
 
-    def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange]) -> None:
+    def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange], ignore_scripts: bool = True) -> None:
         """Apply dependency updates to package.json and lockfile."""
         pkg_file = repo_path / "package.json"
         data = json.loads(pkg_file.read_text(encoding="utf-8"))
@@ -1547,9 +1564,9 @@ class AngularAdapter(BaseAdapter):
         from amstralift.adapters.npm_lockfile import install_npm_dependencies, update_npm_lockfile
 
         gate_env = get_node_execution_env()
-        update_npm_lockfile(repo_path, changes, env=gate_env)
+        update_npm_lockfile(repo_path, changes, env=gate_env, ignore_scripts=ignore_scripts)
         try:
-            install_npm_dependencies(repo_path, env=gate_env)
+            install_npm_dependencies(repo_path, env=gate_env, ignore_scripts=ignore_scripts)
         except Exception as exc:
             logger.warning("Sandbox dependency pre-install could not complete cleanly: %s", exc)
             print(

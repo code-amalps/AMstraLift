@@ -181,6 +181,7 @@ def compute_canonical_evidence_payload(bundle: EvidenceBundle) -> bytes:
         "refused_count": len(bundle.transformations_refused),
         "applied_ids": sorted(t.id for t in bundle.transformations_applied),
         "refused_ids": sorted(r.id for r in bundle.transformations_refused),
+        "resolved_versions": bundle.resolved_versions,
         "verification": {
             "clean_install": bundle.verification.clean_install,
             "build": bundle.verification.build,

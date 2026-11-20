@@ -179,6 +179,7 @@ def _run_npm_install(
     repo_path: Path,
     env: dict[str, str] | None,
     timeout: int = 300,
+    ignore_scripts: bool = True,
 ) -> None:
     """Run npm install to resolve upgraded dependencies cleanly in the workspace."""
     if os.environ.get("PYTEST_CURRENT_TEST"):
@@ -193,12 +194,15 @@ def _run_npm_install(
     _remove_node_modules(repo_path)
     print("   ↳ Running 'npm install' to resolve upgraded dependencies (this may take a minute)...", flush=True)
     start_t = time.time()
-    result = _run_with_heartbeat(
+    cmd = [
+        npm_cmd,
+        "install",
+        "--legacy-peer-deps",
+    ]
+    if ignore_scripts:
+        cmd.append("--ignore-scripts")
+    cmd.extend(
         [
-            npm_cmd,
-            "install",
-            "--legacy-peer-deps",
-            "--ignore-scripts",
             "--no-audit",
             "--no-fund",
             "--no-progress",
@@ -206,7 +210,10 @@ def _run_npm_install(
             "--fetch-retries=2",
             "--fetch-retry-mintimeout=3000",
             "--fetch-retry-maxtimeout=10000",
-        ],
+        ]
+    )
+    result = _run_with_heartbeat(
+        cmd,
         cwd=repo_path,
         env=env or os.environ.copy(),
         timeout=timeout,
@@ -225,12 +232,13 @@ def install_npm_dependencies(
     repo_path: Path,
     env: dict[str, str] | None = None,
     timeout: int = 300,
+    ignore_scripts: bool = True,
 ) -> None:
     """Install the updated manifest into this workspace, never a linked source tree."""
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return
 
-    _run_npm_install(repo_path, env, timeout)
+    _run_npm_install(repo_path, env, timeout, ignore_scripts=ignore_scripts)
 
 
 
@@ -239,6 +247,7 @@ def _regenerate_lockfile(
     npm_cmd: str,
     env: dict[str, str] | None,
     timeout: int = 90,
+    ignore_scripts: bool = True,
 ) -> bool:
     """Delete the old package-lock.json and regenerate it from package.json.
 
@@ -261,12 +270,16 @@ def _regenerate_lockfile(
 
         print("   ↳ Running 'npm install --package-lock-only' to generate clean lockfile...", flush=True)
         start_t = time.time()
-        result = _run_with_heartbeat(
+        cmd = [
+            npm_cmd,
+            "install",
+            "--package-lock-only",
+            "--legacy-peer-deps",
+        ]
+        if ignore_scripts:
+            cmd.append("--ignore-scripts")
+        cmd.extend(
             [
-                npm_cmd,
-                "install",
-                "--package-lock-only",
-                "--legacy-peer-deps",
                 "--no-audit",
                 "--no-fund",
                 "--no-progress",
@@ -274,7 +287,10 @@ def _regenerate_lockfile(
                 "--fetch-retries=2",
                 "--fetch-retry-mintimeout=3000",
                 "--fetch-retry-maxtimeout=10000",
-            ],
+            ]
+        )
+        result = _run_with_heartbeat(
+            cmd,
             cwd=repo_path,
             env=env or os.environ.copy(),
             timeout=timeout,
@@ -313,6 +329,7 @@ def update_npm_lockfile(
     repo_path: Path,
     changes: list[DependencyChange],
     env: dict[str, str] | None = None,
+    ignore_scripts: bool = True,
 ) -> bool:
     """Update package-lock.json for the given dependency changes.
 
@@ -333,7 +350,7 @@ def update_npm_lockfile(
         pkg_file = repo_path / "package.json"
         if pkg_file.exists():
             _remove_node_modules(repo_path)
-            if _regenerate_lockfile(repo_path, npm_cmd, env):
+            if _regenerate_lockfile(repo_path, npm_cmd, env, ignore_scripts=ignore_scripts):
                 return True
 
     # ── Strategy 2: Surgical patch (fallback) ────────────────────────────────

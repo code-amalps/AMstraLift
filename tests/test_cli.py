@@ -96,7 +96,8 @@ def test_cli_run_help_shows_test_options():
     result = runner.invoke(app, ["run", "--help"])
     assert result.exit_code == 0
     assert "--test-timeout" in result.stdout
-    assert "--allow-failed-gate" in result.stdout
+    assert "--allow-failed" in result.stdout
+    assert "--ignore-scripts" in result.stdout
 
 
 def test_cli_passes_skip_tests_and_timeout(tmp_path: Path, monkeypatch):

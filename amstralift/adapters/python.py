@@ -311,7 +311,7 @@ class PythonAdapter(BaseAdapter):
 
         return candidates
 
-    def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange]) -> None:
+    def apply_upgrade(self, repo_path: Path, changes: list[DependencyChange], ignore_scripts: bool = True) -> None:
         """Apply dependency updates to pyproject.toml or requirements.txt."""
         pyproject_file = repo_path / "pyproject.toml"
         if pyproject_file.exists():
@@ -382,22 +382,36 @@ class PythonAdapter(BaseAdapter):
         """Execute test gate (pytest/unittest) and optional lint gate."""
         results: list[GateResult] = []
         env = get_python_execution_env(repo_path)
-        pytest_bin = "pytest"
+        active_python = sys.executable
+        active_dir = Path(active_python).parent
+        pytest_exe_name = "pytest.exe" if sys.platform == "win32" else "pytest"
+        ruff_exe_name = "ruff.exe" if sys.platform == "win32" else "ruff"
+
+        pytest_bin = None
         if (repo_path / ".venv/Scripts/pytest.exe").exists():
             pytest_bin = str(repo_path / ".venv/Scripts/pytest.exe")
         elif (repo_path / ".venv/bin/pytest").exists():
             pytest_bin = str(repo_path / ".venv/bin/pytest")
+        elif shutil.which("pytest", path=env.get("PATH")):
+            pytest_bin = "pytest"
+        elif (active_dir / pytest_exe_name).exists():
+            pytest_bin = str(active_dir / pytest_exe_name)
+        else:
+            pytest_bin = f'"{active_python}" -m pytest'
 
         test_cmd = None
         if (repo_path / "tests").exists() or any(repo_path.glob("test_*.py")):
-            if shutil.which(pytest_bin) or shutil.which("pytest", path=env.get("PATH")):
-                test_cmd = pytest_bin
-            else:
-                test_cmd = "python -m unittest discover"
+            test_cmd = pytest_bin
+
+        lint_cmd = None
+        if shutil.which("ruff", path=env.get("PATH")):
+            lint_cmd = "ruff check ."
+        elif (active_dir / ruff_exe_name).exists():
+            lint_cmd = f'"{active_dir / ruff_exe_name}" check .'
 
         gates = [
             ("test", test_cmd, True),
-            ("lint", "ruff check ." if shutil.which("ruff", path=env.get("PATH")) else None, False),
+            ("lint", lint_cmd, False),
         ]
 
         for i, (gate_name, cmd, is_required) in enumerate(gates):
