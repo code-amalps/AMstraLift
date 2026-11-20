@@ -11,7 +11,7 @@
 [![Platform](https://img.shields.io/badge/CLI_Platform-Windows_%7C_Linux_%7C_macOS-lightgrey.svg)]()
 [![Binary](https://img.shields.io/badge/Standalone_EXE-Windows_x64-blue.svg)](https://github.com/code-amalps/AMstraLift/releases)
 [![Tests](https://github.com/code-amalps/AMstraLift/actions/workflows/tests.yml/badge.svg?branch=Dev)](https://github.com/code-amalps/AMstraLift/actions/workflows/tests.yml)
-[![Release](https://img.shields.io/badge/Release-v0.1.18-informational.svg)](https://github.com/code-amalps/AMstraLift/releases)
+[![Release](https://img.shields.io/badge/Release-v0.1.19-informational.svg)](https://github.com/code-amalps/AMstraLift/releases)
 [![Author](https://img.shields.io/badge/Author-Amal%20P%20S-black.svg)](https://github.com/code-amalps)
 
 ---
@@ -236,7 +236,13 @@ uv run amstralift audit --repo /path/to/your/project --mode preview
 # 5. Run a full modernization DRY-RUN
 uv run amstralift run --repo /path/to/your/project --dry-run
 
-# 6. Launch the Desktop GUI
+# 6. Run automated self-healing environment diagnostics & maintenance
+uv run amstralift doctor --fix
+
+# 7. Check for application version updates
+uv run amstralift update --check
+
+# 8. Launch the Desktop GUI
 uv run amstralift gui
 ```
 
@@ -274,6 +280,8 @@ To save you time, here is what AMstraLift **cannot** or does **not** do today:
 │   HMAC-SHA256 signature generated over:                │
 │   - Patch SHA-256                                      │
 │   - Base commit SHA & Head commit SHA                  │
+│   - Lockfile hashes before and after                   │
+│   - Frozen exact dependency resolutions                │
 │   - 6-Gate verification results & semantic diff        │
 │   - Execution timestamp & TTL                          │
 └──────────────────────────┬─────────────────────────────┘
@@ -312,7 +320,7 @@ The HMAC signing key is read from the `AMSTRALIFT_HMAC_SECRET` environment varia
 
 ## Testing Evidence
 
-AMstraLift is developed with strict test coverage across every adapter, security boundary, and verification gate:
+AMstraLift is developed with strict test coverage across every adapter, security boundary, verification gate, and self-healing subsystem:
 
 ```bash
 # Run the full test suite
@@ -320,16 +328,23 @@ uv run pytest
 ```
 
 ```text
-======================= 311 passed in 38.4s =======================
+======================= 380 passed in 52.4s =======================
 ```
 
 Key test suites included in the repository:
 - `tests/test_angular_adapter.py` — Angular version resolution, lockfile updates, and schematics
+- `tests/test_angular_self_closing.py` — Angular void tag and self-closing component AST transformer
+- `tests/test_angular_signals.py` — Signal `input()`, `output()`, and query migrations
+- `tests/test_angular_inject.py` — Constructor dependency injection to `inject()` function migration
 - `tests/test_modernize.py` — Control flow AST codemods and standalone component inference
+- `tests/test_resolved_versions.py` — Exact frozen dependency resolution across npm, .NET, and Python
 - `tests/test_gate_6_semantic_diff.py` — Route, symbol, and config contract preservation
 - `tests/test_safe_remediation.py` — OSV CVE discovery, dependency graph, and overrides
 - `tests/test_partial_modernization.py` — Transactional rollback and refusal integrity
 - `tests/test_crypto.py` — HMAC signing, tampering rejection, and TTL expiration
+- `tests/test_doctor.py` — System doctor health diagnostics and automated self-repair
+- `tests/test_self_update.py` — Release registry discovery, version comparison, and in-place self-update
+- `tests/test_gui_self_heal.py` — Desktop GUI background update check and 1-click self-heal pill
 - `tests/test_security.py` — Path traversal rejection, forbidden file filtering, symlink defense
 - `tests/test_monorepo.py` — Polyglot monorepo topology detection
 - `tests/test_scaffold.py` — Starter project templates and deep monorepo subproject discovery
@@ -356,7 +371,7 @@ AMstraLift is under active development by **Amal P S**. We are seeking developer
 
 ## Roadmap
 
-- **Generation 1 (Completed — v0.1.18)**: Multi-ecosystem upgrade engine, Angular AST modernization, 6 verification gates, OSV CVE remediation, HMAC attestation, GUI + REST API, monorepo discovery, starter scaffolding, standalone distribution.
+- **Generation 1 (Completed — v0.1.19)**: Multi-ecosystem upgrade engine, complete Angular AST modernization quartet (control flow, standalone, signals, inject, self-closing), 6 verification gates, OSV CVE remediation, exact resolved versions attestation, self-healing compiler configs, system doctor diagnostics & repairs (`amstralift doctor --fix`), in-place self-update engine (`amstralift update`), desktop GUI with silent background scanner and 1-click update/self-heal pill, monorepo discovery, turnkey CI templates, standalone distribution.
 - **Generation 2 (In Progress)**:
   - **P16**: Transformation Dependency Graph (modeling prerequisites, conflicts, and parallelizable sets).
   - **P17**: Modernization Planning Engine (declarative upgrade plans).

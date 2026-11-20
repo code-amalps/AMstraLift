@@ -5,6 +5,40 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.19] - 2026-11-20
+
+### Added
+- **Automated Self-Healing & System Diagnostics (`amstralift doctor`)**:
+  - Comprehensive health check covering core tools (Git SCM, Python 3.10+, Node.js/npm, .NET SDK, Docker), network registries (OSV.dev, npm, PyPI), and storage.
+  - Automated self-repair mode (`amstralift doctor --fix` / `--heal`): restores missing config directories, repairs corrupted configuration JSON with automatic `.corrupted_bak` backups, and purges orphaned Stage A temporary sandboxes from system temp.
+- **Automated Self-Update Engine (`amstralift self-update` / `amstralift update`)**:
+  - Live version synchronization checking PyPI and GitHub Releases with release note display (`--check`).
+  - In-place self-updating for Python packages and atomic Windows binary rotation (`amstralift_updater.bat`) with SHA-256 download checksum verification for standalone executables.
+- **Desktop GUI Self-Healing & Update Pill**:
+  - Silent, non-blocking background scanner on application startup (1.2s delay) that checks release registries and environment health without interrupting user workflows.
+  - High-visibility dynamic header pill (`✨ Update to vX.Y.Z` or `🩺 Self-Heal Ready`) offering 1-click automated update and repair.
+  - Dedicated `🩺 Doctor` button in Quick Actions toolbar streaming live health diagnostics to the terminal panel.
+- **Angular Self-Closing Tags Modernization (`--modernize self-closing` / `--modernize all`)**:
+  - Deterministic AST transformer converting void/empty custom component tags (`<app-card></app-card>` $\to$ `<app-card />`) across both `.html` files and inline TypeScript templates while strictly preserving standard HTML containers.
+- **Security & Attestation Step 3**:
+  - `--ignore-scripts / --no-ignore-scripts` flag preventing execution of untrusted package lifecycle scripts (`postinstall`, `preinstall`) during Stage A dependency installation.
+  - Frozen exact dependency snapshot engine (`resolved_versions.py`) capturing exact versions across manifests/lockfiles and cryptographically binding all resolved dependencies into the HMAC-SHA256 evidence bundle.
+- **Self-Healing Compiler & Runtime Configs**:
+  - Automatic `tsconfig.json` patches injecting `"skipLibCheck": true` during major upgrades to prevent third-party typing mismatches from failing build gates.
+  - Prunes obsolete TypeScript 5.5+ compiler options (`importsNotUsedAsValues`, `preserveValueImports`, `suppressImplicitAnyIndexErrors`, `baseUrl: "."`).
+- **REST API Endpoints**:
+  - Added `/api/v1/doctor`, `/api/v1/doctor/heal`, and `/api/v1/update/check`.
+
+### Fixed
+- **Scaffold Git Worktree Bleed**:
+  - Replaced recursive `rev-parse --is-inside-work-tree` with strict local directory `.git` check in `scaffold_starter_project`, ensuring nested scaffolds initialize their own self-contained git repository.
+- **Relative Path Resolution in Stage A Workspace**:
+  - Resolved `source_repo_path` and `target_workspace_path` to absolute paths before local git cloning on Windows.
+- **Tkinter Variable Cross-Thread Access in Python 3.14**:
+  - Ensured all UI variables (`StringVar.get()`, `BooleanVar.get()`) are captured on the main UI thread prior to spawning background worker threads, preventing `RuntimeError: main thread is not in main loop`.
+
+---
+
 ## [0.1.18] - 2026-10-14
 
 ### Added
