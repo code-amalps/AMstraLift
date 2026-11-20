@@ -1,5 +1,7 @@
 """Tests for security validation, path allowlists, and migration classifications."""
 
+from pathlib import Path
+
 import pytest
 
 from amstralift.core.security import (
