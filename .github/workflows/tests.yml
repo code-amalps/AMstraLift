@@ -71,13 +71,18 @@ jobs:
       - name: Publish Test Summary
         if: always()
         run: |
+          python -c '
+          import os
+          if os.path.exists("pytest_output.log"):
+              text = open("pytest_output.log", encoding="utf-8", errors="replace").read()
+              esc = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error title=Pytest Error Log::{esc}")
+          '
           echo "## Test Suite Results (${{ matrix.os }})" >> $GITHUB_STEP_SUMMARY
           if [ -f pytest_output.log ]; then
             echo '```' >> $GITHUB_STEP_SUMMARY
             tail -n 120 pytest_output.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No test log produced." >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Upload Test Output Log
