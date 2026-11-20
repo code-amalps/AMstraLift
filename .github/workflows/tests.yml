@@ -56,10 +56,33 @@ jobs:
 
       - name: Run Test Suite (Linux)
         if: runner.os == 'Linux'
+        id: test_linux
         run: |
-          xvfb-run -a uv run pytest -v
+          xvfb-run -a uv run pytest -v --tb=short 2>&1 | tee pytest_output.log
+        continue-on-error: true
 
       - name: Run Test Suite (Windows / macOS)
         if: runner.os != 'Linux'
+        id: test_other
         run: |
-          uv run pytest -v
+          uv run pytest -v --tb=short 2>&1 | tee pytest_output.log
+        continue-on-error: true
+
+      - name: Report Failures to Annotations
+        if: always()
+        run: |
+          python -c '
+          import os
+          if os.path.exists("pytest_output.log"):
+              lines = open("pytest_output.log", encoding="utf-8", errors="replace").readlines()
+              failed_lines = [l for l in lines if "FAILED " in l or "ERROR " in l]
+              summary = "".join(failed_lines) if failed_lines else "".join(lines[-40:])
+              esc = summary.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error title=Pytest Failures::{esc}")
+          '
+
+      - name: Validate Exit Status
+        run: |
+          if [ "${{ steps.test_linux.outcome }}" = "failure" ] || [ "${{ steps.test_other.outcome }}" = "failure" ]; then
+            exit 1
+          fi
