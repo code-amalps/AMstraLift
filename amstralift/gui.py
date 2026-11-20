@@ -184,6 +184,9 @@ class AMstraLiftGUI:
         self._apply_theme(self.current_theme)
         self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
 
+        # Silent, non-blocking background scan for app updates and environment self-healing
+        self.root.after(1200, self._start_silent_background_check)
+
     def _apply_window_icon(self) -> None:
         """Apply official AMstraLift branding icon to root window and dialogs."""
         self._icon_imgs: list[tk.PhotoImage] = []
@@ -282,7 +285,7 @@ class AMstraLiftGUI:
         )
         self.author_badge.pack(side=tk.LEFT, padx=(8, 0))
 
-        # Header Right: Theme Switcher
+        # Header Right: Theme Switcher & Update / Self-Heal Pill
         self.theme_btn = tk.Button(
             self.header_frame,
             text="☀️ Light Mode" if self.current_theme == "dark" else "🌙 Dark Mode",
@@ -294,6 +297,22 @@ class AMstraLiftGUI:
             command=self._toggle_theme,
         )
         self.theme_btn.pack(side=tk.RIGHT)
+
+        self.update_btn = tk.Button(
+            self.header_frame,
+            text="✨ Update Available",
+            font=("Segoe UI", 9, "bold"),
+            relief=tk.FLAT,
+            padx=12,
+            pady=4,
+            cursor="hand2",
+            bg="#10b981",
+            fg="#ffffff",
+            activebackground="#059669",
+            activeforeground="#ffffff",
+            command=self._trigger_gui_self_update_or_heal,
+        )
+        # Note: self.update_btn is initially unmapped; it displays when an update or self-heal is ready
 
         # ── Segmented Navigation Bar ─────────────────────────────────────────
         self.nav_frame = tk.Frame(self.root, padx=16, pady=4)
@@ -382,6 +401,18 @@ class AMstraLiftGUI:
             state="disabled",
         )
         self.git_status_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.doctor_btn = tk.Button(
+            self.quick_actions_frame,
+            text="🩺 Doctor",
+            font=("Segoe UI", 9),
+            relief=tk.FLAT,
+            padx=10,
+            pady=3,
+            cursor="hand2",
+            command=self._run_gui_doctor_diagnostics,
+        )
+        self.doctor_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         # Log toolbar buttons on right
         self.copy_log_btn = tk.Button(
@@ -1150,6 +1181,7 @@ class AMstraLiftGUI:
             self.open_folder_btn,
             self.open_code_btn,
             self.git_status_btn,
+            self.doctor_btn,
             self.copy_log_btn,
             self.save_log_btn,
             self.clear_log_btn,
@@ -1381,6 +1413,236 @@ class AMstraLiftGUI:
         self.cancellation_token.cancel()
         print("\n[ABORTED] Operation was aborted by user. Terminating active tasks...\n", file=sys.stderr)
         self.root.update_idletasks()
+
+    def _start_silent_background_check(self) -> None:
+        """Perform non-blocking background check for updates and self-healing issues without interrupting user."""
+        def _scan_worker():
+            try:
+                from amstralift.core.doctor import DoctorEngine
+                from amstralift.core.self_update import SelfUpdater
+
+                update_res = SelfUpdater.check_for_updates(timeout=3.5)
+                doctor = DoctorEngine()
+                report = doctor.diagnose_and_heal(auto_fix=False)
+                has_repairable = any(item.repairable for item in report.items)
+
+                self.root.after(0, lambda: self._on_background_scan_complete(update_res, has_repairable, report))
+            except Exception as exc:
+                logger.debug("Background health scan exception: %s", exc)
+
+        threading.Thread(target=_scan_worker, daemon=True).start()
+
+    def _on_background_scan_complete(self, update_res, has_repairable: bool, report) -> None:
+        self._last_update_res = update_res
+        self._last_doctor_report = report
+
+        if update_res and update_res.update_available:
+            self.update_btn.configure(
+                text=f"✨ Update to v{update_res.latest_version}",
+                bg="#10b981",
+                fg="#ffffff",
+                activebackground="#059669",
+                activeforeground="#ffffff",
+            )
+            self.update_btn.pack(side=tk.RIGHT, padx=(0, 10), before=self.theme_btn)
+        elif has_repairable:
+            self.update_btn.configure(
+                text="🩺 Self-Heal Ready",
+                bg="#06b6d4",
+                fg="#ffffff",
+                activebackground="#0891b2",
+                activeforeground="#ffffff",
+            )
+            self.update_btn.pack(side=tk.RIGHT, padx=(0, 10), before=self.theme_btn)
+
+    def _trigger_gui_self_update_or_heal(self) -> None:
+        """Handle 1-click update or self-healing action."""
+        if self.is_running:
+            messagebox.showwarning("Operation In Progress", "Please wait for the current operation to complete.", parent=self.root)
+            return
+
+        is_update = getattr(self, "_last_update_res", None) and self._last_update_res.update_available
+
+        if is_update:
+            target_ver = self._last_update_res.latest_version
+            confirm = messagebox.askyesno(
+                "AMstraLift Update Available",
+                f"A new version of AMstraLift (v{target_ver}) is available.\n\n"
+                f"Current Installed: v{__version__}\n\n"
+                "Would you like AMstraLift to download, verify, and apply this update now?",
+                parent=self.root,
+            )
+            if not confirm:
+                return
+
+            self._clear_log()
+            self._set_running_state(True, f"Updating AMstraLift to v{target_ver}...", 20)
+
+            def _update_worker():
+                old_stdout = sys.stdout
+                old_stderr = sys.stderr
+                redirector = TextRedirector(self.log_text, "stdout")
+                sys.stdout = redirector
+                sys.stderr = redirector
+                try:
+                    from amstralift.core.doctor import DoctorEngine
+                    from amstralift.core.self_update import SelfUpdater
+
+                    print(f"Starting automated self-update to AMstraLift v{target_ver}...\n")
+                    success, msg = SelfUpdater.execute_update(
+                        target_version=target_ver,
+                        progress_callback=lambda m: print(f"  ↳ {m}"),
+                    )
+                    print("\nRunning post-update self-healing diagnostics...")
+                    doc = DoctorEngine()
+                    rep = doc.diagnose_and_heal(auto_fix=True)
+                    for r in rep.repairs_applied:
+                        print(f"  🔧 {r}")
+
+                    if success:
+                        print(f"\n✔ {msg}")
+                        self.root.after(0, lambda: self._set_running_state(False, "✔ Update complete.", 100))
+                        self.root.after(0, lambda: self.update_btn.pack_forget())
+                        self.root.after(
+                            0,
+                            lambda: messagebox.showinfo(
+                                "Update Complete",
+                                f"{msg}\n\nSelf-healing completed. Restart AMstraLift to run on the new version.",
+                                parent=self.root,
+                            ),
+                        )
+                    else:
+                        print(f"\n✖ {msg}", file=sys.stderr)
+                        self.root.after(0, lambda: self._set_running_state(False, f"Update failed: {msg}", 0))
+                        self.root.after(0, lambda: messagebox.showerror("Update Error", msg, parent=self.root))
+                except Exception as exc:
+                    err = str(exc)
+                    print(f"\n[Error] Update failed: {err}", file=sys.stderr)
+                    self.root.after(0, lambda: self._set_running_state(False, f"Error: {err}", 0))
+                    self.root.after(0, lambda: messagebox.showerror("Update Error", err, parent=self.root))
+                finally:
+                    sys.stdout = old_stdout
+                    sys.stderr = old_stderr
+
+            threading.Thread(target=_update_worker, daemon=True).start()
+
+        else:
+            confirm = messagebox.askyesno(
+                "AMstraLift Self-Healing",
+                "AMstraLift detected configuration or temporary cache maintenance is required.\n\n"
+                "Would you like AMstraLift to automatically self-heal and optimize its environment now?",
+                parent=self.root,
+            )
+            if not confirm:
+                return
+
+            self._clear_log()
+            self._set_running_state(True, "Executing automated self-healing...", 30)
+
+            def _heal_worker():
+                old_stdout = sys.stdout
+                old_stderr = sys.stderr
+                redirector = TextRedirector(self.log_text, "stdout")
+                sys.stdout = redirector
+                sys.stderr = redirector
+                try:
+                    from amstralift.core.doctor import DoctorEngine
+
+                    print("Executing AMstraLift self-healing engine...\n")
+                    doc = DoctorEngine()
+                    rep = doc.diagnose_and_heal(auto_fix=True)
+                    if rep.repairs_applied:
+                        for r in rep.repairs_applied:
+                            print(f"  🔧 {r}")
+                        print("\n✔ All self-healing repairs successfully applied!")
+                    else:
+                        print("✔ Environment is clean and healthy. No repairs needed.")
+
+                    self.root.after(0, lambda: self._set_running_state(False, "✔ Self-healing complete.", 100))
+                    self.root.after(0, lambda: self.update_btn.pack_forget())
+                    self.root.after(
+                        0,
+                        lambda: messagebox.showinfo(
+                            "Self-Healing Complete",
+                            f"Successfully applied {len(rep.repairs_applied)} repair(s).\n\nEnvironment is optimized.",
+                            parent=self.root,
+                        ),
+                    )
+                except Exception as exc:
+                    err = str(exc)
+                    print(f"\n[Error] Self-healing failed: {err}", file=sys.stderr)
+                    self.root.after(0, lambda: self._set_running_state(False, f"Error: {err}", 0))
+                finally:
+                    sys.stdout = old_stdout
+                    sys.stderr = old_stderr
+
+            threading.Thread(target=_heal_worker, daemon=True).start()
+
+    def _run_gui_doctor_diagnostics(self) -> None:
+        """Run and display doctor diagnostics in terminal panel."""
+        if self.is_running:
+            messagebox.showwarning("Operation In Progress", "Please wait for current operation to complete.", parent=self.root)
+            return
+
+        self._clear_log()
+        self._set_running_state(True, "Running system health diagnostics...", 20)
+
+        def _doc_worker():
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            redirector = TextRedirector(self.log_text, "stdout")
+            sys.stdout = redirector
+            sys.stderr = redirector
+            try:
+                from rich.console import Console
+                from rich.table import Table
+
+                from amstralift.core.doctor import CheckStatus, DoctorEngine
+
+                console = Console(file=redirector, force_terminal=True, color_system=None)
+                doc = DoctorEngine()
+                rep = doc.diagnose_and_heal(auto_fix=False)
+
+                table = Table(
+                    title="🩺 AMstraLift System Health & Self-Healing Diagnostics",
+                    show_header=True,
+                    header_style="bold cyan",
+                    border_style="dim",
+                )
+                table.add_column("Category", style="dim", no_wrap=True)
+                table.add_column("Check Component", style="bold", no_wrap=True)
+                table.add_column("Status", justify="center", no_wrap=True)
+                table.add_column("Details & Guidance", style="white")
+
+                for item in rep.items:
+                    if item.status == CheckStatus.OK:
+                        st = "✔ OK"
+                    elif item.status == CheckStatus.REPAIRED:
+                        st = "🔧 REPAIRED"
+                    elif item.status == CheckStatus.WARNING:
+                        st = "⚠️ WARNING"
+                    else:
+                        st = "✖ ERROR"
+                    msg = item.message
+                    if item.details:
+                        msg += f"\n{item.details}"
+                    table.add_row(item.category, item.name, st, msg)
+
+                console.print(table)
+                if any(i.repairable for i in rep.items):
+                    console.print(
+                        "\n[bold yellow]Action required:[/bold yellow] Click the '🩺 Self-Heal Ready' button in the header or run 'amstralift doctor --fix' to auto-repair."
+                    )
+
+                self.root.after(0, lambda: self._set_running_state(False, "✔ Diagnostics complete.", 100))
+            except Exception as exc:
+                print(f"[Error] Diagnostics failed: {exc}", file=sys.stderr)
+                self.root.after(0, lambda: self._set_running_state(False, "Diagnostics failed.", 0))
+            finally:
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+
+        threading.Thread(target=_doc_worker, daemon=True).start()
 
     def _execute_upgrade(self):
         repo_path_str = self.upgrade_repo_var.get().strip()
