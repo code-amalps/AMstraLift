@@ -114,6 +114,10 @@ Repository Inspection ──► Dependency DAG (P16) ──► Modernization Pla
    - Discovers multi-repository enterprise fleets, extracting cross-repo consumer-provider dependencies across Angular, React, .NET, and Python.
    - Resolves directed inter-repo dependency graphs, validates DAG acyclicity, detects circular repo dependencies (`InterRepoCycleError`), and partitions modernization campaigns into parallelizable execution waves (shared libraries/providers first in Wave 1, followed by downstream consumer services).
    - Generates deterministic campaign plans with cross-repo dependency matrices and JSON/YAML export.
+7. **Modernization Campaign Engine (`amstralift campaign init` / `amstralift campaign run` / `amstralift campaign status` / `amstralift campaign report`)**:
+   - Turns individual repository modernizations into organization-wide campaigns across hundreds of repositories.
+   - Calculates comprehensive executive KPIs: upgrade success rate, policy refusal rate, CVE reduction percentage, EOL elimination percentage, engineering person-hours saved, and mean verification time.
+   - Exports executive Markdown and JSON reports for engineering leadership, CTO dashboards, and compliance governance.
 
 ---
 
@@ -303,7 +307,13 @@ uv run amstralift fleet scan --dir ./enterprise-repos
 uv run amstralift fleet graph --dir ./enterprise-repos
 uv run amstralift fleet plan --dir ./enterprise-repos --target 18
 
-# 14. Launch the Desktop GUI
+# 14. Launch Modernization Campaigns (P22 org-wide campaigns, dashboard metrics, and executive reports)
+uv run amstralift campaign init --name "Q1 2027 Modernization" --dir ./enterprise-repos
+uv run amstralift campaign run --dir ./enterprise-repos --dry-run
+uv run amstralift campaign status --dir ./enterprise-repos
+uv run amstralift campaign report --dir ./enterprise-repos -o campaign-report.md
+
+# 15. Launch the Desktop GUI
 uv run amstralift gui
 ```
 

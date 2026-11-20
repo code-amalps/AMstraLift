@@ -8,6 +8,23 @@ This project follows [Semantic Versioning](https://semver.org/).
 ## [0.3.0] - 2026-11-20
 
 ### Added
+- **P22 — Modernization Campaign Engine (`amstralift.campaign`)**:
+  - Organization-wide modernization campaign orchestration engine (`CampaignEngine`) turning individual repository upgrades into coordinated fleet campaigns.
+  - Deterministic executive KPI and dashboard metrics engine (`CampaignMetricsCalculator`) calculating:
+    - Repository modernization status breakdowns (Modernized, Partial, Refused, Failed, Pending).
+    - Upgrade success rate and policy refusal rate percentages.
+    - CVE vulnerability reduction percentages (baseline vs remaining).
+    - End-of-Life (EOL) framework elimination percentages.
+    - Estimated engineering person-hours saved based on industry standard manual modernization benchmarks.
+    - Mean sandbox verification runtime duration (`Xm Ys`).
+    - Partitioned ecosystem-level metrics across Angular, React, .NET, and Python.
+  - Wave-by-wave campaign simulation and execution runner resolving dependencies in topological wave sequence.
+  - Enterprise campaign persistence store (`CampaignStore`) saving campaign state to `.amstralift/campaigns/` and exporting comprehensive executive Markdown reports.
+- **CLI Modernization Campaign Engine (`amstralift campaign`)**:
+  - `amstralift campaign init`: Scaffolds a new campaign across fleet repositories with targeted framework version goals.
+  - `amstralift campaign run`: Simulates or executes campaigns wave by wave with live dashboard metrics and ecosystem breakdowns.
+  - `amstralift campaign status`: Displays current executive campaign health, repository progress overview, and KPI summaries.
+  - `amstralift campaign report`: Generates and exports executive-ready Markdown and JSON compliance reports.
 - **P21 — Multi-Repository Modernization (`amstralift.multirepo`)**:
   - Enterprise multi-repository fleet discovery and dependency analysis engine (`FleetScanner`) supporting polyglot fleets containing Angular, React, .NET, and Python repositories.
   - Automatic extraction and cross-referencing of package exports (npm `package.json`, NuGet `.csproj` PackageIds/assemblies, Python `pyproject.toml` project names) and consumed imports across repositories.

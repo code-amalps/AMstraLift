@@ -50,6 +50,7 @@ def suppress_console_for_gui() -> None:
             "policy",
             "fleet",
             "multirepo",
+            "campaign",
         }
         if any(a in cli_commands for a in args):
             return
@@ -1901,6 +1902,315 @@ def fleet_plan_cmd(
             matrix_table.add_row(r_id, prereq_str)
 
         console.print(matrix_table)
+
+
+campaign_app = typer.Typer(
+    name="campaign",
+    help="Organization-wide Modernization Campaign Engine (P22).",
+    no_args_is_help=True,
+)
+app.add_typer(campaign_app, name="campaign")
+
+
+@campaign_app.command("init")
+def campaign_init_cmd(
+    name: Annotated[
+        str,
+        typer.Option("--name", "-n", help="Campaign title (e.g. 'Q1 2027 Modernization')."),
+    ] = "Organization Modernization Campaign",
+    directory: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Base directory containing repositories or fleet manifest."),
+    ] = Path("."),
+    manifest: Annotated[
+        Optional[Path],
+        typer.Option("--manifest", "-m", help="Path to declarative fleet.yaml manifest."),
+    ] = None,
+    target_angular: Annotated[
+        Optional[int],
+        typer.Option("--target-angular", help="Target major version for Angular repositories."),
+    ] = 18,
+    target_dotnet: Annotated[
+        Optional[int],
+        typer.Option("--target-dotnet", help="Target major version for .NET repositories."),
+    ] = 9,
+    target_react: Annotated[
+        Optional[int],
+        typer.Option("--target-react", help="Target major version for React repositories."),
+    ] = 19,
+    output_file: Annotated[
+        Optional[Path],
+        typer.Option("--output", "-o", help="Target path to save campaign definition JSON."),
+    ] = None,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output campaign definition as raw JSON."),
+    ] = False,
+):
+    """Scaffold a new organization-wide modernization campaign across fleet repositories (P22)."""
+    from rich.panel import Panel
+
+    from amstralift.campaign import CampaignEngine, CampaignStore
+
+    if not directory.is_dir():
+        console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {directory.resolve()}")
+        raise typer.Exit(code=1)
+
+    targets: dict[str, int] = {}
+    if target_angular:
+        targets["angular"] = target_angular
+    if target_dotnet:
+        targets["dotnet"] = target_dotnet
+    if target_react:
+        targets["react"] = target_react
+
+    campaign = CampaignEngine.init_campaign(
+        name=name,
+        fleet_root=directory,
+        targets=targets,
+        manifest_path=manifest,
+    )
+
+    saved_path = CampaignStore.save(campaign, file_path=output_file, base_dir=directory)
+
+    if as_json:
+        typer.echo(campaign.model_dump_json(indent=2))
+        return
+
+    console.print(
+        Panel(
+            f"[bold]Campaign ID:[/bold] [cyan]{campaign.campaign_id}[/cyan]\n"
+            f"[bold]Title:[/bold] [white]{campaign.name}[/white]\n"
+            f"[bold]Status:[/bold] [yellow]{campaign.status.value.upper()}[/yellow]\n"
+            f"[bold]Participating Repositories:[/bold] [green]{len(campaign.repository_records)}[/green]\n"
+            f"[bold]Targets:[/bold] [magenta]{', '.join(f'{k.upper()}: {v}' for k, v in campaign.targets.items())}[/magenta]\n"
+            f"[bold]Campaign Saved To:[/bold] [cyan]{saved_path.resolve()}[/cyan]",
+            title="Modernization Campaign Initialized (P22) — Engineered by Amal P S",
+            border_style="magenta",
+        )
+    )
+
+
+@campaign_app.command("run")
+def campaign_run_cmd(
+    campaign_ref: Annotated[
+        Optional[str],
+        typer.Option("--campaign", "-c", help="Campaign ID or path to campaign JSON file."),
+    ] = None,
+    directory: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Base directory containing repositories."),
+    ] = Path("."),
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run/--execute", help="Simulate campaign modernization vs live execution."),
+    ] = True,
+    output_file: Annotated[
+        Optional[Path],
+        typer.Option("--output", "-o", help="Target path to save updated campaign state."),
+    ] = None,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output execution results as raw JSON."),
+    ] = False,
+):
+    """Execute or simulate an organization-wide modernization campaign wave by wave (P22)."""
+    from rich.panel import Panel
+    from rich.table import Table
+
+    from amstralift.campaign import CampaignEngine, CampaignStore
+
+    if campaign_ref:
+        campaign = CampaignStore.load(campaign_ref, base_dir=directory)
+    else:
+        # Check if an existing campaign is in .amstralift/campaigns/
+        existing = CampaignStore.list_campaigns(base_dir=directory)
+        if existing:
+            campaign = existing[0]
+        else:
+            campaign = CampaignEngine.init_campaign(
+                name="Fleet Modernization Campaign",
+                fleet_root=directory,
+            )
+
+    updated_campaign = CampaignEngine.run_campaign(campaign, dry_run=dry_run)
+    saved_path = CampaignStore.save(updated_campaign, file_path=output_file, base_dir=directory)
+
+    if as_json:
+        typer.echo(updated_campaign.model_dump_json(indent=2))
+        return
+
+    m = updated_campaign.metrics
+    mode_badge = "[bold yellow][DRY-RUN SIMULATION][/bold yellow]" if dry_run else "[bold green][LIVE EXECUTION][/bold green]"
+
+    console.print(
+        Panel(
+            f"[bold]Campaign:[/bold] [white]{updated_campaign.name}[/white] {mode_badge}\n"
+            f"[bold]Campaign ID:[/bold] [cyan]{updated_campaign.campaign_id}[/cyan] | [bold]Status:[/bold] [green]{updated_campaign.status.value.upper()}[/green]\n"
+            f"[bold]Total Repositories:[/bold] [cyan]{m.total_repos}[/cyan] | [bold]Modernized:[/bold] [green]{m.modernized_count}[/green] | [bold]Partial:[/bold] [yellow]{m.partial_count}[/yellow] | [bold]Refused:[/bold] [red]{m.refused_count}[/red] | [bold]Failed:[/bold] [bold red]{m.failed_count}[/bold red]\n"
+            f"[bold]Upgrade Success Rate:[/bold] [green]{m.upgrade_success_rate}%[/green] | [bold]Refusal Rate:[/bold] [yellow]{m.refusal_rate}%[/yellow]\n"
+            f"[bold]CVE Reduction:[/bold] [bold green]{m.cve_reduction_pct}%[/bold green] ({m.total_cves_before} → {m.total_cves_after})\n"
+            f"[bold]EOL Reduction:[/bold] [bold green]{m.eol_reduction_pct}%[/bold green] ({m.eol_repos_before} → {m.eol_repos_after})\n"
+            f"[bold]Engineering Hours Saved:[/bold] [bold magenta]{m.engineering_hours_saved:,.1f} hrs[/bold magenta]\n"
+            f"[bold]Mean Verification Time:[/bold] [cyan]{m.mean_verification_time_display}[/cyan]",
+            title="Modernization Campaign Dashboard (P22) — Engineered by Amal P S",
+            border_style="green",
+        )
+    )
+
+    if m.ecosystem_breakdown:
+        eco_table = Table(
+            title="Ecosystem Breakdown",
+            header_style="bold cyan",
+            border_style="dim",
+        )
+        eco_table.add_column("Ecosystem", style="bold magenta")
+        eco_table.add_column("Total Repos", style="white")
+        eco_table.add_column("Modernized", style="green")
+        eco_table.add_column("Partial", style="yellow")
+        eco_table.add_column("Refused", style="red")
+        eco_table.add_column("Failed", style="bold red")
+        eco_table.add_column("CVEs Eliminated", style="cyan")
+        eco_table.add_column("Hours Saved", style="bold green")
+
+        for eco_name, em in sorted(m.ecosystem_breakdown.items()):
+            eco_table.add_row(
+                eco_name.upper(),
+                str(em.total_repos),
+                str(em.modernized),
+                str(em.partial),
+                str(em.refused),
+                str(em.failed),
+                str(em.cves_eliminated),
+                f"{em.hours_saved:,.1f} hrs",
+            )
+        console.print(eco_table)
+
+
+@campaign_app.command("status")
+def campaign_status_cmd(
+    campaign_ref: Annotated[
+        Optional[str],
+        typer.Option("--campaign", "-c", help="Campaign ID or path to campaign JSON file."),
+    ] = None,
+    directory: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Base directory containing campaigns."),
+    ] = Path("."),
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output campaign status as raw JSON."),
+    ] = False,
+):
+    """View executive status and dashboard KPIs of a modernization campaign (P22)."""
+    from rich.panel import Panel
+    from rich.table import Table
+
+    from amstralift.campaign import CampaignStore
+
+    if campaign_ref:
+        campaign = CampaignStore.load(campaign_ref, base_dir=directory)
+    else:
+        campaigns = CampaignStore.list_campaigns(base_dir=directory)
+        if not campaigns:
+            console.print("[yellow]⚠ No active or recorded campaigns found. Run 'amstralift campaign init' first.[/yellow]")
+            return
+        campaign = campaigns[0]
+
+    if as_json:
+        typer.echo(campaign.model_dump_json(indent=2))
+        return
+
+    m = campaign.metrics
+    console.print(
+        Panel(
+            f"[bold]Campaign Name:[/bold] [white]{campaign.name}[/white]\n"
+            f"[bold]Campaign ID:[/bold] [cyan]{campaign.campaign_id}[/cyan]\n"
+            f"[bold]Charter:[/bold] {campaign.description or 'None provided.'}\n"
+            f"[bold]Status:[/bold] [green]{campaign.status.value.upper()}[/green]\n"
+            f"[bold]Total Fleet Repositories:[/bold] [cyan]{m.total_repos}[/cyan]\n"
+            f"[bold]Modernized / In Progress:[/bold] [green]{m.modernized_count + m.partial_count}[/green] / {m.total_repos}\n"
+            f"[bold]Upgrade Success Rate:[/bold] [bold green]{m.upgrade_success_rate}%[/bold green]\n"
+            f"[bold]CVE Reduction:[/bold] [bold green]{m.cve_reduction_pct}%[/bold green] ({m.total_cves_before} → {m.total_cves_after})\n"
+            f"[bold]EOL Reduction:[/bold] [bold green]{m.eol_reduction_pct}%[/bold green] ({m.eol_repos_before} → {m.eol_repos_after})\n"
+            f"[bold]Engineering Hours Saved:[/bold] [bold magenta]{m.engineering_hours_saved:,.1f} hrs[/bold magenta]\n"
+            f"[bold]Mean Sandbox Verification Time:[/bold] [cyan]{m.mean_verification_time_display}[/cyan]",
+            title="Modernization Campaign Status (P22) — Engineered by Amal P S",
+            border_style="cyan",
+        )
+    )
+
+    table = Table(
+        title="Repository Progress Overview",
+        header_style="bold cyan",
+        border_style="dim",
+    )
+    table.add_column("Repository ID", style="bold green", no_wrap=True)
+    table.add_column("Ecosystem", style="cyan")
+    table.add_column("Starting Ver", style="white")
+    table.add_column("Target Ver", style="yellow")
+    table.add_column("Status", style="bold")
+    table.add_column("Wave", style="magenta")
+    table.add_column("CVEs (Bef → Aft)", style="white")
+    table.add_column("Runtime", style="dim")
+
+    for r_id, r in sorted(campaign.repository_records.items()):
+        status_color = (
+            "green"
+            if r.status.value == "modernized"
+            else ("yellow" if r.status.value == "partial" else ("red" if r.status.value in ("failed", "refused") else "white"))
+        )
+        cve_str = f"{r.cves_before} → {r.cves_after}"
+        table.add_row(
+            r_id,
+            r.ecosystem.upper(),
+            r.initial_version or "unknown",
+            r.target_version or "latest",
+            f"[{status_color}]{r.status.value.upper()}[/{status_color}]",
+            f"Wave {r.wave_number}",
+            cve_str,
+            f"{r.verification_time_seconds:.1f}s",
+        )
+    console.print(table)
+
+
+@campaign_app.command("report")
+def campaign_report_cmd(
+    campaign_ref: Annotated[
+        Optional[str],
+        typer.Option("--campaign", "-c", help="Campaign ID or path to campaign JSON file."),
+    ] = None,
+    directory: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Base directory containing campaigns."),
+    ] = Path("."),
+    output_file: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Target markdown file path for executive report."),
+    ] = Path("campaign-report.md"),
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output report metrics as raw JSON."),
+    ] = False,
+):
+    """Export comprehensive executive Markdown report of a campaign (P22)."""
+    from amstralift.campaign import CampaignStore
+
+    if campaign_ref:
+        campaign = CampaignStore.load(campaign_ref, base_dir=directory)
+    else:
+        campaigns = CampaignStore.list_campaigns(base_dir=directory)
+        if not campaigns:
+            console.print("[bold red]✖ Error:[/bold red] No campaigns found to report on.")
+            raise typer.Exit(code=1)
+        campaign = campaigns[0]
+
+    if as_json:
+        typer.echo(campaign.metrics.model_dump_json(indent=2))
+        return
+
+    report_path = CampaignStore.export_markdown_report(campaign, output_path=output_file)
+    console.print(f"[bold green]✔ Executive campaign report exported successfully to:[/bold green] {report_path.resolve()}")
 
 
 @app.command()
