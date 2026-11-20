@@ -110,18 +110,41 @@ Repository Inspection ──► Dependency DAG (P16) ──► Modernization Pla
 5. **Enterprise Policy-as-Code (`amstralift policy init` / `amstralift policy check`)**:
    - Declarative `policy.yaml` configuration enforcing corporate governance (major version jump limits, EOL horizons), risk tolerances, vulnerability thresholds (CVE blocking), and public API symbol preservation.
    - Evaluates plans with deterministic `ALLOW`, `REVIEW`, and `BLOCK` verdicts, safely halting runs upon policy violations.
-6. **Multi-Repository Modernization & Fleet Orchestration (`amstralift fleet scan` / `amstralift fleet graph` / `amstralift fleet plan`)**:
+
+---
+
+## Generation 3: Enterprise Scale & Fleet Modernization (v0.3.0)
+
+AMstraLift Generation 3 expands modernization from single-project workflows to organization-wide enterprise fleets, coordinated campaigns, risk-based human approvals, and cryptographic provenance graphs:
+
+```text
+Fleet Discovery (P21) ──► Cross-Repo DAG Waves ──► Campaign Engine (P22)
+                                                         │
+┌────────────────────────────────────────────────────────┴───────────────────────────┐
+│ Human Approval Workflow (P23)  ──> SAFE / REVIEW / BLOCK with HMAC Decision Sign-off │
+│ Supply-Chain Provenance (P24)  ──> SLSA v1.0 & in-toto Signed Transformation Lineage │
+└────────────────────────────────────────────────────────┬───────────────────────────┘
+                                                         ▼
+                                            Attested Enterprise Fleet
+```
+
+1. **Multi-Repository Modernization & Fleet Orchestration (`amstralift fleet scan` / `amstralift fleet graph` / `amstralift fleet plan`) (P21)**:
    - Discovers multi-repository enterprise fleets, extracting cross-repo consumer-provider dependencies across Angular, React, .NET, and Python.
    - Resolves directed inter-repo dependency graphs, validates DAG acyclicity, detects circular repo dependencies (`InterRepoCycleError`), and partitions modernization campaigns into parallelizable execution waves (shared libraries/providers first in Wave 1, followed by downstream consumer services).
    - Generates deterministic campaign plans with cross-repo dependency matrices and JSON/YAML export.
-7. **Modernization Campaign Engine (`amstralift campaign init` / `amstralift campaign run` / `amstralift campaign status` / `amstralift campaign report`)**:
+2. **Modernization Campaign Engine (`amstralift campaign init` / `amstralift campaign run` / `amstralift campaign status` / `amstralift campaign report`) (P22)**:
    - Turns individual repository modernizations into organization-wide campaigns across hundreds of repositories.
    - Calculates comprehensive executive KPIs: upgrade success rate, policy refusal rate, CVE reduction percentage, EOL elimination percentage, engineering person-hours saved, and mean verification time.
    - Exports executive Markdown and JSON reports for engineering leadership, CTO dashboards, and compliance governance.
-8. **Human Approval Workflow (`amstralift approve list` / `amstralift approve check` / `amstralift approve accept` / `amstralift approve reject`)**:
+3. **Human Approval Workflow (`amstralift approve list` / `amstralift approve check` / `amstralift approve accept` / `amstralift approve reject`) (P23)**:
    - Maps modernization plans into three risk-tiered governance categories: `SAFE` (automatic PR merge), `REVIEW` (human approval required), and `BLOCK` (critical boundary halt).
    - Evaluates triggers including API breaking contract changes (Gate 6 route/symbol removal), database migration mutations, multi-major version jumps, and enterprise policy flags.
    - Maintains a persistent review queue in `.amstralift/approvals/` and cryptographically seals human review sign-offs with HMAC-SHA256 decision attestation signatures.
+4. **Supply-Chain Attestation & Provenance Graph (`amstralift provenance`) (P24 — Upcoming)**:
+   - Implements SLSA v1.0 and in-toto compliant provenance envelopes capturing source git commit, tool version, policy hash, dependency state, and 6-gate verification receipts.
+   - Fine-grained transformation lineage mapping every altered file and AST node back to authorizing rules and human approval signatures.
+   - Forensic "Six-Months-Later" audit engine answering *"Why was this code changed?"* with cryptographic proofs and non-repudiation.
+
 
 ---
 
@@ -409,10 +432,13 @@ uv run pytest
 ```
 
 ```text
-======================= 443 passed in 58.2s =======================
+======================= 494 passed in 58.2s =======================
 ```
 
 Key test suites included in the repository:
+- `tests/test_approvals.py` — Human Approval Workflow, risk classification, trigger evaluation, cryptographic HMAC decision attestation (P23)
+- `tests/test_campaign.py` — Modernization Campaign Engine, executive KPIs, CVE/EOL reduction metrics, Markdown reports (P22)
+- `tests/test_multirepo.py` — Multi-Repository Modernization, cross-repo provider/consumer DAG, topological waves, cycle detection (P21)
 - `tests/test_transformation_graph.py` — Transformation Dependency Graph (DAG), Kahn topological waves, rollback blast radius (P16)
 - `tests/test_modernization_planner.py` — Declarative modernization planning engine, risk classification, canonical phases (P17)
 - `tests/test_conflict_detector.py` — Pre-execution cross-transformation conflict detection, symbol/file collision resolution (P18)
@@ -464,10 +490,17 @@ AMstraLift is under active development by **Amal P S**. We are seeking developer
   - **P18 (Completed)**: Pre-execution Cross-Transformation Conflict Detection (detects and resolves file, symbol, and config collisions before modifying files via `amstralift conflicts`).
   - **P19 (Completed)**: Resumable / Checkpointed Modernization (persistent phase checkpointing with SHA-256 evidence integrity and instant recovery via `amstralift resume` and `amstralift checkpoints`).
   - **P20 (Completed)**: Policy-as-Code (declarative enterprise rules for major jump limits, AST risk tolerance, CVE blocking, and API symbol protection via `amstralift policy check` and `amstralift policy init`).
-- **Generation 3 (Next Horizon)**: Enterprise Scale
-  - **P21**: Multi-Repository Modernization Campaigns (cross-repo dependency graphs, mass fleet modernizations).
-  - **P22**: Runtime Verification in Sandbox (canary execution, integration smoke testing).
-  - **P23**: Organization Governance & Team Ownership Routing.
+- **Generation 3 (In Progress — v0.3.0)**: Enterprise Scale
+  - **P21 (Completed)**: Multi-Repository Modernization (cross-repo dependency graphs, provider/consumer detection, topological waves, cycle validation via `amstralift fleet`).
+  - **P22 (Completed)**: Modernization Campaign Engine (organization-wide upgrade campaigns, executive dashboard KPIs, CVE/EOL reduction tracking, engineering hours saved, Markdown report generation via `amstralift campaign`).
+  - **P23 (Completed)**: Human Approval Workflow (risk classification into `SAFE`/`REVIEW`/`BLOCK`, trigger analysis for API breaking changes, database migrations, multi-major jumps, persistent review queue, and HMAC-SHA256 reviewer decision attestation via `amstralift approve`).
+  - **P24 (Next Horizon)**: Supply-Chain Attestation & Provenance Graph (in-toto and SLSA v1.0-style provenance, signed software bill of materials, cryptographic transformation lineage).
+  - **P25**: Semantic Risk Engine (Gate 6 quantitative risk scoring from pass/fail $\to$ risk quantification).
+  - **P26**: Runtime Verification (proving behavioral equivalence in sandbox deployment with synthetic traffic).
+  - **P27**: Pattern Mining Engine (unsupervised discovery of repeated legacy patterns across corporate fleets).
+  - **P28**: Self-Learning Transformation Library (evidence corpus pattern extraction into trusted deterministic rules).
+  - **P29**: Universal Semantic Model (ecosystem-independent AST contract representation).
+  - **P30**: Autonomous Modernization Agent (deterministic verification authority directed by modernization reasoning).
 
 ---
 

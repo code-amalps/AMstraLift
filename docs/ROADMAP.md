@@ -282,7 +282,7 @@ ALLOW / REVIEW / BLOCK
 | **P21** | Multi-Repository Modernization | ✅ **Completed** (v0.3.0) |
 | **P22** | Modernization Campaign Engine | ✅ **Completed** (v0.3.0) |
 | **P23** | Human Approval Workflow | ✅ **Completed** (v0.3.0) |
-| **P24** | Modernization Provenance Graph | ⏳ Planned |
+| **P24** | Supply-Chain Attestation & Provenance Graph | ⏳ Planned |
 | **P25** | Semantic Risk Engine | ⏳ Planned |
 | **P26** | Runtime Verification | ⏳ Planned |
 | **P27** | Pattern Mining Engine | ⏳ Planned |
@@ -403,41 +403,81 @@ Risk Classification
 
 ---
 
-### P24 — Supply-Chain Attestation
+### P24 — Supply-Chain Attestation & Provenance Graph
 
-> **From HMAC attestation → SLSA/in-toto-style provenance**
+> **From HMAC attestation → SLSA v1.0 & in-toto-style provenance graph**
 
 ```text
-Source Revision
+Source Revision (git SHA)
       +
-Transformation Rules (versioned)
+Transformation Rules (versioned AST transforms)
       +
-Tool Version
+Tool & Engine Version (AMstraLift 0.3.x)
       +
-Policy Version
+Policy-as-Code Hash (enterprise policy.yaml)
       +
-Dependency State
+Dependency State (exact lockfile delta & OSV CVE proofs)
       +
-Verification Results
+Verification Proofs (Gates 1-6 + Gate 6 semantic diff)
+      +
+Human Approvals (P23 cryptographically signed decisions)
       ↓
-Signed Provenance Record
+Signed In-Toto / SLSA v1.0 Provenance Bundle (.amstralift/provenance/)
 ```
 
-**Six-months-later query:**
+#### Core Capabilities
 
-> "Why was this code changed?"
+1. **SLSA v1.0 & in-toto Compliant Attestation Envelope**:
+   - **Predicate Type**: `https://slsa.dev/provenance/v1.0` and `https://in-toto.io/attestation/v1`.
+   - **Subject**: Output git commit SHA, modified files digest array, and resulting package bundle hashes.
+   - **BuildDefinition**:
+     - `buildType`: `https://amstralift.dev/provenance/v1`.
+     - `externalParameters`: target framework version, modernization plan ID, corporate policy hash, CLI arguments.
+     - `internalParameters`: AMstraLift engine version, Python runtime, host OS platform, container environment.
+     - `resolvedDependencies`: list of material references (source git commit, exact package versions before/after, transformation rule manifest hashes).
+   - **RunDetails**:
+     - `builder`: `id: "amstralift-engine@0.3.x"`, builder attestation key fingerprint.
+     - `metadata`: invocation timestamp, completion timestamp, run duration.
+     - `byproducts`: 6-gate sandbox verification receipts, Gate 6 semantic route/symbol diff hashes, P23 human approval cryptographic HMAC signatures.
+
+2. **Cryptographic Transformation Lineage & Provenance Graph**:
+   - Fine-grained file-level and AST-node-level transformation lineage:
+     - `input_sha256`: Hash of source file prior to modernization.
+     - `output_sha256`: Hash of transformed file.
+     - `transformations`: Applied transforms with exact `rule_id`, `rule_version`, `category`, and `risk`.
+     - `policy_verdict`: `ALLOW` or `REVIEW` (with attached human decision signature).
+     - `verification_receipts`: Gates 1-6 status, sandbox output hashes.
+
+3. **Forensic "Six-Months-Later" Audit Query Engine**:
+   - Answers compliance and security audits instantly: *"Why was this code changed, by whom, under what policy, and with what proof?"*
 
 ```text
-Repository revision:   abc123
-Transformation:        migrate-ngmodule-to-standalone
-Rule version:          angular-rule-14
-Policy:                enterprise-policy-v3
-Verification:          6/6 passed
-Operator:              CI
-Evidence:              cryptographically verified
+$ amstralift provenance query src/app/user.component.ts
+
+[PROVENANCE RECORD: 7f8a92bc-3d4e-4f1a-b2c3-9876543210ab]
+Repository Revision:   abc123d4e5f6
+Transformed File:      src/app/user.component.ts
+Input SHA-256:         e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+Output SHA-256:        a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0
+Transformation:        migrate-control-flow + standalone-component
+Rule Versions:         angular-control-flow@17.0.0, angular-standalone@17.0.0
+Authorizing Policy:    enterprise-governance-2027 (hash: d9a4c81...)
+Policy Verdict:        REVIEW (Approved by Lead Architect <lead@corp.com>)
+HMAC Decision Sig:     3f7a8b9c... (VERIFIED)
+Verification Proofs:   6/6 Gates PASSED (Gate 1 Clean Install, Gate 2 Build, Gate 3 Karma Tests, Gate 4 OSV CVE, Gate 5 Diff, Gate 6 Semantic Contract)
+Integrity Status:      CRYPTOGRAPHICALLY VERIFIED & UNTAMPERED
 ```
 
-**Evolution from:** Existing HMAC attestation in `core/crypto.py`
+4. **Signed Software Bill of Materials (SBOM) Integration**:
+   - Export full CycloneDX v1.5 and SPDX v2.3 SBOMs with embedded in-toto attestation predicates linking every dependency update and AST transformation back to its verification evidence.
+
+5. **CLI Interface**:
+   - `amstralift provenance generate`: Creates a cryptographically signed provenance envelope for an executed modernization plan.
+   - `amstralift provenance verify`: Validates signatures, materials, and verification proofs across all executed transformations.
+   - `amstralift provenance query <path>`: Queries the provenance graph for a specific file or symbol history.
+   - `amstralift provenance export --format [slsa|cyclonedx|spdx]`: Generates industry-standard supply-chain compliance artifacts.
+
+**Evolution from:** Existing HMAC attestation in `core/crypto.py` and P23 human decision signatures.
 
 ---
 
