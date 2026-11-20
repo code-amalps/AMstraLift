@@ -59,13 +59,13 @@ def test_check_for_updates_offline_fallback():
 
 def test_check_for_updates_github_success():
     fake_github_data = {
-        "tag_name": "v0.2.1",
+        "tag_name": "v9.9.9",
         "body": "Bugfixes and performance optimizations",
         "published_at": "2026-11-20T10:00:00Z",
         "assets": [
             {
                 "name": "amstralift.exe",
-                "browser_download_url": "https://github.com/code-amalps/AMstraLift/releases/download/v0.2.1/amstralift.exe",
+                "browser_download_url": "https://github.com/code-amalps/AMstraLift/releases/download/v9.9.9/amstralift.exe",
             }
         ],
     }
@@ -87,7 +87,7 @@ def test_check_for_updates_github_success():
         res = SelfUpdater.check_for_updates()
 
     assert isinstance(res, UpdateCheckResult)
-    assert res.latest_version == "0.2.1"
+    assert res.latest_version == "9.9.9"
     assert res.update_available is True
     assert res.source == "github"
     assert "amstralift.exe" in (res.download_url or "")
