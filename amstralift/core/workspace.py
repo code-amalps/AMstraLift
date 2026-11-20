@@ -255,6 +255,9 @@ def prepare_stage_a_workspace(
 
     Returns the base commit SHA.
     """
+    source_repo_path = source_repo_path.resolve()
+    target_workspace_path = target_workspace_path.resolve()
+
     if target_workspace_path.exists():
         shutil.rmtree(target_workspace_path, ignore_errors=True)
     target_workspace_path.mkdir(parents=True, exist_ok=True)

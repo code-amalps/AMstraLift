@@ -1414,6 +1414,12 @@ class AMstraLiftGUI:
         cve = self.remediate_cves_var.get() and not corp_safe
         dry = self.dry_run_var.get()
         allow_fail = self.allow_failed_gates_var.get()
+        base_b = self.base_branch_var.get().strip() or None
+        out_b = self.output_branch_var.get().strip() or None
+        sub_raw = self.upgrade_subproject_var.get().strip()
+        subproject = None
+        if sub_raw and sub_raw != "(Root / Auto)":
+            subproject = sub_raw.split(" (")[0].strip()
 
         self._clear_log()
         self._set_running_state(True, "Initializing upgrade workflow...", 5)
@@ -1436,9 +1442,6 @@ class AMstraLiftGUI:
                     print("Corporate / Offline Safe Mode: Active (external CVE lookups skipped)")
                 print()
 
-                base_b = self.base_branch_var.get().strip() or None
-                out_b = self.output_branch_var.get().strip() or None
-
                 effective_branch = base_b
                 if not effective_branch:
                     from amstralift.core.workspace import get_active_branch, run_git
@@ -1449,10 +1452,6 @@ class AMstraLiftGUI:
                             break
                     effective_branch = active or "main"
 
-                sub_raw = self.upgrade_subproject_var.get().strip()
-                subproject = None
-                if sub_raw and sub_raw != "(Root / Auto)":
-                    subproject = sub_raw.split(" (")[0].strip()
                 if subproject:
                     print(f"Target Subproject: {subproject}")
 
@@ -1538,6 +1537,10 @@ class AMstraLiftGUI:
         mode = self.audit_mode_var.get()
         safe_only = self.audit_safe_only_var.get()
         allow_major = self.audit_allow_major_var.get()
+        sub_raw = self.audit_subproject_var.get().strip()
+        subproject = None
+        if sub_raw and sub_raw != "(Root / Auto)":
+            subproject = sub_raw.split(" (")[0].strip()
 
         self._clear_log()
         self._set_running_state(True, f"Running security {mode}...", 10)
@@ -1558,10 +1561,6 @@ class AMstraLiftGUI:
                 console = Console(file=redirector, force_terminal=True, color_system=None)
                 orchestrator = SecurityOrchestrator()
 
-                sub_raw = self.audit_subproject_var.get().strip()
-                subproject = None
-                if sub_raw and sub_raw != "(Root / Auto)":
-                    subproject = sub_raw.split(" (")[0].strip()
                 proj_msg = f" (Subproject: {subproject})" if subproject else ""
                 print(f"Scanning dependencies in: {repo_path_str}{proj_msg} (Mode: {mode})...\n")
                 def _audit_progress_cb(pct: int, msg: str):

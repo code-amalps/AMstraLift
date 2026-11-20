@@ -107,10 +107,11 @@ def scaffold_starter_project(target_path: Path, ecosystem: str = "angular") -> l
     created_files: list[str] = []
 
     # 1. Initialize Git if not already a repository
-    git_check = run_git(["rev-parse", "--is-inside-work-tree"], cwd=target_path)
-    if git_check.returncode != 0:
+    if not (target_path / ".git").exists():
         run_git(["init"], cwd=target_path)
         run_git(["config", "core.autocrlf", "false"], cwd=target_path)
+        run_git(["config", "user.name", "AMstraLift Starter"], cwd=target_path)
+        run_git(["config", "user.email", "starter@amstralift.internal"], cwd=target_path)
 
     # 2. Write standard .gitignore
     gitignore_file = target_path / ".gitignore"
