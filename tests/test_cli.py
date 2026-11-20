@@ -256,3 +256,26 @@ def test_suppress_console_gui_invocation_safe(monkeypatch):
     suppress_console_for_gui()
 
 
+def test_cli_doctor_json():
+    result = runner.invoke(app, ["doctor", "--json"])
+    assert result.exit_code == 0
+    assert '"is_healthy":' in result.stdout
+    assert '"version":' in result.stdout
+
+
+def test_cli_doctor_table():
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "AMstraLift System Health & Self-Healing Diagnostics" in result.stdout
+    assert "Git SCM" in result.stdout
+    assert "Python Runtime" in result.stdout
+
+
+def test_cli_self_update_check():
+    result = runner.invoke(app, ["self-update", "--check"])
+    assert result.exit_code == 0
+    assert "AMstraLift Version Status" in result.stdout
+    assert "Installed Version:" in result.stdout
+
+
+

@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 
 
 def suppress_console_for_gui() -> None:
@@ -24,7 +24,25 @@ def suppress_console_for_gui() -> None:
 
         # If user passed explicit CLI subcommands (run, audit, etc.), do not suppress console
         args = [a.lower() for a in sys.argv[1:]]
-        cli_commands = {"run", "audit", "projects", "topology", "version", "--help", "-h", "governance", "report", "package", "pack", "init"}
+        cli_commands = {
+            "run",
+            "audit",
+            "projects",
+            "topology",
+            "version",
+            "--help",
+            "-h",
+            "governance",
+            "report",
+            "package",
+            "pack",
+            "init",
+            "doctor",
+            "self-update",
+            "update",
+            "serve",
+            "init-ci",
+        }
         if any(a in cli_commands for a in args):
             return
 
@@ -752,6 +770,137 @@ def serve(
 
     api_app = create_app()
     uvicorn.run(api_app, host=host, port=port)
+
+
+@app.command("doctor")
+def doctor_cmd(
+    fix: Annotated[
+        bool,
+        typer.Option("--fix", "-f", "--heal", help="Automatically repair detected configuration or cache issues."),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Output diagnostic report as JSON."),
+    ] = False,
+):
+    """Check and self-heal AMstraLift environment, dependencies, and configuration."""
+    from amstralift.core.doctor import CheckStatus, DoctorEngine
+
+    engine = DoctorEngine()
+    report = engine.diagnose_and_heal(auto_fix=fix)
+
+    if json_output:
+        import json
+        console.print(json.dumps(report.to_dict(), indent=2))
+        raise typer.Exit(code=1 if report.has_errors else 0)
+
+    table = Table(
+        title="🩺 AMstraLift System Health & Self-Healing Diagnostics",
+        show_header=True,
+        header_style="bold cyan",
+        border_style="dim",
+    )
+    table.add_column("Category", style="dim", no_wrap=True)
+    table.add_column("Check Component", style="bold", no_wrap=True)
+    table.add_column("Status", justify="center", no_wrap=True)
+    table.add_column("Details & Guidance", style="white")
+
+    for item in report.items:
+        if item.status == CheckStatus.OK:
+            st = "[bold green]✔ OK[/bold green]"
+        elif item.status == CheckStatus.REPAIRED:
+            st = "[bold cyan]🔧 REPAIRED[/bold cyan]"
+        elif item.status == CheckStatus.WARNING:
+            st = "[bold yellow]⚠️ WARNING[/bold yellow]"
+        else:
+            st = "[bold red]✖ ERROR[/bold red]"
+
+        msg = item.message
+        if item.details:
+            msg += f"\n[dim]{item.details}[/dim]"
+        table.add_row(item.category, item.name, st, msg)
+
+    console.print(table)
+
+    if report.repairs_applied:
+        repairs_text = "\n".join(f"• {r}" for r in report.repairs_applied)
+        console.print(
+            Panel(
+                f"[bold green]The following automated self-healing repairs were applied:[/bold green]\n\n{repairs_text}",
+                title="Self-Healing Applied",
+                border_style="green",
+            )
+        )
+    elif not fix and any(i.repairable for i in report.items):
+        console.print(
+            "\n[dim]Tip: Run [bold cyan]amstralift doctor --fix[/bold cyan] to automatically repair configuration and cache issues.[/dim]"
+        )
+
+    if report.has_errors:
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=0)
+
+
+@app.command("self-update")
+@app.command("update")
+def self_update_cmd(
+    check_only: Annotated[
+        bool,
+        typer.Option("--check", "-c", help="Check for available updates without applying."),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Force reinstall/upgrade even if already on the latest version."),
+    ] = False,
+    target_version: Annotated[
+        Optional[str],
+        typer.Option("--version", "-v", help="Specific version of AMstraLift to install."),
+    ] = None,
+):
+    """Check for and automatically install updates to AMstraLift."""
+    from amstralift import __version__
+    from amstralift.core.self_update import SelfUpdater
+
+    with console.status("[bold green]Querying AMstraLift release registries (PyPI & GitHub)..."):
+        check = SelfUpdater.check_for_updates()
+
+    if check_only:
+        update_st = "[bold green]Update Available![/bold green]" if check.update_available else "[bold]Up to date[/bold]"
+        notes_str = f"\nRelease Notes:\n[dim]{check.release_notes}[/dim]" if check.release_notes else ""
+        console.print(
+            Panel.fit(
+                f"[bold blue]AMstraLift Version Status[/bold blue]\n\n"
+                f"Installed Version: [bold]{__version__}[/bold]\n"
+                f"Latest Available:  [bold cyan]{check.latest_version}[/bold cyan] ({check.source})\n"
+                f"Update Status:     {update_st}\n"
+                + notes_str,
+                border_style="blue",
+            )
+        )
+        raise typer.Exit(code=0)
+
+    if not check.update_available and not force and not target_version:
+        console.print(
+            f"[bold green]✔ AMstraLift is already up to date[/bold green] (v{__version__}).\n"
+            f"[dim]Use --force to reinstall or re-upgrade.[/dim]"
+        )
+        raise typer.Exit(code=0)
+
+    target_desc = target_version or check.latest_version
+    console.print(f"[bold cyan]Upgrading AMstraLift:[/bold cyan] {__version__} -> {target_desc}...")
+
+    success, msg = SelfUpdater.execute_update(
+        target_version=target_version,
+        force=force,
+        progress_callback=lambda m: console.print(f"  ↳ {m}"),
+    )
+
+    if success:
+        console.print(f"[bold green]✔ {msg}[/bold green]")
+        raise typer.Exit(code=0)
+    else:
+        console.print(f"[bold red]✖ {msg}[/bold red]")
+        raise typer.Exit(code=1)
 
 
 @app.command()

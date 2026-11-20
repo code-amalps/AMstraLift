@@ -253,4 +253,27 @@ def create_app() -> FastAPI:
                 error_message=str(e),
             )
 
+    @app.get("/api/v1/doctor", tags=["System & Diagnostics"])
+    def get_system_diagnostics(fix: bool = False):
+        """Inspect AMstraLift system health, dependencies, and configuration."""
+        from amstralift.core.doctor import DoctorEngine
+        engine = DoctorEngine()
+        report = engine.diagnose_and_heal(auto_fix=fix)
+        return report.to_dict()
+
+    @app.post("/api/v1/doctor/heal", tags=["System & Diagnostics"])
+    def trigger_self_healing():
+        """Automatically repair corrupted configurations, stale caches, and storage."""
+        from amstralift.core.doctor import DoctorEngine
+        engine = DoctorEngine()
+        report = engine.diagnose_and_heal(auto_fix=True)
+        return report.to_dict()
+
+    @app.get("/api/v1/update/check", tags=["System & Diagnostics"])
+    def check_for_updates():
+        """Check release registries for newer versions of AMstraLift."""
+        from amstralift.core.self_update import SelfUpdater
+        check = SelfUpdater.check_for_updates()
+        return check.to_dict()
+
     return app
