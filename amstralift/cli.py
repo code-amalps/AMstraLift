@@ -51,6 +51,8 @@ def suppress_console_for_gui() -> None:
             "fleet",
             "multirepo",
             "campaign",
+            "approve",
+            "approval",
         }
         if any(a in cli_commands for a in args):
             return
@@ -2211,6 +2213,406 @@ def campaign_report_cmd(
 
     report_path = CampaignStore.export_markdown_report(campaign, output_path=output_file)
     console.print(f"[bold green]✔ Executive campaign report exported successfully to:[/bold green] {report_path.resolve()}")
+
+
+approve_app = typer.Typer(
+    name="approve",
+    help="Human Approval Workflow & Governance Engine (P23).",
+    no_args_is_help=True,
+)
+app.add_typer(approve_app, name="approve")
+app.add_typer(approve_app, name="approval")
+
+
+@approve_app.command("list")
+def approve_list_cmd(
+    status: Annotated[
+        Optional[str],
+        typer.Option("--status", "-s", help="Filter requests by status: pending, approved, rejected, blocked, auto_approved."),
+    ] = None,
+    directory: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Base directory containing .amstralift/approvals/ queue."),
+    ] = Path("."),
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output approval requests as raw JSON."),
+    ] = False,
+):
+    """List queued modernization proposals and human sign-off requests (P23)."""
+    from rich.panel import Panel
+    from rich.table import Table
+
+    from amstralift.approvals import ApprovalQueue, ApprovalStatus
+
+    filter_status = None
+    if status:
+        try:
+            filter_status = ApprovalStatus(status.lower().strip())
+        except ValueError:
+            console.print(f"[bold red]✖ Error:[/bold red] Invalid status filter: '{status}'. Valid: {[s.value for s in ApprovalStatus]}")
+            raise typer.Exit(code=1)
+
+    requests = ApprovalQueue.list_requests(status=filter_status, base_dir=directory)
+
+    if as_json:
+        typer.echo(json.dumps([r.model_dump() for r in requests], indent=2))
+        return
+
+    console.print(
+        Panel(
+            f"[bold]Approvals Queue Directory:[/bold] [cyan]{(directory / '.amstralift' / 'approvals').resolve()}[/cyan]\n"
+            f"[bold]Active Requests Count:[/bold] [green]{len(requests)}[/green]\n"
+            f"[bold]Status Filter:[/bold] [yellow]{status.upper() if status else 'ALL'}[/yellow]",
+            title="Human Approval Queue (P23) — Engineered by Amal P S",
+            border_style="cyan",
+        )
+    )
+
+    if not requests:
+        console.print("[dim green]✔ No approval requests matching filter criteria in queue.[/dim green]")
+        return
+
+    table = Table(
+        title=f"Queued Modernization Approval Requests ({len(requests)} items)",
+        header_style="bold cyan",
+        border_style="dim",
+    )
+    table.add_column("Request ID", style="bold green", no_wrap=True)
+    table.add_column("Repository", style="cyan")
+    table.add_column("Ecosystem", style="magenta")
+    table.add_column("Version Jump", style="yellow")
+    table.add_column("Risk Tier", style="bold")
+    table.add_column("Status", style="bold")
+    table.add_column("Triggers", style="white")
+    table.add_column("Reviewer", style="dim")
+
+    status_color_map = {
+        ApprovalStatus.AUTO_APPROVED: "green",
+        ApprovalStatus.APPROVED: "bold green",
+        ApprovalStatus.PENDING: "bold yellow",
+        ApprovalStatus.REJECTED: "bold red",
+        ApprovalStatus.BLOCKED: "red",
+    }
+    risk_color_map = {
+        "safe": "green",
+        "review": "yellow",
+        "block": "bold red",
+    }
+
+    for req in requests:
+        st_color = status_color_map.get(req.status, "white")
+        rk_color = risk_color_map.get(req.risk_tier.value, "white")
+        jump_str = f"{req.current_version or 'unknown'} → {req.target_version or 'latest'}"
+        reviewer_str = f"{req.decision.reviewer_name}" if req.decision else "[dim]unassigned[/dim]"
+
+        table.add_row(
+            req.request_id,
+            req.repo_name,
+            req.ecosystem.upper(),
+            jump_str,
+            f"[{rk_color}]{req.risk_tier.value.upper()}[/{rk_color}]",
+            f"[{st_color}]{req.status.value.upper()}[/{st_color}]",
+            str(len(req.triggers)),
+            reviewer_str,
+        )
+
+    console.print(table)
+
+
+@approve_app.command("show")
+def approve_show_cmd(
+    request_id: Annotated[
+        str,
+        typer.Argument(help="ID of the approval request to inspect."),
+    ],
+    directory: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Base directory containing .amstralift/approvals/ queue."),
+    ] = Path("."),
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output request details as raw JSON."),
+    ] = False,
+):
+    """Inspect full details and triggers of a queued approval request (P23)."""
+    from rich.panel import Panel
+    from rich.table import Table
+
+    from amstralift.approvals import ApprovalQueue
+
+    try:
+        req = ApprovalQueue.get(request_id, base_dir=directory)
+    except FileNotFoundError:
+        console.print(f"[bold red]✖ Error:[/bold red] Approval request '{request_id}' not found.")
+        raise typer.Exit(code=1)
+
+    if as_json:
+        typer.echo(req.model_dump_json(indent=2))
+        return
+
+    sig_verified = False
+    sig_info = "None"
+    if req.decision:
+        sig_verified = req.decision.verify_signature()
+        sig_badge = "[bold green]VALID SIGNATURE[/bold green]" if sig_verified else "[bold red]INVALID SIGNATURE[/bold red]"
+        sig_info = (
+            f"Reviewer: [white]{req.decision.reviewer_name} <{req.decision.reviewer_email}>[/white]\n"
+            f"Verdict: [bold]{req.decision.decision.value.upper()}[/bold]\n"
+            f"Rationale: {req.decision.rationale}\n"
+            f"Attestation: {sig_badge} ({req.decision.signature[:16]}...)"
+        )
+
+    console.print(
+        Panel(
+            f"[bold]Request ID:[/bold] [cyan]{req.request_id}[/cyan]\n"
+            f"[bold]Repository:[/bold] [white]{req.repo_name}[/white] ({req.repo_path})\n"
+            f"[bold]Ecosystem:[/bold] [magenta]{req.ecosystem.upper()}[/magenta]\n"
+            f"[bold]Upgrade Trajectory:[/bold] [yellow]{req.current_version or 'unknown'} → {req.target_version or 'latest'}[/yellow]\n"
+            f"[bold]Risk Classification:[/bold] [bold]{req.risk_tier.value.upper()}[/bold]\n"
+            f"[bold]Approval Status:[/bold] [bold]{req.status.value.upper()}[/bold]\n"
+            f"[bold]Review Decision:[/bold]\n{sig_info}",
+            title="Approval Request Details (P23) — Engineered by Amal P S",
+            border_style="magenta",
+        )
+    )
+
+    if req.triggers:
+        table = Table(
+            title=f"Review Triggers Flagged ({len(req.triggers)} triggers)",
+            header_style="bold red",
+            border_style="dim",
+        )
+        table.add_column("Trigger Category", style="bold yellow")
+        table.add_column("Severity", style="magenta")
+        table.add_column("Title", style="bold white")
+        table.add_column("Affected Targets", style="dim")
+
+        for tr in req.triggers:
+            table.add_row(
+                tr.trigger_type.value.upper(),
+                tr.severity.upper(),
+                tr.title,
+                ", ".join(tr.affected_targets) if tr.affected_targets else "[dim]n/a[/dim]",
+            )
+        console.print(table)
+
+
+@approve_app.command("accept")
+def approve_accept_cmd(
+    request_id: Annotated[
+        str,
+        typer.Argument(help="ID of the approval request to sign off."),
+    ],
+    reviewer: Annotated[
+        str,
+        typer.Option("--reviewer", "-r", help="Reviewer identity (e.g. 'Jane Doe <jane@corp.com>')."),
+    ],
+    rationale: Annotated[
+        str,
+        typer.Option("--rationale", help="Business or technical justification for approving the modernization."),
+    ],
+    directory: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Base directory containing .amstralift/approvals/ queue."),
+    ] = Path("."),
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output updated request as raw JSON."),
+    ] = False,
+):
+    """Grant human approval and cryptographically sign a modernization request (P23)."""
+    from amstralift.approvals import ApprovalQueue
+
+    # Parse reviewer name and email
+    email = "reviewer@corporate.local"
+    name = reviewer
+    if "<" in reviewer and ">" in reviewer:
+        parts = reviewer.split("<")
+        name = parts[0].strip()
+        email = parts[1].replace(">", "").strip()
+
+    try:
+        updated = ApprovalQueue.approve(
+            request_id=request_id,
+            reviewer_name=name,
+            reviewer_email=email,
+            rationale=rationale,
+            base_dir=directory,
+        )
+    except FileNotFoundError:
+        console.print(f"[bold red]✖ Error:[/bold red] Request '{request_id}' not found.")
+        raise typer.Exit(code=1)
+
+    if as_json:
+        typer.echo(updated.model_dump_json(indent=2))
+        return
+
+    console.print(
+        f"[bold green]✔ Modernization request '{request_id}' APPROVED successfully![/bold green]\n"
+        f"Sealed with HMAC-SHA256 signature: [cyan]{updated.decision.signature[:24]}...[/cyan]\n"
+        f"Reviewer: [white]{updated.decision.reviewer_name} <{updated.decision.reviewer_email}>[/white]"
+    )
+
+
+@approve_app.command("reject")
+def approve_reject_cmd(
+    request_id: Annotated[
+        str,
+        typer.Argument(help="ID of the approval request to reject."),
+    ],
+    reviewer: Annotated[
+        str,
+        typer.Option("--reviewer", "-r", help="Reviewer identity (e.g. 'Jane Doe <jane@corp.com>')."),
+    ],
+    rationale: Annotated[
+        str,
+        typer.Option("--rationale", help="Reason for rejection."),
+    ],
+    directory: Annotated[
+        Path,
+        typer.Option("--dir", "-d", help="Base directory containing .amstralift/approvals/ queue."),
+    ] = Path("."),
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output updated request as raw JSON."),
+    ] = False,
+):
+    """Reject a queued modernization request and halt execution (P23)."""
+    from amstralift.approvals import ApprovalQueue
+
+    email = "reviewer@corporate.local"
+    name = reviewer
+    if "<" in reviewer and ">" in reviewer:
+        parts = reviewer.split("<")
+        name = parts[0].strip()
+        email = parts[1].replace(">", "").strip()
+
+    try:
+        updated = ApprovalQueue.reject(
+            request_id=request_id,
+            reviewer_name=name,
+            reviewer_email=email,
+            rationale=rationale,
+            base_dir=directory,
+        )
+    except FileNotFoundError:
+        console.print(f"[bold red]✖ Error:[/bold red] Request '{request_id}' not found.")
+        raise typer.Exit(code=1)
+
+    if as_json:
+        typer.echo(updated.model_dump_json(indent=2))
+        return
+
+    console.print(
+        f"[bold red]✖ Modernization request '{request_id}' REJECTED.[/bold red]\n"
+        f"Reviewer: [white]{updated.decision.reviewer_name} <{updated.decision.reviewer_email}>[/white]\n"
+        f"Rationale: {updated.decision.rationale}"
+    )
+
+
+@approve_app.command("check")
+def approve_check_cmd(
+    repo: Annotated[
+        Path,
+        typer.Option("--repo", "-r", help="Target repository directory to evaluate."),
+    ] = Path("."),
+    target: Annotated[
+        Optional[int],
+        typer.Option("--target", "-t", help="Target major framework version."),
+    ] = None,
+    ecosystem: Annotated[
+        Optional[str],
+        typer.Option("--ecosystem", "-e", help="Ecosystem override (angular, dotnet, python, react)."),
+    ] = None,
+    policy_file: Annotated[
+        Optional[Path],
+        typer.Option("--policy", "-p", help="Enterprise policy file (.yaml)."),
+    ] = None,
+    submit_queue: Annotated[
+        bool,
+        typer.Option("--submit", help="Automatically submit request to .amstralift/approvals/ queue if review needed."),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output evaluation request as raw JSON."),
+    ] = False,
+):
+    """Evaluate repository modernization against approval triggers and risk tiers (P23)."""
+    from rich.panel import Panel
+    from rich.table import Table
+
+    from amstralift.approvals import ApprovalEvaluator, ApprovalQueue, ApprovalStatus
+    from amstralift.planning import ModernizationPlanner
+    from amstralift.policy import PolicyEvaluator, load_policy
+
+    if not repo.exists() or not repo.is_dir():
+        console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {repo.resolve()}")
+        raise typer.Exit(code=1)
+
+    # Generate plan
+    planner = ModernizationPlanner()
+    plan = planner.generate_plan(
+        repo_path=repo,
+        ecosystem=ecosystem,
+        target_major=target,
+    )
+
+    # Optional policy evaluation
+    policy_report = None
+    try:
+        policy = load_policy(repo_path=repo, explicit_policy_path=policy_file)
+        policy_report = PolicyEvaluator.evaluate(plan, policy)
+    except Exception:
+        pass
+
+    request = ApprovalEvaluator.evaluate(
+        plan=plan,
+        repo_path=repo,
+        policy_report=policy_report,
+    )
+
+    if submit_queue and request.status in (ApprovalStatus.PENDING, ApprovalStatus.BLOCKED):
+        ApprovalQueue.submit(request, base_dir=repo)
+
+    if as_json:
+        typer.echo(request.model_dump_json(indent=2))
+        return
+
+    badge_map = {
+        ApprovalStatus.AUTO_APPROVED: "[bold green]AUTO_APPROVED (Automatic PR Merge Permitted)[/bold green]",
+        ApprovalStatus.PENDING: "[bold yellow]PENDING (Human Approval Required)[/bold yellow]",
+        ApprovalStatus.BLOCKED: "[bold red]BLOCKED (Critical Policy Boundary Halt)[/bold red]",
+    }
+    badge = badge_map.get(request.status, request.status.value.upper())
+
+    border_color = "green" if request.status == ApprovalStatus.AUTO_APPROVED else ("yellow" if request.status == ApprovalStatus.PENDING else "red")
+
+    console.print(
+        Panel(
+            f"[bold]Repository:[/bold] [white]{request.repo_name}[/white]\n"
+            f"[bold]Ecosystem:[/bold] [magenta]{request.ecosystem.upper()}[/magenta] ({request.current_version or 'unknown'} → {request.target_version or 'latest'})\n"
+            f"[bold]Risk Classification:[/bold] [bold]{request.risk_tier.value.upper()}[/bold]\n"
+            f"[bold]Approval Verdict:[/bold] {badge}\n"
+            f"[bold]Flagged Triggers Count:[/bold] [cyan]{len(request.triggers)}[/cyan]",
+            title="Modernization Approval Evaluation (P23) — Engineered by Amal P S",
+            border_style=border_color,
+        )
+    )
+
+    if request.triggers:
+        table = Table(
+            title=f"Flagged Approval Triggers ({len(request.triggers)} triggers)",
+            header_style="bold yellow",
+            border_style="dim",
+        )
+        table.add_column("Trigger Category", style="bold magenta")
+        table.add_column("Severity", style="bold")
+        table.add_column("Condition", style="white")
+
+        for tr in request.triggers:
+            table.add_row(tr.trigger_type.value.upper(), tr.severity.upper(), tr.title)
+        console.print(table)
 
 
 @app.command()

@@ -8,6 +8,22 @@ This project follows [Semantic Versioning](https://semver.org/).
 ## [0.3.0] - 2026-11-20
 
 ### Added
+- **P23 — Human Approval Workflow (`amstralift.approvals`)**:
+  - Risk-tiered governance engine (`ApprovalEvaluator`) classifying modernization plans into `SAFE` (automatic PR merge), `REVIEW` (human approval required), and `BLOCK` (critical boundary halt).
+  - Dynamic trigger analysis detecting:
+    - Public API breaking contracts (Gate 6 route removal and deleted exported symbols).
+    - Database migration mutations (schema files in `migrations/`, `alembic/`, `*.sql`, `DbContext`, `prisma`).
+    - Multi-major version jumps ($\ge 2$ major versions).
+    - High-risk architectural AST transformations.
+    - Policy-as-Code blocking and review violations.
+  - Persistent approval queue (`ApprovalQueue`) managing proposals in `.amstralift/approvals/`.
+  - Cryptographic human sign-off attestation sealing reviewer name, email, verdict (`APPROVED`/`REJECTED`), rationale, and timestamp with HMAC-SHA256 signatures (`HumanDecision`).
+- **CLI Human Approval Engine (`amstralift approve` / `amstralift approval`)**:
+  - `amstralift approve check`: Evaluates repository modernization against approval triggers and risk tiers with optional `--submit` queueing.
+  - `amstralift approve list`: Displays interactive Rich table of queued approval requests filtered by status.
+  - `amstralift approve show`: Displays deep trigger details and validates cryptographic reviewer signatures.
+  - `amstralift approve accept`: Grants human approval and signs the request with an HMAC-SHA256 attestation.
+  - `amstralift approve reject`: Rejects a modernization proposal with recorded reviewer justification.
 - **P22 — Modernization Campaign Engine (`amstralift.campaign`)**:
   - Organization-wide modernization campaign orchestration engine (`CampaignEngine`) turning individual repository upgrades into coordinated fleet campaigns.
   - Deterministic executive KPI and dashboard metrics engine (`CampaignMetricsCalculator`) calculating:

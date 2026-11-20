@@ -118,6 +118,10 @@ Repository Inspection ──► Dependency DAG (P16) ──► Modernization Pla
    - Turns individual repository modernizations into organization-wide campaigns across hundreds of repositories.
    - Calculates comprehensive executive KPIs: upgrade success rate, policy refusal rate, CVE reduction percentage, EOL elimination percentage, engineering person-hours saved, and mean verification time.
    - Exports executive Markdown and JSON reports for engineering leadership, CTO dashboards, and compliance governance.
+8. **Human Approval Workflow (`amstralift approve list` / `amstralift approve check` / `amstralift approve accept` / `amstralift approve reject`)**:
+   - Maps modernization plans into three risk-tiered governance categories: `SAFE` (automatic PR merge), `REVIEW` (human approval required), and `BLOCK` (critical boundary halt).
+   - Evaluates triggers including API breaking contract changes (Gate 6 route/symbol removal), database migration mutations, multi-major version jumps, and enterprise policy flags.
+   - Maintains a persistent review queue in `.amstralift/approvals/` and cryptographically seals human review sign-offs with HMAC-SHA256 decision attestation signatures.
 
 ---
 
@@ -313,7 +317,13 @@ uv run amstralift campaign run --dir ./enterprise-repos --dry-run
 uv run amstralift campaign status --dir ./enterprise-repos
 uv run amstralift campaign report --dir ./enterprise-repos -o campaign-report.md
 
-# 15. Launch the Desktop GUI
+# 15. Manage Human Approval Workflows (P23 risk tiers, sign-off gates, and HMAC decision attestation)
+uv run amstralift approve check --repo ./my-project --submit
+uv run amstralift approve list --status pending
+uv run amstralift approve show <request-id>
+uv run amstralift approve accept <request-id> --reviewer "Lead Architect <lead@corp.com>" --rationale "Staging verified"
+
+# 16. Launch the Desktop GUI
 uv run amstralift gui
 ```
 

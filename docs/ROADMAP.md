@@ -281,7 +281,7 @@ ALLOW / REVIEW / BLOCK
 |---|---|---|
 | **P21** | Multi-Repository Modernization | ✅ **Completed** (v0.3.0) |
 | **P22** | Modernization Campaign Engine | ✅ **Completed** (v0.3.0) |
-| **P23** | Human Approval Workflow | ⏳ Planned |
+| **P23** | Human Approval Workflow | ✅ **Completed** (v0.3.0) |
 | **P24** | Modernization Provenance Graph | ⏳ Planned |
 | **P25** | Semantic Risk Engine | ⏳ Planned |
 | **P26** | Runtime Verification | ⏳ Planned |
@@ -372,7 +372,7 @@ Mean verification time  4m 23s
 
 ---
 
-### P23 — Human Approval Workflow
+### P23 — Human Approval Workflow ✅ (v0.3.0)
 
 ```text
 AMstraLift
@@ -380,19 +380,24 @@ AMstraLift
 Risk Classification
      ↓
 ┌──────────────┐
-│ SAFE         │ → automatic PR merge
-│ REVIEW       │ → human approval required
-│ BLOCK        │ → stop, notify
+│ SAFE         │ → automatic PR merge (AUTO_APPROVED)
+│ REVIEW       │ → human approval required (PENDING)
+│ BLOCK        │ → stop, notify (BLOCKED)
 └──────────────┘
 ```
 
 **Approval triggers:**
 
-- API breaking change
-- Database migration dependency
-- Major version jump
-- Security override
-- Unsupported transformation pattern
+- **API breaking change**: Public route removal, deleted exported symbols.
+- **Database migration dependency**: Detected schema migrations (`migrations/`, `*.sql`, `DbContext`, `alembic`, `prisma`).
+- **Major version jump**: Target version jump $\ge 2$ majors.
+- **Security override**: Pinned vulnerability bypass or critical policy violation.
+- **Risky transformation**: Structural AST and architectural mutations.
+
+**Engineered by Amal P S for AMstraLift Generation 3 (Enterprise Scale).**
+- **Evaluator**: `ApprovalEvaluator` maps planned modernizations and policy evaluation reports into categorical risk tiers (`SAFE`, `REVIEW`, `BLOCK`) and granular review triggers.
+- **Persistent Queue & HMAC Decision Sealing**: `ApprovalQueue` queues proposals in `.amstralift/approvals/` and cryptographically seals human decisions (`HumanDecision`) using HMAC-SHA256 signatures over reviewer identity, verdict, rationale, and timestamp.
+- **CLI Commands**: `amstralift approve list`, `amstralift approve show`, `amstralift approve accept`, `amstralift approve reject`, `amstralift approve check`.
 
 **Gives enterprise teams:** Controlled automation with human oversight where it matters
 
