@@ -225,9 +225,9 @@ checkpoint:
 
 ---
 
-### P20 — Policy-as-Code
+### P20 — Policy-as-Code (COMPLETED — v0.2.0)
 
-> **The entire modernization policy becomes declarative.**
+> **Built:** Full declarative enterprise Policy-as-Code engine in `amstralift.policy` validating ModernizationPlans against governance rules, risk tolerances, vulnerability thresholds, symbol contracts, and transformation whitelists/blacklists. Enforced via `amstralift policy check` and `amstralift plan --policy <file>`.
 
 ```yaml
 policy:
@@ -250,26 +250,26 @@ policy:
 **Evaluation flow:**
 
 ```text
-Transformation
+Transformation / Plan
       ↓
-Policy Engine
+Policy Engine (PolicyEvaluator)
       ↓
 ALLOW / REVIEW / BLOCK
 ```
 
-**Builds on:** Existing governance policies, P4 refusal engine, P5 Gate 6 semantic diff
+**Builds on:** Existing governance policies, P4 refusal engine, P5 Gate 6 semantic diff, and P17 Modernization Planning Engine.
 
 ---
 
-### Generation 2 Priority Order
+### Generation 2 Priority Order (ALL COMPLETED — v0.2.0)
 
-| Priority | Capability | Reason |
+| Priority | Capability | Status |
 |---|---|---|
-| **P16** | Transformation Dependency Graph | Foundation for everything else (✅ Completed in v0.2.0) |
-| **P17** | Modernization Planner | Decides what/when/how to transform (✅ Completed in v0.2.0) |
-| **P18** | Conflict Detection | Safety before execution |
-| **P20** | Policy-as-Code | Converts verification into governance |
-| **P19** | Resumeable Execution | Operationally practical for enterprise |
+| **P16** | Transformation Dependency Graph | ✅ **Completed** (v0.2.0) |
+| **P17** | Modernization Planner | ✅ **Completed** (v0.2.0) |
+| **P18** | Conflict Detection | ✅ **Completed** (v0.2.0) |
+| **P19** | Resumeable Execution | ✅ **Completed** (v0.2.0) |
+| **P20** | Policy-as-Code | ✅ **Completed** (v0.2.0) |
 
 ---
 

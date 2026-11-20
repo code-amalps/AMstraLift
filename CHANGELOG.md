@@ -51,6 +51,13 @@ This project follows [Semantic Versioning](https://semver.org/).
   - Automatic resumption planner (`prepare_resumption`) dynamically pruning already-completed phases and AST transformations to resume execution at the exact interrupted point.
   - Dedicated CLI commands (`amstralift resume [id]` and `amstralift checkpoints` with `--repo` and `--json`).
 
+- **P20 — Policy-as-Code (`amstralift.policy`)**:
+  - Declarative enterprise modernization policy engine (`EnterprisePolicy`, `PolicyEvaluator`) supporting YAML policy specifications (`policy.yaml`).
+  - Multi-tier rule enforcement covering governance (major jump limits, runtime deprecation, EOL horizon), AST risk tolerance (blocking critical/high risks, blacklisting rules, enforcing mandatory rules), security thresholds (critical/high CVE blocking), and semantic contracts (public API symbol removal thresholds).
+  - Deterministic evaluation reports with `ALLOW`, `REVIEW`, and `BLOCK` verdicts.
+  - Native integration into `amstralift plan` (`--policy <file.yaml>`) and execution safeguards halting runs upon policy violations.
+  - Dedicated CLI commands: `amstralift policy init` (scaffolds enterprise `policy.yaml`) and `amstralift policy check` (evaluates workspace against policy with formatted panels and `--json` support).
+
 ---
 
 ## [0.1.19] - 2026-11-20

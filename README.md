@@ -255,7 +255,11 @@ uv run amstralift conflicts --ecosystem angular
 uv run amstralift checkpoints
 uv run amstralift resume
 
-# 12. Launch the Desktop GUI
+# 12. Enforce Policy-as-Code (P20 declarative enterprise rules and compliance)
+uv run amstralift policy init
+uv run amstralift policy check --ecosystem angular
+
+# 13. Launch the Desktop GUI
 uv run amstralift gui
 ```
 

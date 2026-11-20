@@ -1085,6 +1085,10 @@ def plan_cmd(
         bool,
         typer.Option("--yaml", help="Output modernization plan as raw YAML."),
     ] = False,
+    policy_file: Annotated[
+        Path | None,
+        typer.Option("--policy", "-p", help="Path to declarative enterprise policy file (.yaml)."),
+    ] = None,
 ):
     """Generate a declarative modernization plan (P17) based on codebase analysis and the DAG."""
     from rich.panel import Panel
@@ -1099,6 +1103,7 @@ def plan_cmd(
         repo_path=repo,
         ecosystem=ecosystem,
         target_major=target,
+        policy=policy_file,
     )
 
     if as_json:
@@ -1193,8 +1198,23 @@ def plan_cmd(
             f"discarded {c_discarded} incompatible rule(s), injected {c_injected} ordering constraint(s).[/dim]"
         )
 
+    policy_meta = plan.metadata.get("policy_evaluation", {})
+    if policy_meta:
+        pol_action = policy_meta.get("overall_action", "allow")
+        pol_name = policy_meta.get("policy_name", "enterprise-default")
+        if pol_action == "block":
+            console.print(f"\n[bold red]✖ Enterprise Policy Verdict ({pol_name}): BLOCKED[/bold red] - {policy_meta.get('summary')}")
+        elif pol_action == "review":
+            console.print(f"\n[bold yellow]⚠️ Enterprise Policy Verdict ({pol_name}): REVIEW REQUIRED[/bold yellow] - {policy_meta.get('summary')}")
+        else:
+            console.print(f"\n[dim]✔ Enterprise Policy Verdict ({pol_name}): COMPLIANT[/dim]")
+
     # Execute if requested
     if execute or dry_run:
+        if execute and policy_meta.get("overall_action") == "block":
+            console.print("[bold red]✖ Execution aborted: Modernization plan violates enterprise policy.[/bold red]")
+            raise typer.Exit(code=1)
+
         executor = PlanExecutor()
         console.print(f"\n[bold cyan]Starting plan execution...[/bold cyan]")
         exec_res = executor.execute_plan(
@@ -1437,6 +1457,136 @@ def checkpoints_cmd(
         )
 
     console.print(table)
+
+
+policy_app = typer.Typer(
+    name="policy",
+    help="Enterprise Policy-as-Code governance and compliance enforcement (P20).",
+    no_args_is_help=True,
+)
+app.add_typer(policy_app, name="policy")
+
+
+@policy_app.command("init")
+def policy_init_cmd(
+    output_file: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Target path to create enterprise policy file."),
+    ] = Path("policy.yaml"),
+):
+    """Scaffold a turnkey enterprise modernization policy file (P20)."""
+    from amstralift.policy import EnterprisePolicy
+
+    if output_file.exists():
+        console.print(f"[bold red]✖ Error:[/bold red] Policy file already exists: {output_file.resolve()}")
+        raise typer.Exit(code=1)
+
+    policy = EnterprisePolicy(
+        name="corporate-standard-policy",
+        description="Corporate baseline for framework upgrades, vulnerability tolerance, and semantic API preservation.",
+    )
+    policy.save(output_file)
+    console.print(f"[bold green]✔ Enterprise policy template created successfully at:[/bold green] {output_file.resolve()}")
+
+
+@policy_app.command("check")
+def policy_check_cmd(
+    repo: Annotated[
+        Path,
+        typer.Option("--repo", "-r", help="Target repository directory to evaluate."),
+    ] = Path("."),
+    policy_file: Annotated[
+        Path | None,
+        typer.Option("--policy", "-p", help="Path to declarative enterprise policy file (.yaml)."),
+    ] = None,
+    target: Annotated[
+        int | None,
+        typer.Option("--target", "-t", help="Target major framework version."),
+    ] = None,
+    ecosystem: Annotated[
+        str | None,
+        typer.Option("--ecosystem", "-e", help="Ecosystem override (angular, dotnet, python, react)."),
+    ] = None,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output evaluation report as raw JSON."),
+    ] = False,
+):
+    """Evaluate repository modernization against declarative enterprise policy (P20)."""
+    from rich.panel import Panel
+    from rich.table import Table
+
+    from amstralift.planning import ModernizationPlanner
+    from amstralift.policy import PolicyAction, PolicyEvaluator, PolicySeverity, load_policy
+
+    if not repo.exists() or not repo.is_dir():
+        console.print(f"[bold red]✖ Error:[/bold red] Target directory does not exist: {repo.resolve()}")
+        raise typer.Exit(code=1)
+
+    policy = load_policy(repo_path=repo, explicit_policy_path=policy_file)
+    planner = ModernizationPlanner()
+    plan = planner.generate_plan(
+        repo_path=repo,
+        ecosystem=ecosystem,
+        target_major=target,
+        policy=policy,
+    )
+
+    report = PolicyEvaluator.evaluate(plan, policy)
+
+    if as_json:
+        typer.echo(report.model_dump_json(indent=2))
+        raise typer.Exit(code=0 if report.allowed else 1)
+
+    badge_map = {
+        PolicyAction.ALLOW: "[bold green]COMPLIANT (ALLOW)[/bold green]",
+        PolicyAction.REVIEW: "[bold yellow]REQUIRES HUMAN REVIEW[/bold yellow]",
+        PolicyAction.BLOCK: "[bold red]NON-COMPLIANT (BLOCK)[/bold red]",
+    }
+    badge = badge_map.get(report.overall_action, report.overall_action.value.upper())
+
+    border_color = (
+        "green"
+        if report.overall_action == PolicyAction.ALLOW
+        else ("yellow" if report.overall_action == PolicyAction.REVIEW else "red")
+    )
+
+    console.print(
+        Panel(
+            f"[bold]Policy Specification:[/bold] [cyan]{policy.name}[/cyan] (v{policy.version})\n"
+            f"[bold]Target Ecosystem:[/bold] [cyan]{plan.ecosystem.upper()}[/cyan] ({plan.current_version or 'unknown'} → {plan.target_version})\n"
+            f"[bold]Compliance Verdict:[/bold] {badge}\n"
+            f"[bold]Summary:[/bold] {report.summary}\n"
+            f"[bold]Passed Rule Checks:[/bold] {len(report.passed_checks)} ({', '.join(report.passed_checks)})",
+            title="Enterprise Policy-as-Code Evaluation (P20)",
+            border_style=border_color,
+        )
+    )
+
+    all_violations = report.blocking_violations + report.review_violations
+    if all_violations:
+        table = Table(
+            title=f"Policy Violations & Governance Flags ({len(all_violations)} items)",
+            header_style="bold red",
+            border_style="dim",
+        )
+        table.add_column("Rule Name", style="bold", no_wrap=True)
+        table.add_column("Action", style="bold")
+        table.add_column("Severity", style="magenta")
+        table.add_column("Target", style="yellow")
+        table.add_column("Message", style="italic")
+
+        for v in all_violations:
+            act_str = "[bold red]BLOCK[/bold red]" if v.action == PolicyAction.BLOCK else "[yellow]REVIEW[/yellow]"
+            sev_str = "[bold red]CRITICAL[/bold red]" if v.severity == PolicySeverity.CRITICAL else "[yellow]WARNING[/yellow]"
+            table.add_row(v.rule_name, act_str, sev_str, v.target, v.message)
+
+        console.print(table)
+    else:
+        console.print("[bold green]✔ Zero policy violations detected. Plan fully compliant with enterprise governance standards.[/bold green]")
+
+    if not report.allowed:
+        raise typer.Exit(code=1)
 
 
 @app.command()

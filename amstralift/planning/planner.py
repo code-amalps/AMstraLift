@@ -19,6 +19,7 @@ from amstralift.planning.models import (
     PlannedTransformation,
     TransformationStatus,
 )
+from amstralift.policy import EnterprisePolicy, PolicyEvaluator, load_policy
 from amstralift.transforms.graph import TransformationGraph, _file_patterns_conflict
 from amstralift.transforms.models import (
     EdgeType,
@@ -108,9 +109,20 @@ class ModernizationPlanner:
         ecosystem: str | None = None,
         target_major: int | None = None,
         target_version: str | None = None,
+        policy: EnterprisePolicy | Path | str | None = None,
     ) -> ModernizationPlan:
         """Analyze repository and generate an end-to-end declarative ModernizationPlan."""
         repo_path = Path(repo_path).resolve()
+
+        # Load or validate EnterprisePolicy (P20)
+        eff_policy: EnterprisePolicy
+        if isinstance(policy, EnterprisePolicy):
+            eff_policy = policy
+        elif isinstance(policy, (str, Path)):
+            eff_policy = load_policy(repo_path, explicit_policy_path=policy)
+        else:
+            eff_policy = load_policy(repo_path)
+
         analysis = RepoAnalyzer.analyze(repo_path, ecosystem_hint=ecosystem)
         eco = analysis.ecosystem.lower()
 
@@ -163,6 +175,36 @@ class ModernizationPlanner:
                         risk=node.risk,
                         status=TransformationStatus.REFUSED,
                         reason=f"Only applicable up to {eco.capitalize()} {node.max_major_version}.",
+                        affected_file_patterns=node.affected_file_patterns,
+                    )
+                )
+                continue
+
+            # Check policy blacklisted transformations (P20)
+            if node.id in eff_policy.transformations.disallowed_transformations:
+                refused_nodes.append(
+                    PlannedTransformation(
+                        id=node.id,
+                        name=node.name,
+                        category=node.category,
+                        risk=node.risk,
+                        status=TransformationStatus.REFUSED,
+                        reason=f"Explicitly blacklisted by enterprise policy ({eff_policy.name}).",
+                        affected_file_patterns=node.affected_file_patterns,
+                    )
+                )
+                continue
+
+            # Check policy critical risk tolerance (P20)
+            if node.risk == TransformationRisk.CRITICAL and not eff_policy.transformations.allow_critical_risk:
+                refused_nodes.append(
+                    PlannedTransformation(
+                        id=node.id,
+                        name=node.name,
+                        category=node.category,
+                        risk=node.risk,
+                        status=TransformationStatus.REFUSED,
+                        reason=f"CRITICAL risk transformations are prohibited by enterprise policy ({eff_policy.name}).",
                         affected_file_patterns=node.affected_file_patterns,
                     )
                 )
@@ -293,7 +335,7 @@ class ModernizationPlanner:
         risk_c = sum(1 for t in all_planned if t.status == TransformationStatus.RISKY)
         refused_c = len(refused_nodes)
 
-        return ModernizationPlan(
+        plan = ModernizationPlan(
             repo_path=str(repo_path),
             ecosystem=eco,
             current_version=analysis.current_version,
@@ -312,3 +354,8 @@ class ModernizationPlanner:
                 "conflict_analysis": resolved_conflicts.model_dump(mode="json"),
             },
         )
+
+        # Evaluate against Policy-as-Code (P20)
+        policy_report = PolicyEvaluator.evaluate(plan, eff_policy)
+        plan.metadata["policy_evaluation"] = policy_report.model_dump(mode="json")
+        return plan
