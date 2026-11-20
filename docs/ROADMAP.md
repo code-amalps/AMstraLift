@@ -1,0 +1,611 @@
+# AMstraLift Strategic Roadmap
+
+> **Thesis:** Evolve from **upgrade engine** → **verified modernization engine** → **modernization orchestration platform** → **autonomous-but-constrained modernization system**
+
+---
+
+## Generational Architecture
+
+```text
+Generation 1 (BUILT)          Generation 2 (NEXT)
+┌───────────────────┐          ┌───────────────────┐
+│ TRANSFORM         │          │ PLAN              │
+│ VERIFY            │    →     │ ORCHESTRATE       │
+│ ATTEST            │          │ POLICY            │
+│ PUBLISH           │          │ RISK / APPROVE    │
+└───────────────────┘          │ RESUME            │
+                               └───────────────────┘
+                                        │
+                                        ▼
+Generation 4 (FUTURISTIC)     Generation 3 (ENTERPRISE)
+┌───────────────────┐          ┌───────────────────┐
+│ AI PLANNING       │          │ MULTI-REPO        │
+│ RULE DISCOVERY    │    ←     │ CAMPAIGNS         │
+│ DETERMINISTIC     │          │ PROVENANCE        │
+│   EXECUTION       │          │ ORG GOVERNANCE    │
+│ SELF-VERIFICATION │          │ RUNTIME VERIFY    │
+│ CONTINUOUS        │          └───────────────────┘
+│   MODERNIZATION   │
+└───────────────────┘
+```
+
+---
+
+## Generation 1 — Already Built (v0.1.17, commit `12469e6`)
+
+> 110 commits · 68 source files · ~15,950 LOC · ~7,200 test LOC · 74 verified tests
+
+| # | System | Status |
+|---|--------|--------|
+| 1 | Multi-ecosystem upgrade engine (Angular, React, Python, .NET) | ✅ |
+| 2 | Angular modernization suite (14+ AST transformations) | ✅ |
+| 3 | Two-stage execution pipeline (Stage A → Stage B) | ✅ |
+| 4 | 6-gate sandbox verification | ✅ |
+| 5 | Cryptographic trust boundary (HMAC-SHA256) | ✅ |
+| 6 | CVE remediation engine (OSV, dependency graph, safe fix) | ✅ |
+| 7 | Transformation evidence model (P3) | ✅ frozen |
+| 8 | Partial modernization / refusal engine (P4) | ✅ frozen |
+| 9 | Gate 6 semantic & contract diff (P5) | ✅ frozen |
+| 10 | Governance policies (LTS, EOL, vulnerability) | ✅ |
+| 11 | Desktop GUI (Tkinter, dark/light, streaming) | ✅ |
+| 12 | REST API (FastAPI + Swagger) | ✅ |
+| 13 | Monorepo & polyglot support | ✅ |
+| 14 | PR publishing & intelligent batching | ✅ |
+| 15 | Standalone Windows distribution (PyInstaller) | ✅ |
+
+### Trust pipeline as of Generation 1
+
+```text
+Candidate → Decision Engine → APPLY / REFUSE
+                                │          │
+                           Transform   Untouched
+                            Record      Source
+                                │          │
+                                └────┬─────┘
+                                     ▼
+                              6-Gate Sandbox
+                              ┌──┬──┬──┬──┬──┬──┐
+                              │G1│G2│G3│G4│G5│G6│
+                              └──┴──┴──┴──┴──┴──┘
+                                     │
+                              Evidence Bundle
+                              (HMAC-attested)
+                                     │
+                              Report + PR
+```
+
+---
+
+## Generation 2 — Next Development Cycle
+
+### P16 — Transformation Dependency Graph (COMPLETED — v0.2.0)
+
+> **Built:** Full Directed Acyclic Graph (DAG) engine in `amstralift.transforms` modeling prerequisites, conflicts, invalidation, topological execution phases, parallelizable sets, and atomic rollback boundaries. Visualizable via `amstralift graph`.
+
+Today each transformation is independent. With hundreds of rules, AMstraLift needs to understand:
+
+```text
+Transformation Graph
+
+T1 ──► T2 ──► T5
+│             │
+└──► T3 ──────┘
+       │
+       ▼
+      T4
+```
+
+**What it models:**
+
+| Relationship | Example |
+|---|---|
+| Prerequisites | Standalone migration must precede control-flow migration |
+| Conflicts | Two rules modifying `angular.json` simultaneously |
+| Invalidation | Symbol rename invalidates rules expecting old symbol |
+| Ordering | Dependency upgrades before framework migration |
+| Dependency chains | Template cleanup depends on standalone + control-flow |
+| Rollback boundaries | Which transformations form atomic groups |
+| Parallelizable sets | Independent rules that can execute concurrently |
+
+**Example dependency chain:**
+
+```text
+Angular standalone migration
+        ↓
+control-flow migration
+        ↓
+template cleanup
+        ↓
+ESLint migration
+        ↓
+verification
+```
+
+**Value:** Makes large migrations safely orchestratable instead of relying on implicit ordering.
+
+---
+
+### P17 — Transformation Planning Engine
+
+> **AMstraLift becomes a modernization planner, not just an upgrade engine.**
+
+Today AMstraLift can *execute* transformations. P17 adds the ability to *decide* what should be transformed, in what order, and why.
+
+```text
+Repository
+    ↓
+Analysis
+    ↓
+Modernization Plan
+    │
+    ├── 23 safe transformations
+    ├── 4 dependent transformations
+    ├── 3 risky transformations
+    └── 2 refused
+    ↓
+Execution Plan
+```
+
+**Plan structure:**
+
+```yaml
+plan:
+  target: angular_21
+
+  phases:
+    - dependencies
+    - framework_migration
+    - template_migration
+    - configuration
+    - cleanup
+    - verification
+```
+
+**Depends on:** P16 (transformation dependency graph)
+
+---
+
+### P18 — Cross-Transformation Conflict Detection
+
+> **Detect conflicts before touching the workspace.**
+
+```text
+Rule A: modify angular.json
+Rule B: modify angular.json
+                                 → FILE_CONFLICT detected
+
+Rule A: rename exported symbol
+Rule B: expects old symbol
+                                 → SYMBOL_CONFLICT detected
+```
+
+**Pre-execution conflict analysis:**
+
+```text
+Rule A ─────┐
+            ├── Conflict → resolve before execution
+Rule B ─────┘
+```
+
+**Pairs with:** P4 transactional architecture (rollback on conflict) and P16 (dependency graph expresses conflicts)
+
+---
+
+### P19 — Incremental / Resumeable Modernization
+
+> **Major enterprise feature: don't restart 3-hour modernizations.**
+
+```text
+Phase 1 ✓  ─── checkpoint ───┐
+Phase 2 ✓  ─── checkpoint ───┤
+Phase 3 ✓  ─── checkpoint ───┤
+Phase 4 ✗                    │
+                              ↓
+                      amstralift resume <execution-id>
+                              ↓
+                         Phase 4 (retry)
+```
+
+**Checkpoint model:**
+
+```yaml
+checkpoint:
+  execution_id: exec_00042
+  workspace_revision: abc123
+  completed_transformations:
+    - tr_001
+    - tr_002
+    - tr_003
+  evidence_hash: sha256:...
+  timestamp: 2026-10-06T23:30:00Z
+  resumable: true
+```
+
+**CLI:** `amstralift resume <execution-id>`
+
+---
+
+### P20 — Policy-as-Code
+
+> **The entire modernization policy becomes declarative.**
+
+```yaml
+policy:
+  allow_major_upgrade: false
+
+  security:
+    critical_cve: block
+    high_cve: review
+
+  semantic:
+    public_api_removal: block
+
+  transformations:
+    deterministic_only: true
+
+  governance:
+    eol_within_days: 180
+```
+
+**Evaluation flow:**
+
+```text
+Transformation
+      ↓
+Policy Engine
+      ↓
+ALLOW / REVIEW / BLOCK
+```
+
+**Builds on:** Existing governance policies, P4 refusal engine, P5 Gate 6 semantic diff
+
+---
+
+### Generation 2 Priority Order
+
+| Priority | Capability | Reason |
+|---|---|---|
+| **P16** | Transformation Dependency Graph | Foundation for everything else (✅ Completed in v0.2.0) |
+| **P17** | Modernization Planner | Decides what/when/how to transform |
+| **P18** | Conflict Detection | Safety before execution |
+| **P20** | Policy-as-Code | Converts verification into governance |
+| **P19** | Resumeable Execution | Operationally practical for enterprise |
+
+---
+
+## Generation 3 — Enterprise Scale
+
+### P21 — Multi-Repository Modernization
+
+```text
+Organization
+│
+├── repo-a (Angular 16)
+├── repo-b (Angular 18)
+├── repo-c (React 17)
+├── repo-d (.NET 6)
+└── repo-e (shared-lib)
+```
+
+**Cross-repo dependency awareness:**
+
+```text
+service-A
+   ↓
+shared-library        → upgrading this requires coordinated
+   ↓                     modernization of 14 repositories
+service-B
+```
+
+**Evolution from:** Existing monorepo topology scanner
+
+---
+
+### P22 — Modernization Campaign Engine
+
+> **Turn individual upgrades into organization-wide campaigns.**
+
+```text
+Campaign: Q1 2027 Angular Modernization
+│
+├── 143 repositories
+├── 68 Angular → 22
+├── 31 React → 20
+├── 24 Python → 3.14
+└── 20 .NET → 10
+```
+
+**Dashboard metrics:**
+
+```text
+Total repos           143
+Modernized             97
+Partial                31
+Refused                11
+Failed                  4
+
+CVE reduction          -87%
+EOL reduction          -94%
+Engineering hours saved 2,340
+Upgrade success rate    92%
+Refusal rate            7.7%
+Mean verification time  4m 23s
+```
+
+**Builds on:** Existing pilot metrics infrastructure
+
+---
+
+### P23 — Human Approval Workflow
+
+```text
+AMstraLift
+     ↓
+Risk Classification
+     ↓
+┌──────────────┐
+│ SAFE         │ → automatic PR merge
+│ REVIEW       │ → human approval required
+│ BLOCK        │ → stop, notify
+└──────────────┘
+```
+
+**Approval triggers:**
+
+- API breaking change
+- Database migration dependency
+- Major version jump
+- Security override
+- Unsupported transformation pattern
+
+**Gives enterprise teams:** Controlled automation with human oversight where it matters
+
+---
+
+### P24 — Supply-Chain Attestation
+
+> **From HMAC attestation → SLSA/in-toto-style provenance**
+
+```text
+Source Revision
+      +
+Transformation Rules (versioned)
+      +
+Tool Version
+      +
+Policy Version
+      +
+Dependency State
+      +
+Verification Results
+      ↓
+Signed Provenance Record
+```
+
+**Six-months-later query:**
+
+> "Why was this code changed?"
+
+```text
+Repository revision:   abc123
+Transformation:        migrate-ngmodule-to-standalone
+Rule version:          angular-rule-14
+Policy:                enterprise-policy-v3
+Verification:          6/6 passed
+Operator:              CI
+Evidence:              cryptographically verified
+```
+
+**Evolution from:** Existing HMAC attestation in `core/crypto.py`
+
+---
+
+### P25 — Semantic Risk Engine
+
+> **Gate 6 evolves from pass/fail → risk quantification**
+
+```text
+Semantic Change
+       ↓
+Risk Engine
+       ↓
+LOW / MEDIUM / HIGH / CRITICAL
+```
+
+| Change | Risk |
+|--------|------|
+| Added private helper | LOW |
+| Added public method | LOW |
+| Changed internal config | MEDIUM |
+| Changed API response shape | HIGH |
+| Removed API route | CRITICAL |
+| Changed DB schema | CRITICAL |
+
+**Risk feeds into:** P23 approval workflow (CRITICAL → BLOCK, HIGH → REVIEW, LOW → AUTO)
+
+---
+
+### P26 — Runtime Verification
+
+> **Prove behavioral equivalence, not just build success.**
+
+```text
+Transformation
+      ↓
+Static verification (Gates 1-6)
+      ↓
+Sandbox deployment
+      ↓
+Synthetic traffic
+      ↓
+Runtime telemetry
+      ↓
+Behavior comparison
+```
+
+**Example:**
+
+```text
+Before:                         After:
+POST /orders                    POST /orders
+  latency: 120ms                  latency: 130ms
+  status: 201                     status: 201
+  body: { id: "..." }             body: { id: "..." }
+
+Verdict: EQUIVALENT ✓
+```
+
+**AMstraLift can then prove:** *"It behaves equivalently under defined workloads"* — not just *"It builds."*
+
+---
+
+## Generation 4 — Futuristic
+
+### P27 — AI-Assisted Rule Discovery
+
+> **Not AI-generated arbitrary code. Pattern mining → candidate deterministic rules.**
+
+```text
+Repository corpus
+    ↓
+Pattern mining
+    ↓
+Repeated legacy pattern (4,821 occurrences across 73 repos)
+    ↓
+Candidate transformation rule
+    ↓
+Human review
+    ↓
+Deterministic rule (trusted)
+```
+
+**Critical constraint:** AI discovers patterns. Execution remains deterministic. Trust philosophy preserved.
+
+---
+
+### P28 — Self-Learning Transformation Library
+
+```text
+Successful modernizations
+     ↓
+Evidence corpus
+     ↓
+Pattern extraction
+     ↓
+Candidate Rule
+     ↓
+Validation Corpus
+     ↓
+Regression Tests
+     ↓
+Human Approval
+     ↓
+Trusted Rule
+```
+
+> [!IMPORTANT]
+> **Never allow production executions to automatically create trusted transformation rules.** Same philosophy as the refusal/evidence system.
+
+---
+
+### P29 — Universal Semantic Model
+
+> **Gate 6 becomes ecosystem-independent.**
+
+```text
+Angular ──┐
+React ────┤
+Python ───┤
+.NET ─────┤
+Java ─────┤
+Go ───────┤
+           ▼
+    Universal Software
+      Contract Model
+```
+
+**Represents:**
+
+```text
+Service · API · Route · Symbol · Dependency
+Configuration · Database · Event · Queue
+Authentication Boundary
+```
+
+**Could become:** One of AMstraLift's strongest architectural assets
+
+---
+
+### P30 — Autonomous Modernization Agent
+
+> **AI as planner/reasoner, AMstraLift as deterministic execution and verification authority.**
+
+```text
+            ┌──────────────────┐
+            │ AI Modernization │
+            │ Planner          │
+            └────────┬─────────┘
+                     ↓
+              Deterministic Plan
+                     ↓
+            ┌──────────────────┐
+            │ AMstraLift       │
+            │ Execution Engine │
+            └────────┬─────────┘
+                     ↓
+             Transformation
+                     ↓
+          6-Gate Verification
+                     ↓
+           Semantic Verification
+                     ↓
+             Risk Assessment
+                     ↓
+         ┌───────────┴──────────┐
+         ▼                      ▼
+      Automatic             Human Review
+         │                      │
+         └───────────┬──────────┘
+                     ↓
+                 PR / Merge
+```
+
+**This is NOT:** An LLM coding agent that edits production repositories.
+
+**This IS:** AI intelligence directing a deterministic, verified, attested execution pipeline with human oversight at risk boundaries.
+
+---
+
+## What NOT to Prioritize
+
+| Don't | Why |
+|-------|-----|
+| Another 50 transformation rules | Execution foundation is solid; intelligence around it matters more |
+| Another GUI redesign | Current GUI is functional; campaign dashboard comes with P22 |
+| Another adapter just for ecosystem count | 4 ecosystems is sufficient to prove the model |
+| LLM directly editing production repos | Violates the trust/determinism philosophy |
+| Dashboard before campaign-scale exists | UI should follow capability, not precede it |
+
+---
+
+## Summary
+
+```text
+              AMstraLift Evolution
+                     │
+    ┌────────────────┼────────────────┐
+    ▼                ▼                ▼
+ Gen 1            Gen 2            Gen 3-4
+ Upgrade          Modernization    Modernization
+ Engine           Orchestration    Platform
+                  Platform
+    │                │                │
+    ▼                ▼                ▼
+ Transform        Plan             Campaign
+ Verify           Orchestrate      Multi-repo
+ Attest           Policy           Provenance
+ Publish          Risk/Approve     Runtime verify
+                  Resume           AI planning
+```
+
+> The existing architecture already points toward this: Stage A is isolated transformation, Stage B is controlled publication, and the 6 gates establish the verification boundary. The next moat is **intelligence around the execution**.

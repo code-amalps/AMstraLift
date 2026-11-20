@@ -903,6 +903,154 @@ def self_update_cmd(
         raise typer.Exit(code=1)
 
 
+@app.command("graph")
+def graph_cmd(
+    ecosystem: Annotated[
+        str | None,
+        typer.Option("--ecosystem", "-e", help="Filter transformations by ecosystem (angular, dotnet, python, react)."),
+    ] = None,
+    phases: Annotated[
+        bool,
+        typer.Option("--phases", help="Display topological execution waves/phases."),
+    ] = False,
+    batches: Annotated[
+        bool,
+        typer.Option("--batches", help="Display parallel-safe execution batches with disjoint file patterns."),
+    ] = False,
+    rollback: Annotated[
+        str | None,
+        typer.Option("--rollback", help="Display atomic rollback boundary for a specific transformation ID."),
+    ] = None,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Output transformation graph as JSON."),
+    ] = False,
+):
+    """Inspect the Generation 2 Transformation Dependency Graph (P16)."""
+    import json
+    from rich.panel import Panel
+    from rich.tree import Tree
+    from amstralift.transforms import (
+        EdgeType,
+        build_default_graph,
+        get_transformations_for_ecosystem,
+    )
+
+    graph = build_default_graph()
+
+    # Filter by ecosystem if requested
+    if ecosystem:
+        eco = ecosystem.strip().lower()
+        active_nodes = [t.id for t in get_transformations_for_ecosystem(eco)]
+        if not active_nodes:
+            console.print(f"[bold red]✖ Error:[/bold red] Unknown ecosystem '{ecosystem}'. Supported: angular, dotnet, python, react.")
+            raise typer.Exit(code=1)
+    else:
+        active_nodes = list(graph.nodes.keys())
+
+    subgraph = graph.filter_subgraph(active_nodes)
+
+    if as_json:
+        typer.echo(json.dumps(subgraph.to_dict(), indent=2))
+        raise typer.Exit(code=0)
+
+    if rollback:
+        boundaries = graph.get_rollback_boundaries(active_nodes)
+        target = rollback.strip()
+        if target not in boundaries:
+            console.print(f"[bold red]✖ Error:[/bold red] Transformation ID '{target}' not found.")
+            raise typer.Exit(code=1)
+        rb_set = sorted(list(boundaries[target]))
+        target_node = graph.get_node(target)
+        boundary_label = f" (Atomic Boundary: {target_node.atomic_boundary})" if target_node and target_node.atomic_boundary else ""
+        console.print(
+            Panel(
+                f"[bold cyan]Transformation:[/bold cyan] {target}{boundary_label}\n"
+                f"[bold yellow]Rollback Blast Radius ({len(rb_set)} transformations):[/bold yellow]\n"
+                + "\n".join(f"  • [red]{t}[/red]" for t in rb_set),
+                title="Atomic Rollback Boundary (P16)",
+                border_style="cyan",
+            )
+        )
+        raise typer.Exit(code=0)
+
+    if phases:
+        # Non-conflicting nodes for phase calculation
+        conflicts = subgraph.find_conflicts()
+        excluded = {c.target_id for c in conflicts if "legacy" in c.target_id} | {c.source_id for c in conflicts if "legacy" in c.source_id}
+        valid_nodes = [n for n in active_nodes if n not in excluded]
+        wave_list = graph.get_execution_phases(valid_nodes)
+        console.print(Panel(f"[bold green]Execution Waves ({len(wave_list)} sequential phases)[/bold green]", border_style="green"))
+        for i, wave in enumerate(wave_list):
+            table = Table(title=f"Phase {i + 1}", header_style="bold cyan", border_style="dim")
+            table.add_column("Transformation ID", style="bold")
+            table.add_column("Category", style="yellow")
+            table.add_column("Risk", style="green")
+            table.add_column("Affected File Patterns", style="dim")
+            for nid in wave:
+                node = graph.get_node(nid)
+                if node:
+                    table.add_row(
+                        node.id,
+                        node.category.value.upper(),
+                        node.risk.value.upper(),
+                        ", ".join(node.affected_file_patterns) or "(none)",
+                    )
+            console.print(table)
+        raise typer.Exit(code=0)
+
+    if batches:
+        conflicts = subgraph.find_conflicts()
+        excluded = {c.target_id for c in conflicts if "legacy" in c.target_id} | {c.source_id for c in conflicts if "legacy" in c.source_id}
+        valid_nodes = [n for n in active_nodes if n not in excluded]
+        batch_list = graph.get_parallel_batches(valid_nodes)
+        console.print(Panel(f"[bold green]Parallelizable Execution Batches ({len(batch_list)} batches)[/bold green]", border_style="green"))
+        for b in batch_list:
+            mode_tag = "[bold green][CONCURRENT][/bold green]" if b.is_concurrent else "[dim][SEQUENTIAL][/dim]"
+            console.print(f"Batch #{b.batch_index + 1} {mode_tag}:")
+            for nid in b.nodes:
+                node = graph.get_node(nid)
+                patterns = f" [dim]({', '.join(node.affected_file_patterns)})[/dim]" if node and node.affected_file_patterns else ""
+                console.print(f"  ↳ [cyan]{nid}[/cyan]{patterns}")
+        raise typer.Exit(code=0)
+
+    # Standard Graph Overview
+    table = Table(
+        title=f"Transformation Dependency Graph (P16) — {len(active_nodes)} transformations",
+        header_style="bold cyan",
+        border_style="dim",
+    )
+    table.add_column("Transformation ID", style="bold", no_wrap=True)
+    table.add_column("Ecosystem", style="green")
+    table.add_column("Category", style="yellow")
+    table.add_column("Risk", style="magenta")
+    table.add_column("Prerequisites", style="cyan")
+    table.add_column("Atomic Boundary", style="dim")
+
+    for nid in sorted(active_nodes):
+        node = graph.get_node(nid)
+        if not node:
+            continue
+        prereqs = graph.get_prerequisites(nid, transitive=False)
+        prereq_str = ", ".join(sorted(prereqs)) if prereqs else "-"
+        boundary_str = node.atomic_boundary or "-"
+        table.add_row(
+            node.id,
+            node.ecosystem.upper(),
+            node.category.value.upper(),
+            node.risk.value.upper(),
+            prereq_str,
+            boundary_str,
+        )
+
+    console.print(table)
+    console.print(
+        "\n[dim]Tips: Use [/dim][bold cyan]amstralift graph --phases[/bold cyan][dim] to view sequential waves, [/dim]"
+        "[bold cyan]--batches[/bold cyan][dim] for parallel concurrency, or [/dim]"
+        "[bold cyan]--rollback <id>[/bold cyan][dim] for atomic rollback boundaries.[/dim]"
+    )
+
+
 @app.command()
 def version():
     """Display AMstraLift version and author attribution."""

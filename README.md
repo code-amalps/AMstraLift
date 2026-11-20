@@ -11,7 +11,7 @@
 [![Platform](https://img.shields.io/badge/CLI_Platform-Windows_%7C_Linux_%7C_macOS-lightgrey.svg)]()
 [![Binary](https://img.shields.io/badge/Standalone_EXE-Windows_x64-blue.svg)](https://github.com/code-amalps/AMstraLift/releases)
 [![Tests](https://github.com/code-amalps/AMstraLift/actions/workflows/tests.yml/badge.svg?branch=Dev)](https://github.com/code-amalps/AMstraLift/actions/workflows/tests.yml)
-[![Release](https://img.shields.io/badge/Release-v0.1.19-informational.svg)](https://github.com/code-amalps/AMstraLift/releases)
+[![Release](https://img.shields.io/badge/Release-v0.2.0-informational.svg)](https://github.com/code-amalps/AMstraLift/releases)
 [![Author](https://img.shields.io/badge/Author-Amal%20P%20S-black.svg)](https://github.com/code-amalps)
 
 ---
@@ -242,7 +242,10 @@ uv run amstralift doctor --fix
 # 7. Check for application version updates
 uv run amstralift update --check
 
-# 8. Launch the Desktop GUI
+# 8. Inspect the Transformation Dependency Graph (P16 DAG, phases, and rollback boundaries)
+uv run amstralift graph --phases
+
+# 9. Launch the Desktop GUI
 uv run amstralift gui
 ```
 
@@ -373,7 +376,7 @@ AMstraLift is under active development by **Amal P S**. We are seeking developer
 
 - **Generation 1 (Completed — v0.1.19)**: Multi-ecosystem upgrade engine, complete Angular AST modernization quartet (control flow, standalone, signals, inject, self-closing), 6 verification gates, OSV CVE remediation, exact resolved versions attestation, self-healing compiler configs, system doctor diagnostics & repairs (`amstralift doctor --fix`), in-place self-update engine (`amstralift update`), desktop GUI with silent background scanner and 1-click update/self-heal pill, monorepo discovery, turnkey CI templates, standalone distribution.
 - **Generation 2 (In Progress)**:
-  - **P16**: Transformation Dependency Graph (modeling prerequisites, conflicts, and parallelizable sets).
+  - **P16 (Completed — v0.2.0)**: Transformation Dependency Graph (DAG modeling prerequisites, ordering, conflicts, invalidations, execution waves, parallel-safe batches, and atomic rollback boundaries via `amstralift graph`).
   - **P17**: Modernization Planning Engine (declarative upgrade plans).
   - **P18**: Pre-execution Cross-Transformation Conflict Detection.
   - **P19**: Resumable / Checkpointed Modernization (`amstralift resume`).

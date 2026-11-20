@@ -5,6 +5,26 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.0] - 2026-11-20
+
+### Added
+- **P16 — Transformation Dependency Graph (`amstralift.transforms`)**:
+  - Foundational Directed Acyclic Graph (DAG) architecture for AMstraLift Generation 2, modeling prerequisites, ordering constraints, mutual conflicts, precondition invalidations, and rollback boundaries across modernizations.
+  - Multi-ecosystem transformation catalog covering Angular (AST quartet, workspace schema, ecosystem alignment, Material styling, ESLint), .NET (LTS framework target, Central Package Management, nullable reference types, code formatting), Python (PEP 621 declarative pyproject.toml, Ruff, PEP 585/604 modern typing), and React (JSX runtime, hooks strict mode).
+  - Deterministic Kahn-based topological sort with reproducible tie-breaking to eliminate implicit ordering vulnerabilities.
+  - Sequential execution wave generator (`get_execution_phases`) grouping independent dependencies into staged waves.
+  - Concurrent parallel batch partitioner (`get_parallel_batches`) detecting disjoint vs overlapping file patterns to safely schedule concurrent transformation workers without race conditions.
+  - Atomic transaction rollback boundary engine (`get_rollback_boundaries`) calculating blast radius across atomic boundary groups (e.g. `angular:ast-quartet`, `dotnet:cpm-boundary`) and downstream transitive dependents.
+- **CLI Transformation Graph Inspector (`amstralift graph`)**:
+  - `amstralift graph`: Interactive Rich table overview of all transformations, ecosystems, categories, risks, prerequisites, and atomic transaction boundaries.
+  - `amstralift graph --phases`: Displays sequential execution waves.
+  - `amstralift graph --batches`: Displays parallel-safe execution batches marked `[CONCURRENT]` or `[SEQUENTIAL]` with file pattern annotations.
+  - `amstralift graph --rollback <id>`: Computes and displays the atomic rollback blast radius for a given transformation.
+  - `amstralift graph --ecosystem <name>`: Filters transformations by ecosystem (`angular`, `dotnet`, `python`, `react`).
+  - `amstralift graph --json`: Clean JSON serialization for automated modernization planning pipelines (P17).
+
+---
+
 ## [0.1.19] - 2026-11-20
 
 ### Added

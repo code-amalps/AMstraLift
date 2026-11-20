@@ -20,13 +20,13 @@ def test_is_newer_comparison():
 def test_check_for_updates_pypi_success():
     fake_pypi_data = {
         "info": {
-            "version": "0.2.0",
+            "version": "0.9.9",
             "summary": "Major new release with automated self-healing",
         },
         "urls": [
             {
                 "packagetype": "bdist_wheel",
-                "url": "https://files.pythonhosted.org/amstralift-0.2.0-py3-none-any.whl",
+                "url": "https://files.pythonhosted.org/amstralift-0.9.9-py3-none-any.whl",
                 "digests": {"sha256": "fake_sha256_hash"},
             }
         ],
@@ -41,10 +41,10 @@ def test_check_for_updates_pypi_success():
         res = SelfUpdater.check_for_updates()
 
     assert isinstance(res, UpdateCheckResult)
-    assert res.latest_version == "0.2.0"
+    assert res.latest_version == "0.9.9"
     assert res.update_available is True
     assert res.source == "pypi"
-    assert res.download_url == "https://files.pythonhosted.org/amstralift-0.2.0-py3-none-any.whl"
+    assert res.download_url == "https://files.pythonhosted.org/amstralift-0.9.9-py3-none-any.whl"
     assert res.checksum == "fake_sha256_hash"
 
 
