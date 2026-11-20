@@ -188,6 +188,12 @@ def run_git(
     if env:
         clean_env.update(env)
 
+    # Fallback Git identity so commits never fail in CI, containers, or clean VMs
+    clean_env.setdefault("GIT_AUTHOR_NAME", "AMstraLift Bot")
+    clean_env.setdefault("GIT_AUTHOR_EMAIL", "bot@amstralift.internal")
+    clean_env.setdefault("GIT_COMMITTER_NAME", "AMstraLift Bot")
+    clean_env.setdefault("GIT_COMMITTER_EMAIL", "bot@amstralift.internal")
+
     result = subprocess.run(
         ["git"] + args,
         cwd=cwd,

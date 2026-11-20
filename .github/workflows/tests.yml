@@ -35,10 +35,28 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Configure Git author identity
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global core.autocrlf false
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
       - name: Install dependencies
         run: |
           uv sync --group dev
 
-      - name: Run Test Suite
+      - name: Run Test Suite (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a uv run pytest -v
+
+      - name: Run Test Suite (Windows / macOS)
+        if: runner.os != 'Linux'
         run: |
           uv run pytest -v
