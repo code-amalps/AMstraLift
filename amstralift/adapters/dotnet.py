@@ -15,6 +15,20 @@ from pathlib import Path
 
 import httpx
 
+_ORIGINAL_HTTPX_CLIENT = httpx.Client
+
+
+def _get_http_client(timeout: float):
+    """Return resilient HTTP client, respecting test mocks if httpx.Client was patched."""
+    if httpx.Client is not _ORIGINAL_HTTPX_CLIENT:
+        return httpx.Client(timeout=timeout)
+    try:
+        from amstralift.security.osv_client import create_resilient_httpx_client
+
+        return create_resilient_httpx_client(timeout=timeout)
+    except Exception:
+        return httpx.Client(timeout=timeout)
+
 logger = logging.getLogger("amstralift.adapters.dotnet")
 
 from amstralift.adapters.base import BaseAdapter
@@ -122,27 +136,48 @@ class DotNetAdapter(BaseAdapter):
         """Fetch latest stable GA version from NuGet flatcontainer API (never pre-release).
 
         If target_major is provided, returns latest stable GA version matching that major version.
+        Versions are sorted semantically to ensure the true highest stable release is returned
+        regardless of array order in the NuGet flat-container response.
         """
         url = f"{self.nuget_base}/{package_name.lower()}/index.json"
         try:
-            from amstralift.security.osv_client import create_resilient_httpx_client
-            with create_resilient_httpx_client(timeout=self.timeout_seconds) as client:
+            from packaging.version import InvalidVersion, Version
+
+            with _get_http_client(timeout=self.timeout_seconds) as client:
                 res = client.get(url)
                 if res.status_code == 200:
                     data = res.json()
                     versions = data.get("versions", [])
-                    stable = [v for v in versions if "-" not in v]
-                    if target_major is not None:
-                        matching = []
-                        for v in stable:
-                            m = re.match(r"^(\d+)\.", v)
-                            if m and int(m.group(1)) == target_major:
-                                matching.append(v)
-                        if matching:
-                            return matching[-1]
+                    parsed_versions: list[tuple[Version, str]] = []
+                    for v in versions:
+                        if not isinstance(v, str) or "-" in v:
+                            continue
+                        try:
+                            v_obj = Version(v)
+                            if not v_obj.is_prerelease and not v_obj.is_devrelease:
+                                parsed_versions.append((v_obj, v))
+                        except InvalidVersion:
+                            m = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?(?:\.(\d+))?", v)
+                            if m and "-" not in v:
+                                parts = [int(p) if p else 0 for p in m.groups()]
+                                v_norm = f"{parts[0]}.{parts[1]}.{parts[2]}.{parts[3]}"
+                                try:
+                                    parsed_versions.append((Version(v_norm), v))
+                                except Exception:
+                                    continue
+
+                    if not parsed_versions:
                         return None
-                    if stable:
-                        return stable[-1]
+
+                    if target_major is not None:
+                        matching = [item for item in parsed_versions if item[0].major == target_major]
+                        if matching:
+                            matching.sort(key=lambda item: item[0])
+                            return matching[-1][1]
+                        return None
+
+                    parsed_versions.sort(key=lambda item: item[0])
+                    return parsed_versions[-1][1]
         except Exception:
             return None
         return None

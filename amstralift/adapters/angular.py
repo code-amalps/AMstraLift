@@ -1756,6 +1756,48 @@ class AngularAdapter(BaseAdapter):
             else:
                 applied.append(f"Skipped inject migration: requires Angular 14+ (current is v{major or 'unknown'})")
 
+        # 5. Self-Closing Tags Migration (<app-header></app-header> -> <app-header />)
+        if any(f in ("self-closing", "self-closing-tag", "self-closing-tags", "selfclosing", "all") for f in normalized):
+            if major and major >= 15:
+                schematic_ok = False
+                if has_npx and major >= 17:
+                    # In Angular 17.3+, @angular/core:self-closing-tag provides the official schematic
+                    for schematic_name in ("@angular/core:self-closing-tag", "@angular/core:self-closing-tags"):
+                        cmd = ["npx", "@angular/cli", "generate", schematic_name, "--interactive=false"]
+                        try:
+                            res = subprocess.run(
+                                cmd,
+                                cwd=repo_path,
+                                env=gate_env,
+                                capture_output=True,
+                                text=True,
+                                timeout=180,
+                                stdin=subprocess.DEVNULL,
+                                shell=sys.platform == "win32",
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0,
+                            )
+                            if res.returncode == 0:
+                                applied.append(
+                                    f"Migrated component templates to modern self-closing tags via schematic ({schematic_name})"
+                                )
+                                schematic_ok = True
+                                break
+                        except Exception:
+                            pass
+
+                from amstralift.adapters.angular_self_closing import migrate_repository_self_closing
+
+                stats = migrate_repository_self_closing(repo_path)
+                total_converted = sum(stats.values())
+                if total_converted > 0:
+                    applied.append(
+                        f"Converted {len(stats)} template file(s) ({total_converted} component tags) to modern Angular self-closing tags (<app-* />)"
+                    )
+                elif not schematic_ok:
+                    applied.append("Self-closing tags migration completed (no eligible empty component tags found)")
+            else:
+                applied.append(f"Skipped self-closing tags migration: requires Angular 15.1+ (current is v{major or 'unknown'})")
+
         return applied
 
     def run_build_and_tests(

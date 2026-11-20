@@ -367,3 +367,103 @@ def test_dotnet_microsoft_graph_v4_guard_prevents_breaking_v5_upgrade(tmp_path: 
     assert "Microsoft.Graph.Auth" not in pkg_updates
 
 
+def test_dotnet_nuget_flatcontainer_unsorted_versions_resolution():
+    """Verify NuGet flat-container selects true highest SemVer release even when versions array is unsorted."""
+    adapter = DotNetAdapter()
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "versions": [
+                    "1.0.0",
+                    "1.10.0",  # Semantically higher than 1.2.0 and 1.9.5
+                    "1.2.0",
+                    "1.9.5",
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        @staticmethod
+        def get(url): return FakeResponse()
+
+    with patch("amstralift.adapters.dotnet.httpx.Client", FakeClient):
+        # 1. Unconstrained resolution
+        ver = adapter.fetch_latest_version("Unsorted.Package")
+        assert ver == "1.10.0"
+
+        # 2. Target major resolution
+        ver_m1 = adapter.fetch_latest_version("Unsorted.Package", target_major=1)
+        assert ver_m1 == "1.10.0"
+
+
+def test_dotnet_nuget_flatcontainer_target_major_with_prerelease_filtering():
+    """Verify target_major correctly filters and ignores preview/rc tags in NuGet responses."""
+    adapter = DotNetAdapter()
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "versions": [
+                    "7.0.0",
+                    "8.0.0",
+                    "8.0.10",
+                    "8.0.1",
+                    "8.0.11-preview.1",
+                    "9.0.0-rc.1",
+                    "9.0.0",
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        @staticmethod
+        def get(url): return FakeResponse()
+
+    with patch("amstralift.adapters.dotnet.httpx.Client", FakeClient):
+        assert adapter.fetch_latest_version("MultiMajor.Package", target_major=8) == "8.0.10"
+        assert adapter.fetch_latest_version("MultiMajor.Package", target_major=9) == "9.0.0"
+        assert adapter.fetch_latest_version("MultiMajor.Package", target_major=10) is None
+
+
+def test_dotnet_nuget_flatcontainer_resilience_and_errors():
+    """Verify NuGet client handles 404, empty versions, and network timeouts without raising."""
+    adapter = DotNetAdapter()
+
+    class ErrorClient:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def get(self, url):
+            class Resp:
+                status_code = 404
+                def json(self): return {}
+            if "empty" in url:
+                Resp.status_code = 200
+                Resp.json = staticmethod(lambda: {"versions": []})
+            elif "malformed" in url:
+                Resp.status_code = 200
+                Resp.json = staticmethod(lambda: "invalid-json-string")
+            elif "timeout" in url:
+                import httpx
+                raise httpx.TimeoutException("Connection timed out")
+            return Resp()
+
+    with patch("amstralift.adapters.dotnet.httpx.Client", ErrorClient):
+        assert adapter.fetch_latest_version("NonExistent.404") is None
+        assert adapter.fetch_latest_version("Empty.Package") is None
+        assert adapter.fetch_latest_version("Malformed.Package") is None
+        assert adapter.fetch_latest_version("Timeout.Package") is None
+
+
+

@@ -235,7 +235,7 @@ def run(
         typer.Option(
             "--modernize",
             "-m",
-            help="Comma-separated list of post-upgrade modernizations (e.g. 'control-flow', 'standalone', 'signals', 'inject', 'style', 'all').",
+            help="Comma-separated list of post-upgrade modernizations (e.g. 'control-flow', 'standalone', 'signals', 'inject', 'self-closing', 'style', 'all').",
         ),
     ] = None,
     remediate_cves: Annotated[

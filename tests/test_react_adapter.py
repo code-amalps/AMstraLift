@@ -203,3 +203,97 @@ def test_react_fetch_latest_ignores_prerelease():
         ver = adapter.fetch_latest_version("react")
         assert ver == "19.0.0"
 
+
+def test_react_npm_registry_target_major_resolution():
+    """Verify ReactAdapter.fetch_latest_version constrains upgrades to target_major accurately."""
+    adapter = ReactAdapter()
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "dist-tags": {"latest": "19.0.0"},
+                "versions": {
+                    "17.0.1": {},
+                    "17.0.2": {},
+                    "18.2.0": {},
+                    "18.3.1": {},
+                    "19.0.0": {},
+                },
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        @staticmethod
+        def get(url): return FakeResponse()
+
+    with patch("amstralift.adapters.react.httpx.Client", FakeClient):
+        assert adapter.fetch_latest_version("react", target_major=18) == "18.3.1"
+        assert adapter.fetch_latest_version("react", target_major=17) == "17.0.2"
+        assert adapter.fetch_latest_version("react", target_major=20) is None
+
+
+def test_react_npm_registry_unsorted_and_metadata_versions():
+    """Verify npm registry resolution handles unordered version keys and rejects canary tags."""
+    adapter = ReactAdapter()
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "versions": {
+                    "18.2.0": {},
+                    "18.10.0": {},  # Semantically higher than 18.3.1
+                    "18.3.1": {},
+                    "18.11.0-canary.1": {},
+                },
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        @staticmethod
+        def get(url): return FakeResponse()
+
+    with patch("amstralift.adapters.react.httpx.Client", FakeClient):
+        ver = adapter.fetch_latest_version("react", target_major=18)
+        assert ver == "18.10.0"
+
+
+def test_react_npm_registry_resilience_and_errors():
+    """Verify npm client handles 404, timeouts, and empty responses safely."""
+    adapter = ReactAdapter()
+
+    class ErrorClient:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def get(self, url):
+            class Resp:
+                status_code = 404
+                def json(self): return {}
+            if "empty" in url:
+                Resp.status_code = 200
+                Resp.json = staticmethod(lambda: {"versions": {}})
+            elif "malformed" in url:
+                Resp.status_code = 200
+                Resp.json = staticmethod(lambda: "not-a-dict")
+            elif "timeout" in url:
+                import httpx
+                raise httpx.TimeoutException("Registry request timeout")
+            return Resp()
+
+    with patch("amstralift.adapters.react.httpx.Client", ErrorClient):
+        assert adapter.fetch_latest_version("nonexistent-pkg-404") is None
+        assert adapter.fetch_latest_version("empty-pkg") is None
+        assert adapter.fetch_latest_version("malformed-pkg") is None
+        assert adapter.fetch_latest_version("timeout-pkg") is None
+
+

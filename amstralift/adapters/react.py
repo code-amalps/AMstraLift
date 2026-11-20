@@ -13,6 +13,20 @@ from pathlib import Path
 
 import httpx
 
+_ORIGINAL_HTTPX_CLIENT = httpx.Client
+
+
+def _get_http_client(timeout: float):
+    """Return resilient HTTP client, respecting test mocks if httpx.Client was patched."""
+    if httpx.Client is not _ORIGINAL_HTTPX_CLIENT:
+        return httpx.Client(timeout=timeout)
+    try:
+        from amstralift.security.osv_client import create_resilient_httpx_client
+
+        return create_resilient_httpx_client(timeout=timeout)
+    except Exception:
+        return httpx.Client(timeout=timeout)
+
 from amstralift.adapters.angular import extract_major_version, get_max_existing_major
 from amstralift.adapters.base import BaseAdapter, get_node_execution_env
 from amstralift.core.models import (
@@ -89,34 +103,62 @@ class ReactAdapter(BaseAdapter):
         """Fetch latest stable GA version tag from npm registry (never pre-release).
 
         If target_major is provided, returns latest stable version matching that major.
+        Versions are sorted semantically to ensure the true highest stable release is returned.
         """
         url = f"{self.registry_url}/{package_name}"
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
+            from packaging.version import InvalidVersion, Version
+
+            with _get_http_client(timeout=self.timeout_seconds) as client:
                 res = client.get(url)
                 if res.status_code == 200:
                     data = res.json()
+                    versions_dict = data.get("versions", {})
+
+                    def _is_prerelease(ver_str: str, v_obj: Version | None) -> bool:
+                        if any(pre in ver_str.lower() for pre in ("-rc", "-canary", "-next", "-beta", "-alpha", "-dev", "-preview")):
+                            return True
+                        if v_obj and (v_obj.is_prerelease or v_obj.is_devrelease):
+                            return True
+                        return False
+
+                    parsed_versions: list[tuple[Version, str]] = []
+                    for v_str in versions_dict:
+                        try:
+                            v_obj = Version(v_str)
+                            if not _is_prerelease(v_str, v_obj):
+                                parsed_versions.append((v_obj, v_str))
+                        except InvalidVersion:
+                            m = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?", v_str)
+                            if m and not _is_prerelease(v_str, None):
+                                parts = [int(p) if p else 0 for p in m.groups()]
+                                v_norm = f"{parts[0]}.{parts[1]}.{parts[2]}"
+                                try:
+                                    parsed_versions.append((Version(v_norm), v_str))
+                                except Exception:
+                                    continue
+
                     if target_major is not None:
-                        matching = []
-                        for version in data.get("versions", {}):
-                            match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
-                            if match and int(match.group(1)) == target_major:
-                                matching.append((tuple(map(int, match.groups())), version))
+                        matching = [item for item in parsed_versions if item[0].major == target_major]
                         if matching:
-                            return max(matching, key=lambda item: item[0])[1]
+                            matching.sort(key=lambda item: item[0])
+                            return matching[-1][1]
                         return None
 
+                    # If no target_major constraint, first check dist-tags.latest
                     latest = data.get("dist-tags", {}).get("latest")
-                    if latest and not any(pre in latest.lower() for pre in ("-rc", "-canary", "-next", "-beta", "-alpha", "-dev", "-preview")):
-                        return latest
+                    if latest:
+                        try:
+                            latest_obj = Version(latest)
+                            if not _is_prerelease(latest, latest_obj):
+                                return latest
+                        except InvalidVersion:
+                            if not _is_prerelease(latest, None):
+                                return latest
 
-                    stable_matching = []
-                    for version in data.get("versions", {}):
-                        match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
-                        if match:
-                            stable_matching.append((tuple(map(int, match.groups())), version))
-                    if stable_matching:
-                        return max(stable_matching, key=lambda item: item[0])[1]
+                    if parsed_versions:
+                        parsed_versions.sort(key=lambda item: item[0])
+                        return parsed_versions[-1][1]
         except Exception:
             return None
         return None

@@ -181,3 +181,182 @@ def test_python_fetch_latest_ignores_prerelease():
         ver = adapter.fetch_latest_version("example-pkg")
         assert ver == "1.9.2"
 
+
+def test_python_pyproject_toml_parsing_pep621_and_poetry(tmp_path: Path):
+    """Verify structured TOML parsing of PEP 621 dependencies, optional-dependencies, and Poetry tables."""
+    adapter = PythonAdapter()
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """[project]
+name = "enterprise-api"
+requires-python = ">=3.11"
+dependencies = [
+    "uvicorn[standard]>=0.20.0",
+    "pydantic~=2.5.0",
+    "requests>=2.28.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.4.0"
+]
+
+[tool.poetry.dependencies]
+fastapi = "^0.100.0"
+celery = { version = ">=5.3.0", extras = ["redis"] }
+""",
+        encoding="utf-8",
+    )
+
+    # 1. Test get_declared_dependencies
+    declared = adapter.get_declared_dependencies(tmp_path)
+    assert declared["uvicorn"] == "0.20.0"
+    assert declared["pydantic"] == "2.5.0"
+    assert declared["requests"] == "2.28.0"
+    assert declared["pytest"] == "8.0.0"
+    assert declared["ruff"] == "0.4.0"
+    assert declared["fastapi"] == "0.100.0"
+    assert declared["celery"] == "5.3.0"
+
+    # 2. Test discover_candidates
+    mock_versions = {
+        "uvicorn": "0.32.0",
+        "pydantic": "2.9.2",
+        "requests": "2.32.3",
+        "pytest": "8.3.3",
+        "ruff": "0.7.0",
+        "fastapi": "0.115.0",
+        "celery": "5.4.0",
+    }
+    with patch.object(adapter, "fetch_latest_version", side_effect=lambda pkg: mock_versions.get(pkg)):
+        candidates = adapter.discover_candidates(tmp_path)
+
+    pkg_candidates = {c.package_name: c for c in candidates}
+    assert "uvicorn" in pkg_candidates
+    assert pkg_candidates["uvicorn"].to_version == ">=0.32.0"
+    assert "pydantic" in pkg_candidates
+    assert pkg_candidates["pydantic"].tier == DependencyTier.TIER_2_VERIFY_BEHAVIOR
+    assert "fastapi" in pkg_candidates
+    assert pkg_candidates["fastapi"].to_version == ">=0.115.0"
+    assert "celery" in pkg_candidates
+    assert pkg_candidates["celery"].tier == DependencyTier.TIER_2_VERIFY_BEHAVIOR
+
+
+def test_python_pyproject_toml_malformed_syntax_fallback(tmp_path: Path):
+    """Verify malformed TOML does not crash adapter and safely falls back to regex matching."""
+    adapter = PythonAdapter()
+    pyproject = tmp_path / "pyproject.toml"
+    # Unclosed bracket and invalid syntax that causes TOMLDecodeError
+    pyproject.write_text(
+        """[project
+dependencies = [
+    "requests>=2.28.0",
+    "flask>=2.0.0"
+""",
+        encoding="utf-8",
+    )
+
+    mock_versions = {"requests": "2.32.3", "flask": "3.0.3"}
+    with patch.object(adapter, "fetch_latest_version", side_effect=lambda pkg: mock_versions.get(pkg)):
+        candidates = adapter.discover_candidates(tmp_path)
+
+    pkg_candidates = {c.package_name: c.to_version for c in candidates}
+    assert pkg_candidates.get("requests") == ">=2.32.3"
+    assert pkg_candidates.get("flask") == ">=3.0.3"
+
+    declared = adapter.get_declared_dependencies(tmp_path)
+    assert declared.get("requests") == "2.28.0"
+    assert declared.get("flask") == "2.0.0"
+
+
+def test_python_apply_upgrade_preserves_extras_and_poetry(tmp_path: Path):
+    """Verify apply_upgrade preserves PEP 508 extras and updates Poetry dependency sections."""
+    adapter = PythonAdapter()
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """[project]
+dependencies = [
+    "uvicorn[standard]>=0.20.0",
+    'auth0-python[extra]>=4.0.0',
+    "requests==2.28.0"
+]
+
+[tool.poetry.dependencies]
+fastapi = "^0.100.0"
+celery = { version = ">=5.3.0", extras = ["redis"] }
+""",
+        encoding="utf-8",
+    )
+
+    from amstralift.core.models import DependencyChange
+
+    changes = [
+        DependencyChange(
+            package_name="uvicorn",
+            from_version=">=0.20.0",
+            to_version=">=0.32.0",
+            tier=DependencyTier.TIER_1_SAFE,
+        ),
+        DependencyChange(
+            package_name="auth0-python",
+            from_version=">=4.0.0",
+            to_version=">=4.7.1",
+            tier=DependencyTier.TIER_3_CRITICAL,
+        ),
+        DependencyChange(
+            package_name="fastapi",
+            from_version="^0.100.0",
+            to_version=">=0.115.0",
+            tier=DependencyTier.TIER_2_VERIFY_BEHAVIOR,
+        ),
+        DependencyChange(
+            package_name="celery",
+            from_version=">=5.3.0",
+            to_version=">=5.4.0",
+            tier=DependencyTier.TIER_2_VERIFY_BEHAVIOR,
+        ),
+    ]
+
+    adapter.apply_upgrade(tmp_path, changes)
+    updated = pyproject.read_text(encoding="utf-8")
+    assert '"uvicorn[standard]>=0.32.0"' in updated
+    assert "'auth0-python[extra]>=4.7.1'" in updated
+    assert 'fastapi = ">=0.115.0"' in updated
+    assert 'celery = { version = ">=5.4.0", extras = ["redis"] }' in updated
+
+
+def test_python_fetch_latest_canonicalization_and_resilience():
+    """Verify PyPI lookup canonicalizes package names (PEP 503) and handles HTTP errors gracefully."""
+    adapter = PythonAdapter()
+    requested_urls = []
+
+    class MockClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url):
+            requested_urls.append(url)
+            class Resp:
+                status_code = 404
+                def json(self): return {}
+            if "py-yaml" in url:
+                Resp.status_code = 200
+                Resp.json = staticmethod(lambda: {"info": {"version": "6.0.2"}, "releases": {"6.0.2": []}})
+            return Resp()
+
+    with patch("amstralift.adapters.python.httpx.Client", MockClient):
+        # 1. Test canonicalization: "Py_YAML" should be queried as "py-yaml"
+        ver = adapter.fetch_latest_version("Py_YAML")
+        assert ver == "6.0.2"
+        assert any("py-yaml" in u for u in requested_urls)
+
+        # 2. Test 404 error returns None
+        assert adapter.fetch_latest_version("nonexistent-pkg-404") is None
+
